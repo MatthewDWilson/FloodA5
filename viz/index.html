@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>FloodA5 — Visualisation</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg:       #080c0f;
+      --panel:    #0d1318;
+      --border:   #1a2530;
+      --accent:   #00c8ff;
+      --warn:     #ff8c00;
+      --danger:   #ff2e2e;
+      --dim:      #3a5060;
+      --text:     #c8dde8;
+      --mono:     'Share Tech Mono', monospace;
+      --sans:     'Barlow', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-weight: 300;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #cesiumContainer {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+    }
+
+    /* ── Top bar ── */
+    #topbar {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 44px;
+      background: linear-gradient(180deg, rgba(8,12,15,0.97) 0%, rgba(8,12,15,0.80) 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 0 20px;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+    }
+
+    #topbar .logo {
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    #topbar .logo span { color: var(--dim); }
+
+    .sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+
+    .stat { display: flex; flex-direction: column; gap: 1px; }
+    .stat-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.15em;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .stat-value { font-family: var(--mono); font-size: 13px; color: var(--text); }
+    .stat-value.live { color: var(--accent); }
+    .stat-value.warn { color: var(--warn); }
+
+    #statusDot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--dim);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #statusDot.connected { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    #statusDot.live      { background: #00ff88; box-shadow: 0 0 6px #00ff88;
+                           animation: pulse 1.2s ease-in-out infinite; }
+    #statusDot.replay    { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+    #statusDot.error     { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    #statusLabel {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .spacer { flex: 1; }
+
+    /* ── Left control panel ── */
+    #panel {
+      position: absolute;
+      top: 54px; left: 14px;
+      width: 240px;
+      background: rgba(13,19,24,0.92);
+      border: 1px solid var(--border);
+      z-index: 10;
+      backdrop-filter: blur(8px);
+    }
+
+    .panel-section {
+      border-bottom: 1px solid var(--border);
+      padding: 12px 14px;
+    }
+    .panel-section:last-child { border-bottom: none; }
+
+    .panel-title {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      color: var(--dim);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    /* Variable selector */
+    #varSelect {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 5px 8px;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%233a5060'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+    }
+    #varSelect:focus { border-color: var(--accent); }
+    #varSelect option { background: var(--panel); }
+
+    /* Fetch indicator — shown briefly during variable data load */
+    #fetchIndicator {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--accent);
+      letter-spacing: 0.1em;
+      margin-top: 5px;
+      min-height: 13px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    #fetchIndicator.visible { opacity: 1; }
+
+    /* Colormap legend */
+    #colormapBar {
+      height: 8px;
+      border-radius: 0;
+      margin-bottom: 4px;
+    }
+    .colormap-labels {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--dim);
+    }
+    #cmUnit {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--dim);
+      text-align: center;
+      margin-top: 3px;
+    }
+
+    /* Slider */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .slider-row label {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--dim);
+      width: 52px;
+      text-transform: uppercase;
+    }
+    input[type=range] { flex: 1; accent-color: var(--accent); height: 2px; }
+    .slider-val {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text);
+      width: 32px;
+      text-align: right;
+    }
+
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .toggle-row:last-child { margin-bottom: 0; }
+    .toggle-label { font-family: var(--mono); font-size: 10px; color: var(--text); letter-spacing: 0.05em; }
+    .toggle { position: relative; width: 30px; height: 16px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle input:checked + .toggle-track { background: var(--accent); }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      width: 12px; height: 12px;
+      background: var(--bg);
+      border-radius: 50%;
+      top: 2px; left: 2px;
+      transition: transform 0.2s;
+    }
+    .toggle input:checked + .toggle-track::after { transform: translateX(14px); }
+
+    #exagVal { font-family: var(--mono); font-size: 10px; color: var(--accent); }
+
+    /* ── Playback bar ── */
+    #playbar {
+      position: absolute;
+      bottom: 14px; left: 50%;
+      transform: translateX(-50%);
+      width: min(640px, calc(100vw - 28px));
+      background: rgba(13,19,24,0.94);
+      border: 1px solid var(--border);
+      padding: 10px 16px 12px;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+    }
+
+    #timelineTrack {
+      position: relative;
+      height: 3px;
+      background: var(--border);
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    #timelineFill { height: 100%; background: var(--accent); width: 0%; transition: width 0.1s linear; }
+    #timelineThumb {
+      position: absolute;
+      top: 50%; transform: translateY(-50%);
+      width: 10px; height: 10px;
+      background: var(--accent);
+      border-radius: 50%;
+      left: 0%; margin-left: -5px;
+      pointer-events: none;
+      box-shadow: 0 0 6px var(--accent);
+    }
+
+    .playbar-controls { display: flex; align-items: center; gap: 10px; }
+
+    .ctrl-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      letter-spacing: 0.08em;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .ctrl-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--accent); color: var(--accent);
+                       background: rgba(0,200,255,0.06); }
+    #playBtn { width: 36px; font-size: 13px; }
+
+    .time-display {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--dim);
+      margin-left: auto;
+    }
+    .time-display span { color: var(--text); }
+
+    #speedSelect {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 3px 6px;
+      outline: none;
+    }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(13,19,24,0.96);
+      border: 1px solid var(--border);
+      padding: 7px 11px;
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.7;
+      color: var(--text);
+      z-index: 20;
+      display: none;
+      max-width: 220px;
+    }
+    #tooltip .tt-val { color: var(--accent); }
+    #tooltip .tt-label { color: var(--dim); }
+
+    /* ── Log ── */
+    #log {
+      position: absolute;
+      bottom: 80px; right: 14px;
+      width: 260px;
+      max-height: 120px;
+      overflow-y: auto;
+      font-family: var(--mono);
+      font-size: 9px;
+      line-height: 1.8;
+      color: var(--dim);
+      z-index: 10;
+      pointer-events: none;
+    }
+    #log .entry { opacity: 0; animation: fadeIn 0.3s forwards; }
+    @keyframes fadeIn { to { opacity: 1; } }
+    #log .entry.warn { color: var(--warn); }
+    #log .entry.err  { color: var(--danger); }
+  </style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <div class="logo">Flood<span>A5</span></div>
+  <div class="sep"></div>
+  <div id="statusDot"></div>
+  <div id="statusLabel">disconnected</div>
+  <div class="sep"></div>
+  <div class="stat">
+    <div class="stat-label">Cells</div>
+    <div class="stat-value" id="statCells">—</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Frames</div>
+    <div class="stat-value" id="statFrames">0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Active cells</div>
+    <div class="stat-value live" id="statWet">0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Max value</div>
+    <div class="stat-value warn" id="statMaxVal">—</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="stat">
+    <div class="stat-label">Sim time</div>
+    <div class="stat-value" id="statSimTime">—</div>
+  </div>
+</div>
+
+<!-- Left panel -->
+<div id="panel">
+
+  <!-- Variable selector -->
+  <div class="panel-section">
+    <div class="panel-title">Variable</div>
+    <select id="varSelect">
+      <option value="depth">Depth (m)</option>
+    </select>
+    <div id="fetchIndicator">fetching…</div>
+  </div>
+
+  <!-- Basemap selector -->
+  <div class="panel-section">
+    <div class="panel-title">Basemap</div>
+    <div id="basemapBtns" style="display:flex; gap:6px;">
+      <button class="ctrl-btn basemap-btn active" data-basemap="google3d"
+              style="flex:1; padding:4px 6px; font-size:9px; letter-spacing:0.06em;">
+        Google 3D
+      </button>
+      <button class="ctrl-btn basemap-btn" data-basemap="osm"
+              style="flex:1; padding:4px 6px; font-size:9px; letter-spacing:0.06em;">
+        OSM
+      </button>
+      <button class="ctrl-btn basemap-btn" data-basemap="none"
+              style="flex:1; padding:4px 6px; font-size:9px; letter-spacing:0.06em;">
+        None
+      </button>
+    </div>
+  </div>
+
+  <!-- Colour scale -->
+  <div class="panel-section">
+    <div class="panel-title">Colour scale</div>
+    <div id="colormapBar"></div>
+    <div class="colormap-labels">
+      <span id="cmMin">0</span>
+      <span id="cmMax">—</span>
+    </div>
+    <div id="cmUnit">Water depth (m)</div>
+    <div style="height:8px"></div>
+    <div class="slider-row">
+      <label>Max</label>
+      <input type="range" id="maxValSlider" min="0.01" max="20" step="0.01" value="5"/>
+      <div class="slider-val" id="maxValDisplay">5.00</div>
+    </div>
+    <div class="toggle-row" style="margin-top:4px">
+      <span class="toggle-label">Auto-scale</span>
+      <label class="toggle">
+        <input type="checkbox" id="autoScaleToggle" checked/>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Display -->
+  <div class="panel-section">
+    <div class="panel-title">Display</div>
+    <div class="slider-row">
+      <label>Vert. exag</label>
+      <input type="range" id="exagSlider" min="1" max="50" step="1" value="10"/>
+      <div class="slider-val" id="exagVal">10×</div>
+    </div>
+    <div class="toggle-row">
+      <span class="toggle-label">3D extrusion</span>
+      <label class="toggle">
+        <input type="checkbox" id="extrudeToggle" checked/>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Cell outlines</span>
+      <label class="toggle">
+        <input type="checkbox" id="outlineToggle"/>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Zero cells</span>
+      <label class="toggle">
+        <input type="checkbox" id="dryToggle"/>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+  </div>
+
+</div>
+
+<!-- Playback bar -->
+<div id="playbar">
+  <div id="timelineTrack">
+    <div id="timelineFill"></div>
+    <div id="timelineThumb"></div>
+  </div>
+  <div class="playbar-controls">
+    <button class="ctrl-btn" id="skipStartBtn">⏮</button>
+    <button class="ctrl-btn" id="playBtn">▶</button>
+    <button class="ctrl-btn" id="skipEndBtn">⏭</button>
+    <select id="speedSelect">
+      <option value="0.25">0.25×</option>
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="5">5×</option>
+      <option value="10">10×</option>
+    </select>
+    <button class="ctrl-btn active" id="liveBtn">● LIVE</button>
+    <div class="time-display">
+      frame <span id="frameDisplay">0</span> / <span id="frameTotalDisplay">0</span>
+      &nbsp;|&nbsp; t = <span id="tDisplay">0.0</span> s
+    </div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+<div id="log"></div>
+
+<script>
+
+// ============================================================
+// CONFIG  — loaded at runtime from /viz/config.json
+// Edit viz/config.json (copy from config.example.json).
+// Hardcoded fallbacks are used if the file is missing.
+// ============================================================
+const WS_URL   = 'ws://localhost:8080/live';
+const API_BASE = 'http://localhost:8080';
+
+// Runtime config — populated by loadConfig() before initCesium()
+let CFG = {
+  cesium_ion_token: '',
+  home_lon: 172.636,
+  home_lat: -43.531,
+  home_alt: 25000,
+  default_basemap: 'google3d',
+};
+
+async function loadConfig() {
+  try {
+    const resp = await fetch(`${API_BASE}/viz/config.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    CFG = Object.assign(CFG, data);
+    log('Config loaded from config.json');
+  } catch(e) {
+    log('config.json not found or unreadable — using defaults. ' +
+        'Copy config.example.json to config.json and set your Ion token.', 'warn');
+  }
+}
+
+// ============================================================
+// VARIABLE DEFINITIONS
+// Variables the server can send. Each entry defines:
+//   label    — display name in the dropdown
+//   unit     — shown on colormap bar and tooltip
+//   colormap — function name (key into COLORMAPS)
+//   fixedMax — null = auto-scale; number = fixed ceiling (e.g. saturation = 1.0)
+// When the server sends a variable name not listed here, a default entry
+// is created automatically so new server-side variables (e.g. contaminants)
+// appear in the dropdown without any client-side change.
+// ============================================================
+const VAR_DEFS = {
+  depth:      { label: 'Depth (m)',        unit: 'm',    colormap: 'turbo',  fixedMax: null },
+  saturation: { label: 'Saturation (0–1)', unit: '',     colormap: 'blues',  fixedMax: 1.0  },
+  volume:     { label: 'Volume (m³)',      unit: 'm³',   colormap: 'turbo',  fixedMax: null },
+  velocity:   { label: 'Velocity (m/s)',   unit: 'm/s',  colormap: 'plasma', fixedMax: null },
+};
+
+// ============================================================
+// COLORMAPS  (value t ∈ [0,1] → Cesium.Color)
+// ============================================================
+// Each function sets SCRATCH_COLOR and returns it.
+// The return value must be used immediately (passed to setValue) before
+// calling any other colourmap function.
+const COLORMAPS = {
+  turbo(t) {
+    let r, g, b;
+    if      (t < 0.25) { const s=t/0.25;        r=0;   g=s;   b=1;   }
+    else if (t < 0.5)  { const s=(t-0.25)/0.25; r=0;   g=1;   b=1-s; }
+    else if (t < 0.75) { const s=(t-0.5)/0.25;  r=s;   g=1;   b=0;   }
+    else               { const s=(t-0.75)/0.25;  r=1;   g=1-s; b=0;   }
+    return Cesium.Color.fromBytes(r*255|0, g*255|0, b*255|0, 217, SCRATCH_COLOR);
+  },
+  blues(t) {
+    const r = 1 - t * 0.85, g = 1 - t * 0.65, b = 1 - t * 0.25;
+    return Cesium.Color.fromBytes(r*255|0, g*255|0, b*255|0, 217, SCRATCH_COLOR);
+  },
+  plasma(t) {
+    let r, g, b;
+    if      (t < 0.33) { const s=t/0.33;        r=s*0.7;      g=0;          b=s*0.9+0.1;  }
+    else if (t < 0.66) { const s=(t-0.33)/0.33; r=0.7+s*0.3;  g=s*0.5;      b=1-s*0.7;    }
+    else               { const s=(t-0.66)/0.34; r=1;           g=0.5+s*0.5;  b=0.3-s*0.3;  }
+    return Cesium.Color.fromBytes(r*255|0, g*255|0, b*255|0, 217, SCRATCH_COLOR);
+  },
+};
+
+// Pre-allocated dry cell colour — mutated in place, never reallocated.
+const DRY_COLOR    = new Cesium.Color(0.1, 0.25, 0.5, 0.35);
+// Scratch colour mutated by colourmap functions — avoids allocation per cell.
+const SCRATCH_COLOR = new Cesium.Color();
+// Scratch colour returned by colourmap functions — caller passes it to setValue.
+// Never stored; used immediately in the same microtask.
+
+// ============================================================
+// UI REFS
+// ============================================================
+const statusDot         = document.getElementById('statusDot');
+const statusLabel       = document.getElementById('statusLabel');
+const statCells         = document.getElementById('statCells');
+const statFrames        = document.getElementById('statFrames');
+const statWet           = document.getElementById('statWet');
+const statMaxVal        = document.getElementById('statMaxVal');
+const statSimTime       = document.getElementById('statSimTime');
+const varSelect         = document.getElementById('varSelect');
+const fetchIndicator    = document.getElementById('fetchIndicator');
+const colormapBar       = document.getElementById('colormapBar');
+const cmMin             = document.getElementById('cmMin');
+const cmMax             = document.getElementById('cmMax');
+const cmUnit            = document.getElementById('cmUnit');
+const maxValSlider      = document.getElementById('maxValSlider');
+const maxValDisplay     = document.getElementById('maxValDisplay');
+const autoScaleToggle   = document.getElementById('autoScaleToggle');
+const exagSlider        = document.getElementById('exagSlider');
+const exagVal           = document.getElementById('exagVal');
+const extrudeToggle     = document.getElementById('extrudeToggle');
+const outlineToggle     = document.getElementById('outlineToggle');
+const dryToggle         = document.getElementById('dryToggle');
+const playBtn           = document.getElementById('playBtn');
+const skipStartBtn      = document.getElementById('skipStartBtn');
+const skipEndBtn        = document.getElementById('skipEndBtn');
+const liveBtn           = document.getElementById('liveBtn');
+const speedSelect       = document.getElementById('speedSelect');
+const timelineFill      = document.getElementById('timelineFill');
+const timelineThumb     = document.getElementById('timelineThumb');
+const timelineTrack     = document.getElementById('timelineTrack');
+const frameDisplay      = document.getElementById('frameDisplay');
+const frameTotalDisplay = document.getElementById('frameTotalDisplay');
+const tDisplay          = document.getElementById('tDisplay');
+const tooltip           = document.getElementById('tooltip');
+const logEl             = document.getElementById('log');
+
+// ============================================================
+// STATE
+// ============================================================
+let viewer       = null;
+let cellEntities = {};        // cellId → Cesium Entity
+let cellOrder    = [];        // ordered cell IDs (mesh index order), set on mesh load
+let cellIndexMap = {};        // cellId → integer index into cellOrder
+
+// Frame cache: frames[i] = { t, vars: { varname: Float32Array | null } }
+// vars[name] = null means the variable exists in that frame but hasn't been fetched yet.
+let frames      = [];
+let totalFrames = 0;
+let currentFrame = -1;
+
+let liveMode     = true;
+let playing      = false;
+let playInterval = null;
+
+let activeVar    = 'depth';   // currently displayed variable
+let activeMax    = 5.0;       // colormap ceiling (auto or manual)
+let vertExag     = 10;
+
+// Latest-wins render queue.
+// While renderInProgress is true, new live applyFrame calls store their
+// target in pendingFrame instead of executing.  When the current render
+// finishes it immediately renders pendingFrame, so the display always ends
+// up showing the latest data with no intermediate grey flash.
+let renderInProgress = false;
+let pendingFrame     = null;   // {idx, varName} | null
+let simComplete        = false; // set permanently when simcomplete received
+// Per-cell previous values — skip unchanged cells each frame.
+// Initialised (and reset to zeros) when the mesh loads.
+let cellPrevValues     = [];
+// True whenever a display setting changes so the next render rewrites all
+// cells.  Starts true so the first frame (possibly all-zero) always renders.
+let displaySettingsChanged = true;
+
+// ============================================================
+// LOGGING
+// ============================================================
+function log(msg, level='info') {
+  const el = document.createElement('div');
+  el.className = 'entry' + (level==='warn' ? ' warn' : level==='err' ? ' err' : '');
+  const ts = new Date().toLocaleTimeString('en-NZ', {hour12:false});
+  el.textContent = `[${ts}] ${msg}`;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.children.length > 50) logEl.removeChild(logEl.firstChild);
+}
+
+function setStatus(state, label) {
+  statusDot.className     = state;
+  statusLabel.textContent = label;
+}
+
+// ============================================================
+// VARIABLE SELECTOR HELPERS
+// ============================================================
+function varDef(name) {
+  // Returns the definition for a variable name, creating a default if unknown.
+  // This means new server-side variables automatically appear correctly.
+  if (!VAR_DEFS[name]) {
+    VAR_DEFS[name] = { label: name, unit: '', colormap: 'turbo', fixedMax: null };
+  }
+  return VAR_DEFS[name];
+}
+
+/** Rebuild the <select> options from the set of known variable names. */
+function updateVarSelector(varNames) {
+  const current = varSelect.value;
+  varSelect.innerHTML = '';
+  for (const name of varNames) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = varDef(name).label;
+    varSelect.appendChild(opt);
+  }
+  // Restore previous selection if still available, else first option
+  varSelect.value = varNames.includes(current) ? current : (varNames[0] || 'depth');
+  activeVar = varSelect.value;
+  updateColormapUI();
+}
+
+/** Update the colormap bar gradient, unit label, and slider to match the active variable. */
+function updateColormapUI() {
+  const def = varDef(activeVar);
+
+  // Gradient
+  const gradients = {
+    turbo:  'linear-gradient(90deg, #000080 0%, #0000ff 12%, #00bfff 28%, #00ff80 44%, #ffff00 60%, #ff8000 76%, #ff0000 90%, #800000 100%)',
+    blues:  'linear-gradient(90deg, #ffffff 0%, #9ec8e0 40%, #2a6096 75%, #0a1e38 100%)',
+    plasma: 'linear-gradient(90deg, #000000 0%, #4a007a 30%, #b84000 65%, #ffdd00 100%)',
+  };
+  colormapBar.style.background = gradients[def.colormap] || gradients.turbo;
+
+  cmUnit.textContent = def.unit ? `${def.label}` : def.label;
+
+  // Fixed vs auto max
+  if (def.fixedMax !== null) {
+    activeMax = def.fixedMax;
+    maxValSlider.disabled = true;
+    maxValSlider.value    = def.fixedMax;
+    maxValDisplay.textContent = def.fixedMax.toFixed(2);
+    cmMax.textContent = def.fixedMax.toString();
+    cmMin.textContent = '0';
+  } else {
+    maxValSlider.disabled = false;
+    if (!autoScaleToggle.checked) {
+      activeMax = parseFloat(maxValSlider.value);
+    }
+    maxValDisplay.textContent = activeMax.toFixed(2);
+    cmMax.textContent = activeMax.toFixed(2) + (def.unit ? ' ' + def.unit : '');
+    cmMin.textContent = '0';
+  }
+}
+
+// ============================================================
+// ION TOKEN VALIDATION
+// ============================================================
+async function validateIonToken() {
+  const token = CFG.cesium_ion_token || '';
+  if (!token || token.trim() === '' || token === 'YOUR_CESIUM_ION_TOKEN_HERE') {
+    log('Cesium Ion token is not set — copy config.example.json to config.json ' +
+        'and add your token from ion.cesium.com/tokens.', 'err');
+    return false;
+  }
+  try {
+    const resp = await fetch(
+      `https://api.cesium.com/v1/assets?access_token=${encodeURIComponent(token)}`
+    );
+    if (resp.status === 200) { log('Cesium Ion token validated ✓'); return true; }
+    if (resp.status === 401) {
+      log('Cesium Ion token invalid or expired (HTTP 401). Check ion.cesium.com/tokens.', 'err');
+      return false;
+    }
+    log(`Ion token check returned HTTP ${resp.status} — proceeding anyway`, 'warn');
+    return true;
+  } catch(e) {
+    log('Could not reach ion.cesium.com (' + e.message + ') — proceeding anyway', 'warn');
+    return true;
+  }
+}
+
+// ============================================================
+// BASEMAP
+// Three modes: 'google3d', 'osm', 'none'
+// google3d: Google Photorealistic 3D Tiles (Ion asset 2275207) — requires token
+// osm:      OpenStreetMap imagery on ellipsoid globe
+// none:     No imagery; plain dark background (fastest, good for debugging)
+// ============================================================
+let activeBasemap    = 'none';     // tracks what is currently loaded
+let google3dTileset  = null;       // Cesium3DTileset instance, or null
+let osmLayer         = null;       // ImageryLayer instance, or null
+
+async function setBasemap(name) {
+  if (!viewer) return;
+  if (name === activeBasemap) return;
+
+  // --- Tear down current basemap ---
+  if (activeBasemap === 'google3d' && google3dTileset) {
+    viewer.scene.primitives.remove(google3dTileset);
+    google3dTileset = null;
+    viewer.scene.globe.show = false;
+  }
+  if (activeBasemap === 'osm' && osmLayer) {
+    viewer.imageryLayers.remove(osmLayer, false);
+    osmLayer = null;
+    viewer.scene.globe.show = false;
+  }
+
+  // --- Load new basemap ---
+  if (name === 'google3d') {
+    const token = CFG.cesium_ion_token || '';
+    if (!token || token === 'YOUR_CESIUM_ION_TOKEN_HERE') {
+      log('Google 3D tiles require a Cesium Ion token — set it in config.json.', 'err');
+      setBasemapButtons('none');
+      return;
+    }
+    try {
+      google3dTileset = await Cesium.Cesium3DTileset.fromIonAssetId(2275207);
+      viewer.scene.primitives.add(google3dTileset);
+      viewer.scene.globe.show = false;
+      log('Basemap: Google 3D Photorealistic Tiles');
+    } catch(e) {
+      log('Google 3D tiles failed: ' + e.message, 'err');
+      setBasemapButtons('none');
+      return;
+    }
+
+  } else if (name === 'osm') {
+    viewer.scene.globe.show = true;
+    osmLayer = viewer.imageryLayers.addImageryProvider(
+      new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
+    );
+    log('Basemap: OpenStreetMap');
+
+  } else {  // 'none'
+    viewer.scene.globe.show = false;
+    log('Basemap: none');
+  }
+
+  activeBasemap = name;
+  setBasemapButtons(name);
+}
+
+/** Highlight the active basemap button. */
+function setBasemapButtons(name) {
+  document.querySelectorAll('.basemap-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.basemap === name);
+  });
+}
+
+// ============================================================
+// CESIUM INIT
+// ============================================================
+async function initCesium() {
+  Cesium.Ion.defaultAccessToken = CFG.cesium_ion_token || '';
+
+  // Only validate token if google3d is the default basemap —
+  // OSM and none modes don't need an Ion token at all.
+  if (CFG.default_basemap === 'google3d') {
+    if (!await validateIonToken()) {
+      CFG.default_basemap = 'osm';   // graceful fallback
+      log('Falling back to OSM basemap.', 'warn');
+    }
+  }
+
+  viewer = new Cesium.Viewer('cesiumContainer', {
+    imageryProvider:      false,
+    terrainProvider:      new Cesium.EllipsoidTerrainProvider(),
+    baseLayerPicker:      false,
+    geocoder:             false,
+    homeButton:           false,
+    sceneModePicker:      false,
+    navigationHelpButton: false,
+    animation:            false,
+    timeline:             false,
+    fullscreenButton:     false,
+    infoBox:              false,
+    selectionIndicator:   false,
+  });
+
+  // Globe off by default — setBasemap enables it for OSM
+  viewer.scene.globe.show = false;
+  viewer.scene.globe.depthTestAgainstTerrain = false;
+
+  await setBasemap(CFG.default_basemap);
+
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(CFG.home_lon, CFG.home_lat, CFG.home_alt),
+    duration: 1.5,
+  });
+
+  // Hover tooltip — shows value for the active variable
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+  handler.setInputAction((mv) => {
+    const picked = viewer.scene.pick(mv.endPosition);
+    if (Cesium.defined(picked) && picked.id) {
+      const id  = picked.id.id;
+      const val = getCachedValue(currentFrame, activeVar, id);
+      const def = varDef(activeVar);
+      tooltip.style.display = 'block';
+      tooltip.style.left    = (mv.endPosition.x + 14) + 'px';
+      tooltip.style.top     = (mv.endPosition.y - 10) + 'px';
+      tooltip.innerHTML =
+        `<div><span class="tt-label">Cell</span> <span class="tt-val">${String(id).slice(0,10)}…</span></div>` +
+        (val !== undefined
+          ? `<div><span class="tt-label">${def.label}</span> <span class="tt-val">${val.toFixed(4)}${def.unit ? ' ' + def.unit : ''}</span></div>`
+          : `<div style="color:var(--dim)">no data</div>`);
+    } else {
+      tooltip.style.display = 'none';
+    }
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+  log('Cesium initialised');
+  connectWS();
+}
+
+/** Return the cached value for a cell in a given frame+variable, or undefined. */
+function getCachedValue(frameIdx, varName, cellId) {
+  if (frameIdx < 0 || !frames[frameIdx]) return undefined;
+  const varData = frames[frameIdx].vars[varName];
+  if (!varData) return undefined;
+  const idx = cellIndexMap[cellId];
+  if (idx === undefined) return undefined;
+  return varData[idx];
+}
+
+// ============================================================
+// MESH
+// ============================================================
+function loadMesh(geojsonData, orderedCellIds) {
+  let gj;
+  try {
+    gj = typeof geojsonData === 'string' ? JSON.parse(geojsonData) : geojsonData;
+  } catch(e) { log('Mesh parse error: ' + e.message, 'err'); return; }
+
+  const features = gj.features || [];
+  if (!features.length) { log('Mesh has no features', 'warn'); return; }
+
+  viewer.entities.removeAll();
+  cellEntities = {};
+
+  // Build the cell index map from the server-provided order
+  cellOrder = orderedCellIds || features.map(f => String((f.properties && f.properties.cell_id) || f.id));
+  cellIndexMap = {};
+  cellOrder.forEach((id, i) => { cellIndexMap[id] = i; });
+
+  features.forEach(f => {
+    const id  = (f.properties && f.properties.cell_id) || f.id;
+    if (!id) return;
+    const ring = f.geometry.coordinates[0];
+    const flat = [];
+    for (const pt of ring) { flat.push(pt[0], pt[1]); }
+    // Create a reusable ColorMaterialProperty for this entity.
+    // We mutate it in place each frame via .color.setValue() to avoid
+    // allocating new Color objects on every render tick (which causes flash).
+    const colorProp = new Cesium.ColorMaterialProperty(
+                        new Cesium.Color(0.1, 0.25, 0.5, 0.35));
+    const entity = viewer.entities.add({
+      id: String(id),
+      polygon: {
+        hierarchy:      new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flat)),
+        material:       colorProp,
+        outline:        false,
+        outlineColor:   new Cesium.Color(0.1, 0.2, 0.3, 0.6),
+        height:         10,
+        extrudedHeight: undefined,
+      }
+    });
+    entity._colorProp = colorProp;   // keep a direct reference for fast updates
+    cellEntities[String(id)] = entity;
+  });
+
+  statCells.textContent = features.length.toLocaleString();
+  log(`Mesh loaded: ${features.length} cells`);
+}
+
+// ============================================================
+// BINARY FRAME FETCHING
+// GET /frames/{1-based idx}/{varname} → Float32Array (binary)
+// Frame cache structure:
+//   frames[i] = { t: Float64, vars: { name: Float32Array | null } }
+//   null means "known to exist but not yet fetched"
+// ============================================================
+
+/** Ensure a variable's binary data is fetched and cached for the given frame. */
+async function fetchVarData(frameIdx, varName) {
+  if (frameIdx < 0 || frameIdx >= totalFrames) return null;
+  const cached = frames[frameIdx];
+  if (!cached) return null;
+
+  // Already fetched
+  if (cached.vars[varName] instanceof Float32Array) return cached.vars[varName];
+
+  // Variable not available in this frame
+  if (!(varName in cached.vars)) return null;
+
+  fetchIndicator.classList.add('visible');
+  try {
+    const resp = await fetch(`${API_BASE}/frames/${frameIdx + 1}/${varName}`);
+    if (!resp.ok) {
+      log(`Failed to fetch ${varName} for frame ${frameIdx+1}: HTTP ${resp.status}`, 'warn');
+      return null;
+    }
+    const buf  = await resp.arrayBuffer();
+    const data = new Float32Array(buf);
+    cached.vars[varName] = data;
+    return data;
+  } catch(e) {
+    log(`Fetch error (frame ${frameIdx+1}/${varName}): ${e.message}`, 'err');
+    return null;
+  } finally {
+    fetchIndicator.classList.remove('visible');
+  }
+}
+
+/** Fetch only the frame metadata (t + available var names) without binary data. */
+async function fetchFrameMeta(frameIdx) {
+  if (frames[frameIdx]) return frames[frameIdx];
+  try {
+    const resp = await fetch(`${API_BASE}/frames/${frameIdx + 1}`);
+    if (!resp.ok) return null;
+    const meta = await resp.json();
+    // Initialise cache entry: vars present but not yet fetched (null)
+    const varMap = {};
+    for (const v of (meta.vars || [])) varMap[v] = null;
+    frames[frameIdx] = { t: meta.t, vars: varMap };
+    return frames[frameIdx];
+  } catch(e) {
+    log(`Meta fetch error (frame ${frameIdx+1}): ${e.message}`, 'err');
+    return null;
+  }
+}
+
+// ============================================================
+// FRAME RENDERING
+// ============================================================
+
+/**
+ * Render frame `idx` using variable `varName`.
+ *
+ * Flash-free design: all async work (metadata + binary fetch) completes
+ * BEFORE any visual change is made.  A single combined pass then sets every
+ * cell in one sweep — wet cells get their colour, dry/zero cells get the
+ * dry appearance — so Cesium renders the transition in one step.
+ *
+ * Render guard: if a render is already in progress (renderInProgress=true)
+ * we return immediately.  This prevents live frames arriving faster than the
+ * fetch round-trip from stacking up and causing repeated flash cycles.
+ * The guard is only skipped for explicit user interactions (replay scrubber,
+ * variable switch) by passing force=true.
+ */
+async function applyFrame(idx, varName, { force = false } = {}) {
+  if (!viewer) return;
+  varName = varName || activeVar;
+
+  // Latest-wins: if a render is in progress, record this as the pending
+  // frame and return.  The in-flight render drains pendingFrame when done.
+  // force=true (user interactions) bypasses the queue and renders immediately.
+  if (renderInProgress && !force) {
+    pendingFrame = { idx, varName };
+    return;
+  }
+  renderInProgress = true;
+  pendingFrame = null;
+
+  try {
+    // ── Step 1: fetch all async data BEFORE touching the scene ──────────────
+    let meta = frames[idx];
+    if (!meta) {
+      meta = await fetchFrameMeta(idx);
+      if (!meta) return;
+    }
+
+    const data = await fetchVarData(idx, varName);
+
+    // ── Step 2: compute display parameters (pure JS, no rendering) ──────────
+    let frameMax = 0;
+    if (data) {
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] > frameMax) frameMax = data[i];
+      }
+    }
+
+    const def = varDef(varName);
+    const useMax = def.fixedMax !== null      ? def.fixedMax
+                 : autoScaleToggle.checked    ? (frameMax > 1e-6 ? frameMax : 1.0)
+                 : parseFloat(maxValSlider.value);
+    activeMax = useMax;
+
+    const cmFn       = COLORMAPS[def.colormap] || COLORMAPS.turbo;
+    const showDry    = dryToggle.checked;
+    const doExtrude  = extrudeToggle.checked;
+    const doOutline  = outlineToggle.checked;
+    // (data is already in cellOrder index order — no lookup needed, just index)
+
+    // ── Step 3: single combined render pass — no intermediate grey flash ────
+    let activeCount = 0;
+
+    if (data && cellOrder.length > 0) {
+      const n = Math.min(data.length, cellOrder.length);
+      for (let i = 0; i < n; i++) {
+        const val = data[i];
+        const id  = cellOrder[i];
+        const ent = cellEntities[id];
+        if (!ent) continue;
+
+        // Skip cells whose value and display settings are unchanged
+        if (cellPrevValues[i] === val && !displaySettingsChanged) {
+          if (val > 1e-4) activeCount++;
+          continue;
+        }
+        cellPrevValues[i] = val;
+
+        const poly = ent.polygon;
+        if (val > 1e-4) {
+          const t = Math.min(Math.max(val / useMax, 0), 1);
+          const col = cmFn(t);  // returns a Cesium.Color
+          // Mutate the existing ColorMaterialProperty's Color in place —
+          // no new objects allocated, no Cesium property re-binding needed.
+          ent._colorProp.color.setValue(col);
+          poly.show           = true;
+          poly.extrudedHeight = doExtrude ? 10 + Math.max(val * vertExag, 0.5) : undefined;
+          poly.outline        = doOutline;
+          activeCount++;
+        } else {
+          ent._colorProp.color.setValue(DRY_COLOR);
+          poly.show           = showDry;
+          poly.extrudedHeight = undefined;
+          poly.outline        = false;
+        }
+      }
+    } else {
+      // No data — reset all cells to dry
+      for (let i = 0; i < cellOrder.length; i++) {
+        if (cellPrevValues[i] === 0 && !displaySettingsChanged) continue;
+        cellPrevValues[i] = 0;
+        const id  = cellOrder[i];
+        const ent = cellEntities[id];
+        if (!ent) continue;
+        ent._colorProp.color.setValue(DRY_COLOR);
+        const poly = ent.polygon;
+        poly.show           = showDry;
+        poly.extrudedHeight = undefined;
+        poly.outline        = false;
+      }
+    }
+    displaySettingsChanged = false;
+
+    // ── Step 4: update UI (no Cesium calls) ─────────────────────────────────
+    currentFrame = idx;
+    maxValSlider.value            = useMax;
+    maxValDisplay.textContent     = useMax.toFixed(2);
+    cmMax.textContent             = useMax.toFixed(2) + (def.unit ? ' ' + def.unit : '');
+    statWet.textContent           = activeCount.toLocaleString();
+    statMaxVal.textContent        = frameMax.toFixed(4) + (def.unit ? ' ' + def.unit : '');
+    statSimTime.textContent       = formatTime(meta.t);
+    frameDisplay.textContent      = idx + 1;
+    tDisplay.textContent          = meta.t.toFixed(1);
+
+    const pct = totalFrames > 1 ? (idx / (totalFrames - 1)) * 100 : 0;
+    timelineFill.style.width = pct + '%';
+    timelineThumb.style.left = pct + '%';
+
+  } finally {
+    renderInProgress = false;
+    // Drain: render the most recently requested frame if one is pending.
+    // Don't drain if the simulation has completed — the pending frame was
+    // already registered before simcomplete arrived and should still render,
+    // but we don't want to continue draining after that.
+    if (pendingFrame !== null) {
+      const pf = pendingFrame;
+      pendingFrame = null;
+      applyFrame(pf.idx, pf.varName);
+    }
+  }
+}
+
+function formatTime(s) {
+  if (s < 60)   return s.toFixed(0) + 's';
+  if (s < 3600) return (s/60).toFixed(1) + 'min';
+  return (s/3600).toFixed(2) + 'h';
+}
+
+// ============================================================
+// WEBSOCKET
+// ============================================================
+let ws = null, wsRetry = null;
+
+function connectWS() {
+  clearTimeout(wsRetry);
+  try { ws && ws.close(); } catch(e) {}
+  setStatus('connecting', 'connecting…');
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen  = () => { setStatus('connected', 'connected'); log('WebSocket connected'); };
+  ws.onerror = () => { setStatus('error', 'ws error'); log('WebSocket error', 'err'); };
+  ws.onclose = () => {
+    log('WebSocket closed — retry in 3s', 'warn');
+    wsRetry = setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = async (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(e) { return; }
+
+    if (msg.type === 'mesh') {
+      loadMesh(msg.data, msg.cell_order || []);
+      updateVarSelector(Object.keys(VAR_DEFS));
+
+    } else if (msg.type === 'framecount') {
+      // Historical frames available for replay.
+      // If simComplete is already true (reconnect after sim ended), restore
+      // the complete UI state rather than entering live mode.
+      totalFrames = msg.count;
+      frames = new Array(totalFrames).fill(null);
+      frameTotalDisplay.textContent = totalFrames;
+      statFrames.textContent = totalFrames;
+      if (msg.vars && msg.vars.length > 0) updateVarSelector(msg.vars);
+      log(`${totalFrames} frames available`);
+      if (simComplete) {
+        // Sim already done — restore complete state, stay in replay
+        liveBtn.disabled = true;
+        liveBtn.style.opacity = '0.35';
+        liveBtn.title = 'Simulation complete';
+        setStatus('replay', 'complete');
+        if (totalFrames > 0) applyFrame(totalFrames - 1, activeVar, { force: true });
+      } else if (liveMode && totalFrames > 0) {
+        applyFrame(totalFrames - 1);
+      }
+
+    } else if (msg.type === 'newframe') {
+      // New live frame arrived
+      const idx = msg.idx - 1;  // convert to 0-based
+      totalFrames = msg.idx;
+      if (frames.length < totalFrames) frames.length = totalFrames;
+      // Register frame metadata from notification — vars present but unfetched
+      const varMap = {};
+      for (const v of (msg.vars || [])) varMap[v] = null;
+      frames[idx] = { t: msg.t, vars: varMap };
+      // Update selector with any new variables
+      if (msg.vars && msg.vars.length > 0) {
+        const known = Array.from(varSelect.options).map(o => o.value);
+        const novel = msg.vars.filter(v => !known.includes(v));
+        if (novel.length > 0) updateVarSelector([...known, ...novel]);
+      }
+      frameTotalDisplay.textContent = totalFrames;
+      statFrames.textContent = totalFrames;
+      // Guard: if simComplete is somehow set before we receive this message
+      // (race on reconnect), don't render in live mode.
+      if (!simComplete) setStatus('live', '● live');
+      // Latest-wins: applyFrame queues as pendingFrame if busy,
+      // so the display always ends up on the newest received frame.
+      if (liveMode && !simComplete) applyFrame(idx);
+
+    } else if (msg.type === 'simcomplete') {
+      // Simulation has finished — no more newframe messages will arrive.
+      simComplete = true;
+      pendingFrame = null;  // discard any queued live frame
+      totalFrames = msg.frames || totalFrames;
+      frameTotalDisplay.textContent = totalFrames;
+      statFrames.textContent = totalFrames;
+
+      // Exit live mode and settle into replay
+      setLiveMode(false);
+      // Disable the live button so the user knows the sim is done
+      liveBtn.disabled = true;
+      liveBtn.classList.remove('active');
+      liveBtn.title = 'Simulation complete';
+      liveBtn.style.opacity = '0.35';
+      // Update status indicator to show "complete" rather than "connected"
+      setStatus('replay', 'complete');
+      log(`Simulation complete — ${totalFrames} frames recorded`);
+    }
+  };
+}
+
+// ============================================================
+// PLAYBACK
+// ============================================================
+function setLiveMode(on) {
+  if (on && simComplete) return;
+  liveMode = on;
+  liveBtn.classList.toggle('active', on);
+  if (on) {
+    stopPlay();
+    if (totalFrames > 0) applyFrame(totalFrames - 1);
+    setStatus('live', '● live');
+  } else if (simComplete) {
+    setStatus('replay', 'complete');
+  }
+  // During a live simulation, the newframe handler owns the status dot.
+  // We don't touch it here to avoid overwriting '● live' with 'replay'.
+}
+
+function togglePlay() { playing ? stopPlay() : startPlay(); }
+
+function startPlay() {
+  if (totalFrames === 0) return;
+  setLiveMode(false);
+  setStatus('replay', 'replay');
+  if (currentFrame >= totalFrames - 1) applyFrame(0);
+  playing = true;
+  playBtn.textContent = '⏸';
+  const speed = parseFloat(speedSelect.value);
+  playInterval = setInterval(async () => {
+    const next = currentFrame + 1;
+    if (next >= totalFrames) { stopPlay(); return; }
+    await applyFrame(next);
+  }, 200 / speed);
+}
+
+function stopPlay() {
+  playing = false;
+  playBtn.textContent = '▶';
+  clearInterval(playInterval);
+  playInterval = null;
+}
+
+playBtn.addEventListener('click', togglePlay);
+skipStartBtn.addEventListener('click', () => {
+  setLiveMode(false); stopPlay();
+  setStatus('replay', 'replay');
+  applyFrame(0, activeVar, { force: true });
+});
+skipEndBtn.addEventListener('click', () => {
+  setLiveMode(false); stopPlay();
+  setStatus('replay', 'replay');
+  applyFrame(totalFrames - 1, activeVar, { force: true });
+});
+liveBtn.addEventListener('click', () => {
+  const goingLive = !liveMode;
+  setLiveMode(goingLive);
+  if (!goingLive && !simComplete) setStatus('replay', 'replay');
+});
+
+timelineTrack.addEventListener('click', (e) => {
+  const pct = (e.clientX - timelineTrack.getBoundingClientRect().left) / timelineTrack.offsetWidth;
+  setLiveMode(false); stopPlay();
+  setStatus('replay', 'replay');
+  applyFrame(Math.round(pct * (totalFrames - 1)), activeVar, { force: true });
+});
+
+// ============================================================
+// VARIABLE SELECTOR
+// ============================================================
+varSelect.addEventListener('change', () => {
+  activeVar = varSelect.value;
+  updateColormapUI();
+  displaySettingsChanged = true;
+  cellPrevValues = new Float32Array(cellOrder.length);
+  if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true });
+});
+
+// ============================================================
+// DISPLAY CONTROLS
+// ============================================================
+maxValSlider.addEventListener('input', () => {
+  activeMax = parseFloat(maxValSlider.value);
+  maxValDisplay.textContent = activeMax.toFixed(2);
+  const def = varDef(activeVar);
+  cmMax.textContent = activeMax.toFixed(2) + (def.unit ? ' ' + def.unit : '');
+  displaySettingsChanged = true;
+  if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true });
+});
+
+autoScaleToggle.addEventListener('change', () => {
+  maxValSlider.disabled = autoScaleToggle.checked;
+  displaySettingsChanged = true;
+  if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true });
+});
+
+exagSlider.addEventListener('input', () => {
+  vertExag = parseInt(exagSlider.value);
+  exagVal.textContent = vertExag + '×';
+  displaySettingsChanged = true;
+  if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true });
+});
+
+extrudeToggle.addEventListener('change', () => { displaySettingsChanged = true; if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true }); });
+outlineToggle.addEventListener('change', () => { displaySettingsChanged = true; if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true }); });
+dryToggle.addEventListener('change',     () => { displaySettingsChanged = true; if (currentFrame >= 0) applyFrame(currentFrame, activeVar, { force: true }); });
+
+// ============================================================
+// BASEMAP BUTTONS
+// ============================================================
+document.querySelectorAll('.basemap-btn').forEach(btn => {
+  btn.addEventListener('click', () => setBasemap(btn.dataset.basemap));
+});
+
+// ============================================================
+// BOOT
+// ============================================================
+updateColormapUI();
+log('FloodA5 visualiser starting…');
+// Load config first, then init Cesium with the token and defaults from config.
+loadConfig().then(() => {
+  // Initialise basemap button highlight from config default
+  setBasemapButtons(CFG.default_basemap);
+  return initCesium();
+}).catch(e => {
+  log('Init failed: ' + e.message, 'err');
+  console.error(e);
+});
+</script>
+</body>
+</html>

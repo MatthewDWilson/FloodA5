@@ -1,0 +1,1533 @@
+"""
+FloodModel.jl
+-------------
+Flood modelling application based on the A5 pentagonal DGGS.
+
+Usage:
+    julia --threads auto FloodModel.jl  --meshgen <aoi.geojson>  --meshres <N>
+                                        [--meshout <file>]
+                                        [--dem <file.tif>]  [--dem-strict]
+                                        [--vis [mode]]  [--vis-port PORT]
+                                        [--output <file.h5>]  [--output-interval SECS]
+
+    julia --threads auto FloodModel.jl  --meshload <mesh.parquet>
+                                        [--dem <file.tif>]  [--dem-strict]
+                                        [--vis [mode]]  [--vis-port PORT]
+                                        [--output <file.h5>]  [--output-interval SECS]
+
+    julia FloodModel.jl --help | -h
+
+DEM flags:
+    --dem FILE          GeoTIFF elevation file. Samples the DEM onto the mesh
+                        and stores elevation as a static variable. When used
+                        with --meshout / --meshload the sampled elevation is
+                        persisted in the parquet and does not need to be
+                        re-sampled on future runs.
+    --dem-strict        Error if any cell centre falls outside the DEM extent.
+                        Default (no flag): assign NaN for out-of-bounds cells
+                        and continue with a warning.
+
+Output flags:
+    --output FILE       Write simulation output to an HDF5 file (default: off).
+                        Extension should be .h5 or .hdf5.
+    --output-interval N Write a snapshot every N seconds of simulation time
+                        (default: 60.0).
+"""
+
+push!(LOAD_PATH, @__DIR__)
+# Guard against double-include when FloodModel.jl is included from a test
+# harness that has already loaded A5Grid or stubbed the vis modules.
+if !isdefined(Main, :A5Grid)
+    include(joinpath(@__DIR__, "A5Grid.jl"))
+end
+if !isdefined(Main, :VisualisationServer)
+    include(joinpath(@__DIR__, "VisualisationServer.jl"))
+end
+if !isdefined(Main, :MakieVisualiser)
+    include(joinpath(@__DIR__, "MakieVisualiser.jl"))
+end
+
+using .A5Grid
+using .A5Grid: SGSTable, wse_from_volume, wetted_area_from_wse,
+               sgs_table, build_sgs_tables!,
+               grid_disk_neighbours, grid_disk_neighbours_batch,
+               _polygon_area_m2, _shared_edge, _haversine_m
+using .VisualisationServer
+using .MakieVisualiser
+using JSON3
+using Dates
+using Statistics: mean
+using HDF5
+using Printf
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# Push a frame to the visualiser every N simulation steps.
+const VIS_INTERVAL = 1
+
+# Supported visualisation modes.
+const VIS_MODES = (:cesium, :makie)
+
+# ---------------------------------------------------------------------------
+# Flow model types
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Flow model types
+# ---------------------------------------------------------------------------
+
+"""
+    FlowMethod — abstract supertype for solver selection.
+
+  StandardFlow(; manning_n=0.03)
+      Diffusive-wave solver on mean cell elevation.  WSE = bed + depth.
+      Fast; suitable for initial runs and validation.
+
+  SGSFlow(; manning_n=0.03)
+      Diffusive-wave solver with sub-grid hypsometric storage tables.
+      Allows partial cell wetting.  Requires `build_sgs_tables!` to have
+      been run; tables are loaded from the `.sgs.h5` companion file and
+      stored in `FlowState.sgs_tables` at initialisation time.
+"""
+abstract type FlowMethod end
+
+struct StandardFlow <: FlowMethod
+    manning_n :: Float64
+end
+StandardFlow(; manning_n::Float64 = 0.03) = StandardFlow(manning_n)
+
+struct SGSFlow <: FlowMethod
+    manning_n :: Float64
+end
+SGSFlow(; manning_n::Float64 = 0.03) = SGSFlow(manning_n)
+
+"""
+    EdgeList
+
+All undirected edges in the mesh, indexed 1:n_edges.  Each edge is stored
+exactly once — from the perspective of the cell with the lower array index
+(`cell_i < cell_j` always).  This canonical ordering is enforced by
+`_build_edge_list` and is the basis for correct single-pass flux computation.
+
+Sign convention for `flux`:
+  positive  → flow from cell_i to cell_j
+  negative  → flow from cell_j to cell_i
+
+Forward-compatibility for multi-resolution (Phase 3):
+  - `res_i`, `res_j` — A5 resolution levels (added in Phase 3)
+  - `active`         — bitmask for AMR active/inactive edges (added in Phase 3)
+  - The struct is sized to `max_edges` at initialisation; `n_edges` is the
+    current active count (for single-resolution, n_edges == max_edges).
+"""
+struct EdgeList
+    n_edges   :: Int
+    cell_i    :: Vector{Int}        # lower cell index  (cell_i < cell_j always)
+    cell_j    :: Vector{Int}        # higher cell index
+    width     :: Vector{Float64}    # shared edge length (m)
+    L         :: Vector{Float64}    # centre-to-centre haversine distance (m)
+    cos_theta :: Vector{Float64}    # non-orthogonality correction (1.0 = orthogonal)
+    sill      :: Vector{Float64}    # sill elevation (m) — bed or SGS minimum
+    flux      :: Vector{Float64}    # q (m²/s) at t-dt, signed cell_i → cell_j
+end
+
+"""
+Hydrodynamic state of the flood model at a single timestep.
+
+Primary state variable is `volume` (m³ stored water per cell).  All other
+fields are either static mesh geometry or diagnostics updated each step.
+Fields are in mesh.cells order (index i ↔ cell i).
+
+`edges` holds all undirected mesh edges; `adj_matrix` is retained for
+neighbour queries (wet/dry triggers, BC injection) independently of the
+flux computation.
+"""
+mutable struct FlowState
+    cell_ids    :: Vector{String}
+    water_depth :: Vector{Float64}   # m above local bed (diagnostic)
+    volume      :: Vector{Float64}   # m³ stored — primary state variable
+    velocity    :: Vector{Float64}   # m/s scalar magnitude (diagnostic)
+    elevation   :: Vector{Float64}   # bed elevation above datum (m)
+    manning_n   :: Vector{Float64}   # Manning's roughness per cell
+    cell_area   :: Vector{Float64}   # plan area (m²)
+    adjacency   :: Dict{String, Vector{String}}  # cell_id → neighbour ids
+    adj_matrix  :: Matrix{Int}       # (max_nb × n_cells) index matrix, 0=none
+    edges       :: EdgeList          # all undirected edges, computed once
+    sgs_tables  :: Vector{Any}       # Vector{SGSTable} (SGSFlow) or empty
+end
+
+# ---------------------------------------------------------------------------
+# HDF5 output
+# ---------------------------------------------------------------------------
+
+"""
+    SimOutput
+
+Manages HDF5 file output for dynamic simulation state.
+
+Structure of the HDF5 file
+--------------------------
+/mesh/
+    cell_ids          String dataset  (n_cells,)
+    elevations        Float64 dataset (n_cells,)
+    center_lons       Float64 dataset (n_cells,)
+    center_lats       Float64 dataset (n_cells,)
+
+/frames/
+    /0001/
+        t             scalar Float64 — simulation time in seconds
+        water_depth   Float64 dataset (n_cells,) — depth above cell z_min (m)
+        volume        Float64 dataset (n_cells,) — stored volume (m³)
+        saturation    Float64 dataset (n_cells,) — fractional wetted area [0-1]
+        velocity      Float64 dataset (n_cells,) — scalar velocity (m/s)
+    /0002/ ...
+
+Rationale for HDF5
+------------------
+Dynamic outputs are stored separately from the mesh parquet because:
+  - Frame counts can reach thousands; parquet is not optimised for this pattern
+  - HDF5 supports chunked / compressed storage for large arrays
+  - Post-processing tools (Python xarray, Julia HDF5.jl, QGIS) read HDF5 natively
+  - The mesh can be reloaded from parquet independently of any output file
+
+Chunking and deflate (gzip level 4) compression are applied to all
+per-cell datasets. chunk_size = min(n_cells, 4096).
+"""
+mutable struct SimOutput
+    path             :: String
+    output_interval  :: Float64    # seconds of sim time between writes
+    last_write_t     :: Float64    # sim time of last write
+    frame_count      :: Int
+    enabled          :: Bool
+end
+
+SimOutput(; path="", interval=60.0, enabled=false) =
+    SimOutput(path, interval, -Inf, 0, enabled)
+
+"""
+    _write_mesh_metadata!(output, mesh)
+
+Write the static mesh metadata to the HDF5 file's /mesh/ group.
+Called once when the output file is first opened.
+"""
+function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh)
+    output.enabled || return
+    HDF5.h5open(output.path, "w") do fid
+        g = HDF5.create_group(fid, "mesh")
+        g["cell_ids"]    = [c.id         for c in mesh.cells]
+        g["center_lons"] = [c.center_lon for c in mesh.cells]
+        g["center_lats"] = [c.center_lat for c in mesh.cells]
+        g["elevations"]  = get(mesh.static_vars, "elevation",
+                               fill(NaN, length(mesh.cells)))
+        for (varname, vals) in mesh.static_vars
+            varname == "elevation" && continue
+            g[varname] = vals
+        end
+        HDF5.create_group(fid, "frames")
+    end
+    @info "HDF5 output file created: $(output.path)"
+end
+
+"""
+    _write_frame!(output, state, t)
+
+Append a simulation snapshot to /frames/ in the HDF5 file.
+Frame group names are zero-padded to 6 digits for lexicographic ordering.
+
+Datasets per frame:
+  t            — simulation time (s)
+  water_depth  — depth above cell minimum (m), diagnostic
+  volume       — stored volume per cell (m³), primary state variable
+  saturation   — fractional wetted area [0–1] (SGS only; 1.0 where wet otherwise)
+  velocity     — scalar velocity magnitude (m/s)
+"""
+function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
+    output.enabled || return
+    output.frame_count += 1
+    frame_name = lpad(string(output.frame_count), 6, '0')
+    sat   = saturation_fraction(state)
+    n     = length(state.cell_ids)
+    chunk = (min(n, 4096),)   # chunk size: one contiguous read ≤ 4096 cells
+    HDF5.h5open(output.path, "r+") do fid
+        g = HDF5.create_group(fid["frames"], frame_name)
+        # Scalar — no chunking needed
+        g["t"] = t
+        # Per-cell arrays — chunked + deflate (gzip level 4)
+        for (name, data) in (("water_depth", state.water_depth),
+                              ("volume",      state.volume),
+                              ("saturation",  sat),
+                              ("velocity",    state.velocity))
+            ds = HDF5.create_dataset(g, name, eltype(data), (n,);
+                                     chunk=chunk, deflate=4)
+            write(ds, data)
+        end
+    end
+    output.last_write_t = t
+end
+
+"""
+    _should_write_frame(output, t) → Bool
+
+Return true if enough sim time has elapsed since the last write.
+"""
+function _should_write_frame(output::SimOutput, t::Float64)::Bool
+    output.enabled || return false
+    return (t - output.last_write_t) >= output.output_interval
+end
+
+# ---------------------------------------------------------------------------
+# Flow model helpers
+# ---------------------------------------------------------------------------
+
+"""Haversine-based angular distance in degrees — fast scalar approximation."""
+function _haversine_deg(lon1, lat1, lon2, lat2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    return sqrt(dlat^2 + (dlon * cosd((lat1 + lat2) / 2))^2)
+end
+
+"""
+    _build_adjacency_grid_disk(mesh) → Dict{String, Vector{String}}
+
+Build exact topological adjacency using pya5.grid_disk(cell, 1).
+Returns only cells that are present in the mesh (inter-mesh boundary cells
+returned by grid_disk but not in the AOI are silently dropped).
+"""
+function _build_adjacency_grid_disk(mesh::A5Mesh)::Dict{String,Vector{String}}
+    all_ids = Set(c.id for c in mesh.cells)
+    adj     = Dict{String,Vector{String}}()
+    for cell in mesh.cells
+        nbrs = grid_disk_neighbours(cell.id)
+        adj[cell.id] = filter(id -> id in all_ids, nbrs)
+    end
+    return adj
+end
+
+"""
+    _edge_length_m(bnd_i, bnd_j) → Float64
+
+Haversine length in metres of the shared edge between two A5 pentagon cells.
+Returns NaN if no shared edge is found.
+"""
+function _edge_length_m(bnd_i::Vector{Vector{Float64}},
+                         bnd_j::Vector{Vector{Float64}})::Float64
+    edge = A5Grid._shared_edge(bnd_i, bnd_j)
+    edge === nothing && return NaN
+    lon1, lat1, lon2, lat2 = edge
+    return A5Grid._haversine_m(lon1, lat1, lon2, lat2)
+end
+
+"""
+    _cell_area_m2(cell) → Float64
+
+Plan area of an A5 cell in m² (equirectangular approximation, ~0.1% error
+at resolution 14).
+"""
+_cell_area_m2(cell::A5Cell) = A5Grid._polygon_area_m2(cell.boundary)
+
+"""
+    _build_adjacency_matrix!(adj_matrix, cells, id_idx, adj)
+
+Populate the adjacency index matrix in-place.  `adj_matrix[slot, i]` holds
+the array index of the slot-th neighbour of cell i (0 = no neighbour).
+Kept separate from edge geometry so it can be updated cheaply during AMR
+without rebuilding the full EdgeList.
+"""
+function _build_adjacency_matrix!(adj_matrix :: Matrix{Int},
+                                   cells      :: Vector{A5Cell},
+                                   id_idx     :: Dict{String,Int},
+                                   adj        :: Dict{String,Vector{String}})
+    n      = length(cells)
+    ids    = [c.id for c in cells]
+    max_nb = size(adj_matrix, 1)
+    for i in 1:n
+        nbrs = get(adj, ids[i], String[])
+        for (slot, nb_id) in enumerate(nbrs)
+            slot > max_nb && break
+            j = get(id_idx, nb_id, 0)
+            j == 0 && continue
+            adj_matrix[slot, i] = j
+        end
+    end
+end
+
+"""
+    _build_edge_list(cells, id_idx, adj, areas, sill_matrix) → EdgeList
+
+Build a flat list of all undirected edges in the mesh.  Each edge is stored
+exactly once with `cell_i < cell_j` (canonical lower-index convention).
+
+Accepts an optional pre-computed `sill_matrix` (max_nb × n) from SGS
+pre-processing.  If `nothing`, sills default to `max(elev_i, elev_j)` and
+must be overridden by the caller for SGS runs.
+
+Works for mixed A5 resolution levels — cell geometry is read directly from
+`A5Cell.boundary` and centre coordinates, making no assumption of uniform
+cell size.  This makes the function valid for Phase 3 multi-resolution meshes
+without modification.
+
+Logs the edge count, and the min/mean/max of cos θ for the non-orthogonality
+distribution of the loaded mesh.
+"""
+function _build_edge_list(cells       :: Vector{A5Cell},
+                           id_idx      :: Dict{String,Int},
+                           adj         :: Dict{String,Vector{String}},
+                           areas       :: Vector{Float64},
+                           sill_matrix :: Union{Matrix{Float64}, Nothing} = nothing,
+                           elevations  :: Union{Vector{Float64}, Nothing} = nothing)::EdgeList
+    n    = length(cells)
+    ids  = [c.id for c in cells]
+
+    # Pre-size to worst case (5 edges per pentagon, each shared once = 5n/2)
+    # +10% margin for boundary effects.  We compact at the end.
+    max_e = n * 3   # conservative upper bound: 5n/2 rounded up with margin
+    ci    = Vector{Int}(undef, max_e)
+    cj    = Vector{Int}(undef, max_e)
+    ws    = Vector{Float64}(undef, max_e)
+    Ls    = Vector{Float64}(undef, max_e)
+    cts   = Vector{Float64}(undef, max_e)
+    sls   = Vector{Float64}(undef, max_e)
+
+    e = 0   # edge counter
+    seen = Set{Tuple{Int,Int}}()   # (min,max) pairs already added
+
+    for i in 1:n
+        cell_i = cells[i]
+        nbrs   = get(adj, ids[i], String[])
+        for nb_id in nbrs
+            j = get(id_idx, nb_id, 0)
+            j == 0 && continue           # external / out-of-mesh neighbour
+
+            lo, hi = minmax(i, j)
+            (lo, hi) in seen && continue # edge already recorded
+            push!(seen, (lo, hi))
+
+            e += 1
+            if e > max_e                 # grow if needed (shouldn't happen)
+                append!(ci,  zeros(Int, n))
+                append!(cj,  zeros(Int, n))
+                append!(ws,  zeros(Float64, n))
+                append!(Ls,  zeros(Float64, n))
+                append!(cts, zeros(Float64, n))
+                append!(sls, zeros(Float64, n))
+                max_e += n
+            end
+
+            cell_j = cells[j]
+            ci[e] = lo
+            cj[e] = hi
+
+            # ── Edge width ────────────────────────────────────────────────
+            w = _edge_length_m(cell_i.boundary, cell_j.boundary)
+            ws[e] = isnan(w) ? sqrt(areas[i]) : w
+
+            # ── Centre-to-centre distance ─────────────────────────────────
+            Ls[e] = A5Grid._haversine_m(
+                cell_i.center_lon, cell_i.center_lat,
+                cell_j.center_lon, cell_j.center_lat)
+
+            # ── Non-orthogonality correction ──────────────────────────────
+            ct = A5Grid._edge_cos_theta(
+                cell_i.boundary, cell_j.boundary,
+                cell_i.center_lon, cell_i.center_lat,
+                cell_j.center_lon, cell_j.center_lat)
+            cts[e] = isnan(ct) ? 1.0 : ct  # fallback: assume orthogonal
+
+            # ── Sill elevation ────────────────────────────────────────────
+            # Prefer SGS pre-computed sill; fall back to max(elev_i, elev_j).
+            # The caller is responsible for passing the correct sill_matrix
+            # for SGS runs; for standard runs this defaults to bed elevation.
+            sls[e] = if sill_matrix !== nothing
+                # sill_matrix is (max_nb × n), indexed from each cell's slot.
+                # Look up from the lo-index cell's perspective.
+                s = NaN
+                lo_nbrs = get(adj, ids[lo], String[])
+                for (slot, nb_id2) in enumerate(lo_nbrs)
+                    if get(id_idx, nb_id2, 0) == hi
+                        s = sill_matrix[slot, lo]
+                        break
+                    end
+                end
+                isnan(s) ? (elevations !== nothing ?
+                    max(elevations[lo], elevations[hi]) : 0.0) : s
+            else
+                elevations !== nothing ?
+                    max(elevations[lo], elevations[hi]) : 0.0
+            end
+        end
+    end
+
+    n_edges = e
+    @info @sprintf("Edge list built: %d edges for %d cells (%.2f edges/cell)",
+                   n_edges, n, n_edges / max(n, 1))
+
+    valid_ct = filter(isfinite, cts[1:n_edges])
+    if !isempty(valid_ct)
+        @info @sprintf("Edge non-orthogonality (cos θ):  min=%.3f  mean=%.3f  max=%.3f",
+                       minimum(valid_ct), mean(valid_ct), maximum(valid_ct))
+    end
+
+    return EdgeList(
+        n_edges,
+        ci[1:n_edges],
+        cj[1:n_edges],
+        ws[1:n_edges],
+        Ls[1:n_edges],
+        cts[1:n_edges],
+        sls[1:n_edges],
+        zeros(Float64, n_edges),   # flux initialised to zero
+    )
+end
+
+# ---------------------------------------------------------------------------
+# Flow model initialisation
+# ---------------------------------------------------------------------------
+
+"""
+    initialise_flow_model(mesh, method;
+                          manning_n=0.03, friction_raster=nothing) → FlowState
+
+Initialise the flow model on the A5 mesh.
+
+- `method`          — `StandardFlow()` or `SGSFlow()`
+- `manning_n`       — global Manning's roughness (default 0.03)
+- `friction_raster` — path to a friction GeoTIFF; per-cell n overrides global value
+
+For SGSFlow, `build_sgs_tables!` must have been called on the mesh first
+(tables are stored in `mesh.array_vars`).
+"""
+function initialise_flow_model(mesh::A5Mesh,
+                                method::FlowMethod = StandardFlow();
+                                manning_n::Float64 = 0.03,
+                                friction_raster    = nothing)::FlowState
+    n       = length(mesh)
+    ids     = [c.id for c in mesh.cells]
+    id_idx  = Dict{String,Int}(ids[i] => i for i in 1:n)
+
+    # ── Elevation ──────────────────────────────────────────────────────────
+    elevations = if haskey(mesh.static_vars, "elevation")
+        copy(mesh.static_vars["elevation"])
+    else
+        @warn "No elevation data — all cells at z=0. Use --dem before running."
+        zeros(Float64, n)
+    end
+
+    # ── Manning's n ────────────────────────────────────────────────────────
+    n_vec = fill(manning_n, n)
+    if friction_raster !== nothing
+        @info "Sampling friction raster onto mesh..."
+        sample_dem_centroid!(mesh, FileDEM(friction_raster); var_name="friction")
+        fr = mesh.static_vars["friction"]
+        for i in 1:n
+            isfinite(fr[i]) && fr[i] > 0.0 && (n_vec[i] = fr[i])
+        end
+    elseif haskey(mesh.static_vars, "friction")
+        fr = mesh.static_vars["friction"]
+        for i in 1:n
+            isfinite(fr[i]) && fr[i] > 0.0 && (n_vec[i] = fr[i])
+        end
+    end
+
+    # ── Cell areas ─────────────────────────────────────────────────────────
+    areas = if haskey(mesh.static_vars, "sgs_cell_area")
+        copy(mesh.static_vars["sgs_cell_area"])
+    else
+        [_polygon_area_m2(c.boundary) for c in mesh.cells]
+    end
+    # Persist cell areas into static_vars so they are written into the parquet
+    # on --meshout and available without recomputation on --meshload.
+    # "sgs_cell_area" is the canonical key; for non-SGS meshes we write it
+    # here so downstream tools (and the parquet) always have a cell_area column.
+    if !haskey(mesh.static_vars, "sgs_cell_area")
+        mesh.static_vars["sgs_cell_area"] = copy(areas)
+    end
+
+    # ── Exact adjacency via grid_disk ──────────────────────────────────────
+    @info "Building exact topological adjacency via grid_disk..."
+    t0  = time()
+    adj = _build_adjacency_grid_disk(mesh)
+    @info "  Adjacency built in $(round(time()-t0, digits=1))s"
+
+    max_nb     = 5
+    adj_matrix = zeros(Int, max_nb, n)
+
+    @info "Building adjacency matrix..."
+    _build_adjacency_matrix!(adj_matrix, mesh.cells, id_idx, adj)
+
+    # ── SGS tables ─────────────────────────────────────────────────────────
+    sgs_tables  = SGSTable[]
+    sill_matrix = nothing   # will be set below for SGS runs
+
+    if method isa SGSFlow
+        haskey(mesh.array_vars, "sgs_elev_bins") ||
+            error("SGS tables not found in mesh — call build_sgs_tables! first.")
+        @info "Loading SGS tables from mesh array_vars..."
+        sgs_tables = [sgs_table(mesh, i) for i in 1:n]
+
+        if haskey(mesh.array_vars, "sgs_edge_sills")
+            sill_matrix = copy(mesh.array_vars["sgs_edge_sills"])
+        else
+            @warn "sgs_edge_sills not found — using cell z_min fallback."
+            z_mins = get(mesh.static_vars, "sgs_z_min", elevations)
+            sill_matrix = fill(NaN, max_nb, n)
+            for i in 1:n, slot in 1:max_nb
+                j = adj_matrix[slot, i]
+                j == 0 && continue
+                sill_matrix[slot, i] = min(z_mins[i], z_mins[j])
+            end
+        end
+    end
+
+    # ── Edge list ───────────────────────────────────────────────────────────
+    @info "Building edge list..."
+    t1 = time()
+    edges = _build_edge_list(mesh.cells, id_idx, adj, areas,
+                              sill_matrix, elevations)
+    @info "  Edge list built in $(round(time()-t1, digits=1))s"
+
+    volumes = zeros(Float64, n)
+
+    return FlowState(
+        ids,
+        zeros(Float64, n),
+        volumes,
+        zeros(Float64, n),
+        elevations,
+        n_vec,
+        areas,
+        adj,
+        adj_matrix,
+        edges,
+        sgs_tables,
+    )
+end
+
+# Backwards-compatible no-method overload
+initialise_flow_model(mesh::A5Mesh) = initialise_flow_model(mesh, StandardFlow())
+
+
+# ---------------------------------------------------------------------------
+# Diffusive wave physics — Bates et al. (2010) inertial formulation
+# ---------------------------------------------------------------------------
+
+const _G = 9.81   # m s⁻²
+
+"""
+    _bates_flux(q_prev, wse_i, wse_j, z_sill, width, L, n_mann, dt) → Float64
+
+Compute the volumetric flux Q (m³/s) from cell i to cell j using the
+inertial shallow-water formulation of Bates, Horritt & Fewtrell (2010),
+equation (9):
+
+    q^t = [ q^{t-dt} - g · h_flow · dt · (dWSE / L) ]
+          / [ 1 + g · h_flow · dt · n² · |q^{t-dt}| / h_flow^(10/3) ]
+
+    Q^t = q^t · width
+
+where:
+  q^{t-dt}   unit discharge from previous timestep (m²/s), signed i→j
+  h_flow     flow depth at the edge = max(WSE_i, WSE_j) - z_sill  (m)
+  dWSE       WSE_i - WSE_j  (m), positive when flow is i→j
+  L          centre-to-centre great-circle distance (m)
+  cos_theta  cosine of angle between face normal and centre-to-centre vector
+  width      shared edge length (m)
+  n_mann     Manning's roughness (s m^{-1/3})
+
+Returns volumetric flux Q (m³/s), positive = flow from i to j.
+Returns 0.0 if h_flow ≤ 0 (no water above sill on either side).
+
+Reference
+---------
+Bates, P.D., Horritt, M.S., Fewtrell, T.J. (2010). A simple inertial
+formulation of the shallow water equations for efficient two-dimensional
+flood inundation modelling. Journal of Hydrology 387(1–2), 33–45.
+https://doi.org/10.1016/j.jhydrol.2010.03.027
+
+Sign convention (EdgeList)
+---------------------------
+Arguments are passed as (wse_ci, wse_cj) where ci = EdgeList.cell_i,
+cj = EdgeList.cell_j, with cell_i < cell_j (canonical lower-index first).
+  Q > 0  →  flow from cell_j to cell_i  (j is higher, water flows toward i)
+  Q < 0  →  flow from cell_i to cell_j  (i is higher, water flows toward j)
+
+Callers apply:  dV[ci] += Q*dt  and  dV[cj] -= Q*dt
+
+Non-orthogonality correction
+-----------------------------
+L_eff = L × cos θ projects the centre-to-centre distance onto the face
+normal.  cos θ is stored in EdgeList.cos_theta (1.0 = orthogonal).
+For a future Riemann solver: replace with full over-relaxed decomposition
+(Weller 2014).  See PROJECT_STATE.md Phase 5.
+"""
+@inline function _bates_flux(q_prev     :: Float64,
+                              wse_i      :: Float64,
+                              wse_j      :: Float64,
+                              z_sill     :: Float64,
+                              width      :: Float64,
+                              L          :: Float64,
+                              cos_theta  :: Float64,
+                              n_mann     :: Float64,
+                              dt         :: Float64)::Float64
+    # Flow depth at the edge: depth above sill on the higher side
+    h_flow = max(wse_i, wse_j) - z_sill
+    h_flow <= 0.0 && return 0.0
+
+    # WSE gradient (positive = flow i→j).
+    # L_eff projects the centre-to-centre distance onto the face normal,
+    # correcting for non-orthogonality.  Clamp cos_theta away from zero
+    # to avoid blow-up on pathologically skewed pairs (> ~84°).
+    dWSE  = wse_i - wse_j
+    ct    = max(cos_theta, 0.1)   # hard floor: cos(84°) ≈ 0.10
+    L_eff = max(L * ct, 1.0)      # guard degenerate zero-distance pairs
+
+    # Bates et al. (2010) eq. 9 — unit discharge q (m²/s)
+    numerator   = q_prev - _G * h_flow * dt * dWSE / L_eff
+    denominator = 1.0 + _G * h_flow * dt * n_mann^2 * abs(q_prev) /
+                  h_flow^(10.0/3.0)
+    q_new = numerator / denominator
+
+    # Convert unit discharge to volumetric flux
+    return q_new * width
+end
+
+
+"""
+    _cfl_dt(state, method) → Float64
+
+Compute the maximum stable timestep from the CFL condition for the
+diffusive wave equation.  The diffusive stability criterion is:
+
+    dt ≤ CFL × dx² / (2D)
+
+where D = Q/A is the diffusivity, dx is the cell length scale,
+and CFL = 0.5 is a safety factor.
+
+We approximate D conservatively as g × h_max × dx / n_min for each
+active cell, then take the minimum over all cells.
+"""
+function _cfl_dt(state::FlowState, method::FlowMethod; cfl::Float64=0.5)::Float64
+    n        = length(state.cell_ids)
+    dt_min   = Inf
+    h_thresh = 1e-4   # ignore nearly-dry cells
+
+    for i in 1:n
+        h = state.water_depth[i]
+        h < h_thresh && continue
+        # Length scale: sqrt of cell area
+        dx  = sqrt(state.cell_area[i])
+        n_i = state.manning_n[i]
+        # Diffusivity: D ≈ (1/n) × h^(5/3) / S^(1/2)
+        # Bound S away from zero for stability; use a representative 0.001 if flat
+        D   = (1.0 / n_i) * h^(5.0/3.0) * 0.032   # √0.001 ≈ 0.032 typical slope
+        D   = max(D, 0.001)
+        dt  = cfl * dx^2 / (2.0 * D)
+        dt < dt_min && (dt_min = dt)
+    end
+
+    return isfinite(dt_min) ? dt_min : 60.0   # default 60s if all cells dry
+end
+
+"""
+    step_standard!(state, dt)
+
+Advance the standard (non-SGS) model by one timestep `dt` using the
+Bates et al. (2010) inertial formulation.
+
+WSE = elevation + water_depth.  The sill between adjacent cells is the
+maximum of their two bed elevations (weir-like).  The slope distance L
+is the centre-to-centre haversine distance stored in `state.edges.L`.
+"""
+
+# ---------------------------------------------------------------------------
+# Volume/depth update helpers — called by both step functions
+# ---------------------------------------------------------------------------
+
+"""
+    _apply_dV_standard!(state, dV)
+
+Apply a vector of net volume increments `dV` (m³) to a `StandardFlow` state.
+
+The limiter caps each cell's total net outflow at 50% of its current water
+volume, applied once after all edge fluxes have been accumulated.  This is
+more conservative than per-edge capping (which could allow up to 250%
+drainage across 5 edges) and avoids negative depths.
+
+Extensible: add new hydraulic methods by computing their own `dV` vector and
+calling this function (or `_apply_dV_sgs!`) for the state update.
+"""
+function _apply_dV_standard!(state::FlowState, dV::Vector{Float64})
+    n = length(state.cell_ids)
+    for i in 1:n
+        A_i = state.cell_area[i]
+        A_i < 1.0 && continue
+        # Cell-level limiter: net outflow capped at 50% of current volume
+        V_i = state.water_depth[i] * A_i
+        if dV[i] < -0.5 * V_i
+            dV[i] = -0.5 * V_i
+        end
+        state.water_depth[i] = max(0.0, state.water_depth[i] + dV[i] / A_i)
+        state.volume[i]      = state.water_depth[i] * A_i
+    end
+end
+
+"""
+    _apply_dV_sgs!(state, dV)
+
+Apply a vector of net volume increments `dV` (m³) to an `SGSFlow` state.
+
+Mirrors `_apply_dV_standard!` but operates on `state.volume` directly (the
+SGS primary state variable) and derives `water_depth` from the hypsometric
+lookup.  The limiter caps net outflow at 50% of the cell's stored volume.
+"""
+function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
+    n = length(state.cell_ids)
+    for i in 1:n
+        # Cell-level limiter: net outflow capped at 50% of current volume
+        if dV[i] < -0.5 * state.volume[i]
+            dV[i] = -0.5 * state.volume[i]
+        end
+        state.volume[i] = max(0.0, state.volume[i] + dV[i])
+        tbl = state.sgs_tables[i]
+        if isnan(tbl.z_min)
+            state.water_depth[i] = 0.0
+            continue
+        end
+        new_wse = wse_from_volume(tbl, state.volume[i])
+        state.water_depth[i] = max(0.0, new_wse - tbl.z_min)
+    end
+end
+
+function step_standard!(state::FlowState, dt::Float64)
+    n  = length(state.cell_ids)
+    dV = zeros(Float64, n)   # net volume increment per cell this step (m³)
+    edges = state.edges
+
+    # ── Phase 1: qroute — compute flux on every edge exactly once ─────────
+    # Each edge is indexed by (cell_i, cell_j) with cell_i < cell_j.
+    # Sign convention: Q > 0 means flow from cell_i to cell_j.
+    # _bates_flux returns Q > 0 when wse_j > wse_i (flow toward the higher
+    # index is the "positive" direction as defined by cell_i < cell_j).
+    # WSE arguments are passed as (wse_ci, wse_cj) matching (cell_i, cell_j).
+    for e in 1:edges.n_edges
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+
+        wse_ci = state.elevation[ci] + state.water_depth[ci]
+        wse_cj = state.elevation[cj] + state.water_depth[cj]
+
+        # Skip degenerate edges (should not occur in a well-formed EdgeList,
+        # but guarded here for robustness against direct construction in tests)
+        (isnan(edges.width[e]) || isnan(edges.L[e]) ||
+         isnan(edges.cos_theta[e])) && continue
+
+        Q = _bates_flux(edges.flux[e], wse_ci, wse_cj, edges.sill[e],
+                        edges.width[e], edges.L[e], edges.cos_theta[e],
+                        min(state.manning_n[ci], state.manning_n[cj]), dt)
+
+        edges.flux[e] = Q / max(edges.width[e], 1e-6)  # store q for next step
+
+        vol = Q * dt             # signed volume exchange
+        dV[ci] += vol            # ci gains when Q > 0
+        dV[cj] -= vol            # cj loses when Q > 0
+    end
+
+    # ── Phase 2: depth_update — apply limiter and update cell state ───────
+    _apply_dV_standard!(state, dV)
+end
+
+"""
+    step_sgs!(state, dt)
+
+Advance the SGS diffusive-wave model by one timestep `dt` using the
+Bates et al. (2010) inertial formulation.
+
+WSE for each cell is derived from its stored volume via the hypsometric
+curve (inverse lookup of vol_curve).  Wetted area is obtained from the
+area_curve.  The edge sill is the minimum DEM elevation along the shared
+boundary, stored in `state.edges.sill`.  The slope distance L is the
+centre-to-centre haversine distance stored in `state.edges.L`.
+"""
+function step_sgs!(state::FlowState, dt::Float64)
+    n  = length(state.cell_ids)
+    dV = zeros(Float64, n)
+
+    # Step 1: WSE and wetted area for all cells from hypsometric lookup
+    wse   = Vector{Float64}(undef, n)
+    A_wet = Vector{Float64}(undef, n)
+    for i in 1:n
+        tbl      = state.sgs_tables[i]
+        wse[i]   = wse_from_volume(tbl, state.volume[i])
+        A_wet[i] = wetted_area_from_wse(tbl, wse[i])
+    end
+
+    # Step 2: qroute — compute flux on every edge exactly once.
+    # Same single-pass edge-list pattern as step_standard!.
+    edges = state.edges
+    for e in 1:edges.n_edges
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+
+        z_sill = edges.sill[e]
+        if isnan(z_sill)
+            z_sill = min(state.sgs_tables[ci].z_min, state.sgs_tables[cj].z_min)
+        end
+
+        (isnan(edges.width[e]) || isnan(edges.L[e]) ||
+         isnan(edges.cos_theta[e])) && continue
+
+        Q = _bates_flux(edges.flux[e], wse[ci], wse[cj], z_sill,
+                        edges.width[e], edges.L[e], edges.cos_theta[e],
+                        min(state.manning_n[ci], state.manning_n[cj]), dt)
+
+        edges.flux[e] = Q / max(edges.width[e], 1e-6)
+
+        vol = Q * dt
+        dV[ci] += vol
+        dV[cj] -= vol
+    end
+
+    # Step 3: depth_update — apply limiter and update cell state
+    _apply_dV_sgs!(state, dV)
+end
+
+# ---------------------------------------------------------------------------
+# Wetted-area saturation (for visualisation)
+# ---------------------------------------------------------------------------
+
+"""
+    saturation_fraction(state) → Vector{Float64}
+
+Return the fractional wetted area (0–1) for each cell.
+For SGS this is meaningful sub-grid information.
+For standard flow it is 1.0 wherever depth > 0.
+"""
+function saturation_fraction(state::FlowState)::Vector{Float64}
+    n = length(state.cell_ids)
+    sat = Vector{Float64}(undef, n)
+    if isempty(state.sgs_tables)
+        # Standard: binary wet/dry
+        for i in 1:n
+            sat[i] = state.water_depth[i] > 1e-4 ? 1.0 : 0.0
+        end
+    else
+        for i in 1:n
+            tbl    = state.sgs_tables[i]
+            w_area = wetted_area_from_wse(tbl, wse_from_volume(tbl, state.volume[i]))
+            sat[i] = tbl.cell_area > 0.0 ? clamp(w_area / tbl.cell_area, 0.0, 1.0) : 0.0
+        end
+    end
+    return sat
+end
+
+# ---------------------------------------------------------------------------
+# Simulation loop
+# ---------------------------------------------------------------------------
+
+"""
+    run_simulation!(state, mesh, sim_duration, dt_max, vis, vis_mode, output,
+                    method, rainfall_rate)
+
+Time-stepping loop.  Advances the model for `sim_duration` seconds using
+adaptive dt (CFL-limited, capped at `dt_max`).
+
+Dispatches `push_frame!` to the active visualiser every `VIS_INTERVAL` steps.
+Writes HDF5 snapshots according to `output.output_interval`.
+
+Arguments
+---------
+  method         — `StandardFlow()` or `SGSFlow()`
+  rainfall_rate  — uniform rainfall in m/s (default 0; e.g. 1e-5 for ~36 mm/hr)
+"""
+function run_simulation!(state         :: FlowState,
+                         mesh          :: A5Mesh,
+                         sim_duration  :: Float64,
+                         dt_max        :: Float64,
+                         vis,
+                         vis_mode      :: Symbol = :none,
+                         output        :: SimOutput = SimOutput();
+                         method        :: FlowMethod = StandardFlow(),
+                         rainfall_rate :: Float64   = 0.0)
+    t    = 0.0
+    step = 0
+    use_sgs = method isa SGSFlow
+
+    while t < sim_duration
+        # Adaptive dt
+        dt = min(_cfl_dt(state, method), dt_max, sim_duration - t)
+        dt = max(dt, 0.1)   # floor: 0.1s to prevent infinite loops on dry mesh
+
+        # Apply rainfall source (uniform, before routing)
+        if rainfall_rate > 0.0
+            for i in eachindex(state.cell_ids)
+                if use_sgs
+                    state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+                else
+                    state.water_depth[i] += rainfall_rate * dt
+                end
+            end
+        end
+
+        # Physics step
+        if use_sgs
+            step_sgs!(state, dt)
+        else
+            step_standard!(state, dt)
+        end
+
+        t    += dt
+        step += 1
+
+        # Visualiser push
+        if vis !== nothing && step % VIS_INTERVAL == 0
+            sat = saturation_fraction(state)
+            if vis_mode === :cesium
+                VisualisationServer.push_frame!(vis, t, Dict(
+                    "depth"      => Float32.(state.water_depth),
+                    "saturation" => Float32.(sat),
+                    "volume"     => Float32.(state.volume),
+                    "velocity"   => Float32.(state.velocity),
+                ))
+            elseif vis_mode === :makie
+                MakieVisualiser.push_frame!(
+                    vis, state.cell_ids,
+                    state.water_depth,
+                    sat,
+                    state.volume,
+                    state.velocity,
+                    t)
+            end
+        end
+
+        # HDF5 output
+        if _should_write_frame(output, t)
+            _write_frame!(output, state, t)
+        end
+
+        if step % 50 == 0
+            n_wet     = count(>(1e-4), state.water_depth)
+            max_depth = isempty(state.water_depth) ? 0.0 :
+                        something(maximum(v for v in state.water_depth if isfinite(v); init=0.0), 0.0)
+            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  " *
+                  "dt=$(round(dt,digits=2))s  " *
+                  "wet=$n_wet  " *
+                  "max_depth=$(round(max_depth,digits=3))m"
+        end
+    end
+    @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
+
+    if output.enabled && t > output.last_write_t
+        _write_frame!(output, state, t)
+    end
+    output.enabled &&
+        @info "HDF5 output: $(output.frame_count) frames → $(output.path)"
+end
+
+# ---------------------------------------------------------------------------
+# Application entry point
+# ---------------------------------------------------------------------------
+
+"""
+    run_flood_model(; mesh_source, vis_mode, vis_port, dem_source, dem_strict,
+                      dem_method, dem_samples, halton_seed,
+                      flow_method, sgs_bins, manning_n, friction_source,
+                      sim_duration, dt_max, rainfall_rate,
+                      output_path, output_interval)
+
+Main application entry point.
+
+`mesh_source` is one of:
+  - `(:generate, aoi_path, resolution, output_path_or_nothing)`
+  - `(:load, parquet_path)`
+
+`dem_source` is one of:
+  - `nothing`              — no DEM; elevation stays zero
+  - `FileDEM(path)`        — sample from a local GeoTIFF
+
+`flow_method` is one of:
+  - `:standard`  — diffusive wave on mean cell elevation (fast)
+  - `:sgs`       — diffusive wave with sub-grid hypsometric lookup (accurate)
+"""
+function run_flood_model(;
+    mesh_source      :: Tuple,
+    vis_mode         :: Symbol  = :none,
+    vis_port         :: Int     = 8080,
+    dem_source                  = nothing,
+    dem_strict       :: Bool    = false,
+    dem_method       :: Symbol  = :mean,
+    dem_samples      :: Int     = 256,
+    halton_seed      :: Int     = 0,
+    flow_method      :: Symbol  = :sgs,
+    sgs_bins         :: Int     = 100,
+    sgs_samples      :: Int     = 512,
+    manning_n        :: Float64 = 0.03,
+    friction_source             = nothing,
+    sim_duration     :: Float64 = 3600.0,
+    dt_max           :: Float64 = 60.0,
+    rainfall_rate    :: Float64 = 0.0,
+    output_path      :: Union{String,Nothing} = nothing,
+    output_interval  :: Float64 = 60.0)
+
+    @info "=== A5 Flood Model ===" Dates.now()
+    @info "Vis mode    : $vis_mode"
+    @info "Flow method : $flow_method"
+
+    # 1. Start Cesium server early
+    vis = if vis_mode === :cesium
+        VisualisationServer.start(port = vis_port,
+                                  viz_dir = joinpath(@__DIR__, "viz"))
+    else
+        nothing
+    end
+    vis_mode === :cesium &&
+        @info "Cesium viewer: open http://localhost:$vis_port in your browser"
+
+    # 2. Acquire mesh
+    mesh = if mesh_source[1] === :generate
+        _, aoi_path, resolution, mesh_out = mesh_source
+        @info "AOI        : $aoi_path"
+        @info "Resolution : $resolution"
+        @info "Mesh out   : $(mesh_out === nothing ? "(not saved)" : mesh_out)"
+        @info "Generating A5 pentagon mesh..."
+        t0 = time()
+        m = if mesh_out !== nothing
+            fmt = endswith(mesh_out, ".parquet") ? :geoparquet : :geojson
+            mesh_for_aoi(aoi_path, resolution; output_path=mesh_out, format=fmt)
+        else
+            mesh_for_aoi(aoi_path, resolution)
+        end
+        @info "Mesh generated in $(round(time()-t0, digits=1))s — $(length(m)) cells"
+        m
+    else
+        _, parquet_path, mesh_out = mesh_source
+        @info "Loading mesh from $parquet_path..."
+        t0 = time()
+        m = load_mesh_geoparquet(parquet_path)
+        @info "Mesh loaded in $(round(time()-t0, digits=1))s — $(length(m)) cells"
+        m
+    end
+
+    # 3. DEM sampling (if requested)
+    if dem_source !== nothing
+        if mesh_source[1] === :load && haskey(mesh.static_vars, "elevation")
+            n_valid = count(isfinite, mesh.static_vars["elevation"])
+            n_total = length(mesh.cells)
+            error(
+                "The loaded mesh already contains elevation data " *
+                "($n_valid / $n_total cells with valid values).\n" *
+                "  To re-sample, first remove the elevation column and re-save."
+            )
+        end
+
+        @info "Checking DEM coverage..."
+        cov = check_dem_coverage(mesh, dem_source)
+        @info "DEM coverage: $(round(cov.coverage_pct, digits=1))% " *
+              "($(cov.cells_covered)/$(cov.total_cells) cells), CRS: $(cov.dem_crs)"
+        if cov.cells_outside > 0
+            msg = "$(cov.cells_outside) cell(s) outside DEM extent"
+            dem_strict ? error("$msg.") : @warn "$msg — NaN assigned."
+        end
+
+        @info "Sampling DEM onto mesh (method=:$(dem_method))..."
+        t0 = time()
+        if dem_method === :mean
+            sample_dem_mean!(mesh, dem_source; strict=dem_strict,
+                             n_samples=dem_samples, halton_seed=halton_seed)
+        elseif dem_method === :centroid
+            sample_dem_centroid!(mesh, dem_source; strict=dem_strict)
+        else
+            error("Unknown dem_method :$dem_method")
+        end
+        @info "DEM sampled in $(round(time()-t0, digits=1))s"
+
+        mesh_save_path = if mesh_source[1] === :generate
+            mesh_source[4]
+        else
+            something(mesh_source[3], mesh_source[2])
+        end
+        if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
+            @info "Re-saving mesh with elevation to $mesh_save_path..."
+            save_mesh_geoparquet(mesh, mesh_save_path)
+        end
+    else
+        if !haskey(mesh.static_vars, "elevation")
+            @warn "No DEM provided and mesh has no saved elevation data. " *
+                  "The model will run with flat terrain (z=0 everywhere). " *
+                  "Use --dem <file.tif> to sample elevation data."
+        end
+    end
+
+    # 4. SGS pre-processing (if using SGS flow)
+    if flow_method === :sgs
+        if !haskey(mesh.array_vars, "sgs_elev_bins")
+            dem_source !== nothing ||
+                error("SGS flow requires a DEM — provide --dem <file.tif>.")
+            @info "Building SGS tables ($sgs_bins bins, $sgs_samples pts/cell)..."
+            t0 = time()
+            build_sgs_tables!(mesh, dem_source;
+                              n_bins=sgs_bins, n_samples=sgs_samples,
+                              halton_seed=halton_seed)
+            @info "SGS tables built in $(round(time()-t0, digits=1))s"
+
+            mesh_save_path = mesh_source[1] === :generate ?
+                mesh_source[4] : something(mesh_source[3], mesh_source[2])
+            if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
+                @info "Re-saving mesh with SGS tables to $mesh_save_path..."
+                save_mesh_geoparquet(mesh, mesh_save_path)
+            end
+        else
+            n_bins_loaded = Int(mesh.static_vars["sgs_n_bins"][1])
+            @info "SGS tables loaded from mesh ($n_bins_loaded bins/cell)"
+        end
+    end
+
+    # 5. Log mesh summary
+    @info mesh_summary(mesh)
+
+    # 6. Hand mesh to visualiser
+    if vis_mode === :makie
+        src_label = basename(mesh_source[2])
+        @info "Opening Makie viewer ($(length(mesh)) cells)..."
+        vis = MakieVisualiser.start(mesh;
+                  title = "FloodA5  res=$(mesh.resolution)  $src_label")
+    elseif vis_mode === :cesium
+        @info "Pushing mesh to Cesium server ($(length(mesh)) cells)..."
+        VisualisationServer.set_mesh!(vis, mesh_to_geojson_string(mesh),
+                                    [c.id for c in mesh.cells])
+        @info "Mesh pushed — viewer ready"
+    end
+
+    # 7. Initialise flow model
+    method_obj = flow_method === :sgs ? SGSFlow() : StandardFlow()
+    @info "Initialising flow model ($(flow_method)) on $(length(mesh)) cells..."
+    t0 = time()
+    flow_state = initialise_flow_model(mesh, method_obj;
+                                        manning_n       = manning_n,
+                                        friction_raster = friction_source)
+    @info "Flow model ready in $(round(time()-t0, digits=1))s  " *
+          "(adjacency: $(length(flow_state.adjacency)) cells, " *
+          "Manning n = $(manning_n))"
+
+    # 8. Prepare HDF5 output
+    sim_output = SimOutput(
+        path     = something(output_path, ""),
+        interval = output_interval,
+        enabled  = output_path !== nothing,
+    )
+    sim_output.enabled && _write_mesh_metadata!(sim_output, mesh)
+
+    # 9. Simulation loop
+    @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  " *
+          "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr"
+    run_simulation!(flow_state, mesh, sim_duration, dt_max,
+                    vis, vis_mode, sim_output;
+                    method        = method_obj,
+                    rainfall_rate = rainfall_rate)
+
+    # 10. Notify visualiser that the simulation is done, then keep alive for replay
+    if vis !== nothing && vis_mode === :cesium
+        VisualisationServer.notify_complete!(vis)
+    end
+
+    if vis !== nothing
+        try
+            if vis_mode === :cesium
+                @info "Simulation complete. Cesium viewer at http://localhost:$vis_port"
+                @info "Press Ctrl-C to stop."
+                while !istaskdone(vis.task)
+                    sleep(1)
+                end
+            elseif vis_mode === :makie
+                @info "Simulation complete. Close the Makie window or press Ctrl-C."
+                while vis.running[]
+                    sleep(1)
+                end
+            end
+        catch e
+            e isa InterruptException || rethrow(e)
+        finally
+            @info "Shutting down visualiser..."
+            if vis_mode === :cesium
+                VisualisationServer.stop(vis)
+                sleep(0.5)
+            elseif vis_mode === :makie
+                MakieVisualiser.stop(vis)
+            end
+        end
+    end
+
+    return mesh, flow_state
+end
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+function print_help(exit_code::Int = 0)
+    modes_str = join(string.(VIS_MODES), " | ")
+    println("""
+FloodA5 — A5 Pentagon Flood Model
+==================================
+Usage:
+  julia [--threads auto] FloodModel.jl  --meshgen <aoi.geojson>  --meshres <N>
+                                        [--meshout <file>]
+                                        [--dem <file.tif>]  [--dem-strict]
+                                        [--vis [mode]]  [--vis-port PORT]
+                                        [--output <file.h5>]
+                                        [--output-interval SECS]
+
+  julia [--threads auto] FloodModel.jl  --meshload <mesh.parquet>
+                                        [--dem <file.tif>]  [--dem-strict]
+                                        [--vis [mode]]  [--vis-port PORT]
+                                        [--output <file.h5>]
+                                        [--output-interval SECS]
+
+  julia FloodModel.jl --help
+
+Mesh options (choose one):
+  --meshgen  FILE    GeoJSON area of interest. Triggers mesh generation via pya5.
+  --meshres  N       A5 resolution level (required with --meshgen).
+  --meshout  FILE    Save generated mesh (optional). Extension controls format:
+                       .parquet  → GeoParquet  (recommended)
+                       .geojson  → GeoJSON
+  --meshload FILE    Load a previously saved GeoParquet mesh.
+
+DEM options:
+  --dem      FILE    GeoTIFF elevation file. Samples DEM and bakes elevation
+                     into the mesh parquet for future reuse. When used with
+                     --meshload: errors if elevation is already present
+                     (prevents silent overwrites).
+  --dem-strict       Error if any sample point falls outside the DEM extent.
+                     Default: assign NaN and continue with a warning.
+  --dem-method M     Sampling method: mean (default) or centroid.
+                       mean      arithmetic mean of Halton-distributed points
+                                 within the cell polygon (better physics).
+                       centroid  single bilinear sample at cell centre (fast).
+  --dem-samples N    Halton candidate points per cell for --dem-method mean
+                     (default: 256).
+  --dem-seed N       Halton sequence offset (default: 0). Use different values
+                     for independent Monte Carlo uncertainty runs.
+
+Flow model options:
+  --flow-model M     Flow routing method: sgs (default) or standard.
+                       sgs       Sub-Grid Sampling — hypsometric volume lookup.
+                                 Captures partial wetting, ditches, channels.
+                                 Requires DEM for pre-processing (auto-run).
+                       standard  Diffusive wave on mean cell elevation (fast).
+  --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
+  --sgs-samples N    Halton points per cell for SGS pre-processing (default: 512).
+  --manning-n N      Global Manning's roughness coefficient (default: 0.03).
+  --friction FILE    GeoTIFF friction raster. Per-cell Manning's n sampled at
+                     cell centres; overrides --manning-n where finite.
+  --sim-duration S   Simulation duration in seconds (default: 3600).
+  --dt-max S         Maximum adaptive timestep in seconds (default: 60).
+  --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
+
+Visualisation options:
+  --vis [MODE]       Enable visualisation (off by default).
+                     Available modes: $modes_str
+                     Omitting MODE defaults to 'cesium'.
+  --vis-port PORT    Port for the Cesium HTTP server (default: 8080).
+
+Output options:
+  --output FILE      Write HDF5 simulation output (default: off).
+  --output-interval  Seconds of simulation time between output snapshots
+                     (default: 60.0).
+
+Examples:
+  # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation
+  julia --threads auto FloodModel.jl \\
+      --meshgen christchurch_aoi.geojson --meshres 14 --meshout mesh_sgs.parquet \\
+      --dem linz_dem.tif --flow-model sgs --rainfall 30 --sim-duration 3600 --vis
+
+  # Reload mesh with pre-built SGS tables, run with friction raster
+  julia --threads auto FloodModel.jl \\
+      --meshload mesh_sgs.parquet --friction land_use_n.tif \\
+      --rainfall 10 --sim-duration 7200 --output sim_out.h5
+
+  # Standard (non-SGS) run for quick testing
+  julia --threads auto FloodModel.jl \\
+      --meshload mesh_sgs.parquet --flow-model standard --sim-duration 1800
+
+Resolution guide (approximate cell area):
+  Level  5  ~5 000 km²  Continental / regional
+  Level  8  ~250 km²    Large catchment
+  Level 10  ~50 km²     Medium catchment
+  Level 12  ~10 km²     Small catchment
+  Level 14  ~2 km²      Urban / detailed
+  Level 17  ~0.1 km²    High-resolution modelling
+""")
+    exit(exit_code)
+end
+
+function _pop_flag(args::Vector{String}, flag::String)
+    idx = findfirst(==(flag), args)
+    idx === nothing && return (nothing, args)
+    val = get(args, idx + 1, nothing)
+    new_args = deleteat!(copy(args), val !== nothing ? [idx, idx+1] : [idx])
+    return (val, new_args)
+end
+
+function _pop_bool(args::Vector{String}, flag::String)
+    idx = findfirst(==(flag), args)
+    idx === nothing && return (false, args)
+    return (true, deleteat!(copy(args), idx))
+end
+
+function main(args=String[])
+    profile = get(ENV, "DEBUG_PROFILE_NAME", "Production/Shell")
+    @debug "Model profile:" profile=profile args=args
+
+    #args = copy(ARGS)
+    if isinteractive()
+        # Use abspath to avoid confusing the VS Code terminal server
+        target_dir = "F:/OneDrive - University of Canterbury/Julia/FloodA5"
+        if pwd() != target_dir
+            cd(target_dir)
+        end
+    end
+    @info "Arguments passed: $(args)"
+
+    ("--help" in args || "-h" in args) && print_help(0)
+
+    # --vis [mode]
+    vis_mode = :none
+    vis_idx  = findfirst(==("--vis"), args)
+    if vis_idx !== nothing
+        next = get(args, vis_idx + 1, "")
+        if !isempty(next) && !startswith(next, "-") && Symbol(next) in VIS_MODES
+            vis_mode = Symbol(next)
+            deleteat!(args, [vis_idx, vis_idx + 1])
+        else
+            vis_mode = :cesium
+            deleteat!(args, vis_idx)
+        end
+    end
+
+    # --vis-port
+    vis_port_val, args = _pop_flag(args, "--vis-port")
+    vis_port = vis_port_val !== nothing ? parse(Int, vis_port_val) : 8080
+
+    # --meshgen / --meshres / --meshout / --meshload
+    meshgen_val,  args = _pop_flag(args, "--meshgen")
+    meshres_val,  args = _pop_flag(args, "--meshres")
+    meshout_val,  args = _pop_flag(args, "--meshout")
+    meshload_val, args = _pop_flag(args, "--meshload")
+
+    # --dem / --dem-strict / --dem-method / --dem-samples / --dem-seed
+    dem_val,         args = _pop_flag(args, "--dem")
+    dem_strict,      args = _pop_bool(args, "--dem-strict")
+    dem_method_val,  args = _pop_flag(args, "--dem-method")
+    dem_samples_val, args = _pop_flag(args, "--dem-samples")
+    dem_seed_val,    args = _pop_flag(args, "--dem-seed")
+
+    dem_method  = dem_method_val  !== nothing ? Symbol(dem_method_val)      : :mean
+    dem_samples = dem_samples_val !== nothing ? parse(Int, dem_samples_val) : 256
+    halton_seed = dem_seed_val    !== nothing ? parse(Int, dem_seed_val)    : 0
+
+    dem_method ∉ (:centroid, :mean) &&
+        (println("ERROR: --dem-method must be 'centroid' or 'mean'\n"); print_help(1))
+
+    # --flow-model / --sgs-bins / --sgs-samples / --manning-n / --friction
+    flow_method_val,  args = _pop_flag(args, "--flow-model")
+    sgs_bins_val,     args = _pop_flag(args, "--sgs-bins")
+    sgs_samples_val,  args = _pop_flag(args, "--sgs-samples")
+    manning_n_val,    args = _pop_flag(args, "--manning-n")
+    friction_val,     args = _pop_flag(args, "--friction")
+
+    flow_method  = flow_method_val  !== nothing ? Symbol(flow_method_val)       : :sgs
+    sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
+    sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 512
+    manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
+
+    flow_method ∉ (:sgs, :standard) &&
+        (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
+
+    # --sim-duration / --dt-max / --rainfall
+    sim_dur_val,  args = _pop_flag(args, "--sim-duration")
+    dt_max_val,   args = _pop_flag(args, "--dt-max")
+    rainfall_val, args = _pop_flag(args, "--rainfall")
+
+    sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
+    dt_max        = dt_max_val   !== nothing ? parse(Float64, dt_max_val)   : 60.0
+    # Rainfall: user gives mm/hr, convert to m/s
+    rainfall_rate = rainfall_val !== nothing ?
+                    parse(Float64, rainfall_val) / 3_600_000.0 : 0.0
+
+    # --output / --output-interval
+    output_val,     args = _pop_flag(args, "--output")
+    output_int_val, args = _pop_flag(args, "--output-interval")
+    output_interval = output_int_val !== nothing ? parse(Float64, output_int_val) : 60.0
+
+    # Validate mesh source
+    has_gen  = meshgen_val !== nothing
+    has_load = meshload_val !== nothing
+
+    !has_gen && !has_load &&
+        (println("ERROR: provide --meshgen or --meshload\n"); print_help(1))
+    has_gen && has_load &&
+        (println("ERROR: --meshgen and --meshload are mutually exclusive\n"); print_help(1))
+    has_gen && meshres_val === nothing &&
+        (println("ERROR: --meshgen requires --meshres\n"); print_help(1))
+    !isempty(args) &&
+        (println("ERROR: unexpected arguments: $(join(args, " "))\n"); print_help(1))
+    
+    
+
+    mesh_source = has_gen ?
+        (:generate, meshgen_val, parse(Int, meshres_val), meshout_val) :
+        (:load, meshload_val, meshout_val)
+
+    dem_source      = dem_val      !== nothing ? FileDEM(dem_val)      : nothing
+    friction_source = friction_val !== nothing ? friction_val          : nothing
+    
+    run_flood_model(;
+        mesh_source     = mesh_source,
+        vis_mode        = vis_mode,
+        vis_port        = vis_port,
+        dem_source      = dem_source,
+        dem_strict      = dem_strict,
+        dem_method      = dem_method,
+        dem_samples     = dem_samples,
+        halton_seed     = halton_seed,
+        flow_method     = flow_method,
+        sgs_bins        = sgs_bins,
+        sgs_samples     = sgs_samples,
+        manning_n       = manning_n,
+        friction_source = friction_source,
+        sim_duration    = sim_duration,
+        dt_max          = dt_max,
+        rainfall_rate   = rainfall_rate,
+        output_path     = output_val,
+        output_interval = output_interval,
+    )
+end
+
+
+@info "Starting FloodA5 model..." Dates.now()
+let
+    # 1. First, check if we should apply REPL/Interactive defaults
+    if isinteractive() && isempty(ARGS)
+        @info "REPL detected. Applying default test set."
+        REPL_ARGS = [
+            "--meshload", "test/kaiapoi_mesh16_sgs.parquet", 
+            "--rainfall", "50", 
+            "--output", "test/kaiapoi_test4_repl.h5",
+            "--output-interval", "3600",
+            "--sim-duration", "72000",
+            "--flow-model", "sgs"
+        ]
+        main(REPL_ARGS)
+
+    # 2. Otherwise, check for Debugger or Shell execution
+    else
+        # We check for the Debugger or the Shell separately to be safe
+        is_shell = abspath(PROGRAM_FILE) == @__FILE__
+        is_debugger = occursin("run_debugger.jl", PROGRAM_FILE)
+        if is_shell || is_debugger
+            main(ARGS)
+        end
+    end
+end
+@info "FloodA5 model finished." Dates.now()
+
