@@ -1,3 +1,6 @@
+![Static Badge](https://img.shields.io/badge/Status:-In_development-red)
+
+
 # A5 Pentagon Flood Model
 
 A flood modelling application in Julia using the [A5 DGGS](https://a5geo.org)
