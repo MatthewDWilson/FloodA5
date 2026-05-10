@@ -221,55 +221,212 @@ def _aoi_geometry(geojson):
 
 # ── Core mesh generation ────────────────────────────────────────────────────
 
+def _cell_int_to_hex(cell_id) -> str:
+    """Convert any pya5 integer cell ID to zero-padded 16-char hex string."""
+    return f"{int(cell_id) & 0xFFFFFFFFFFFFFFFF:016x}"
+
+def _build_adjacency_shared_vertices(
+        cell_ints: list, boundaries: list, precision: int = 7
+) -> dict:
+    """
+    Build exact edge-sharing adjacency from cell boundary vertices.
+
+    Two cells are edge-sharing neighbours iff their boundaries share
+    exactly 2 vertices (the two endpoints of the shared edge).
+    Uses a vertex -> cell_index index for O(n) performance.
+
+    Returns: dict mapping hex_id -> [list of neighbour hex_ids]
+    """
+    from collections import defaultdict
+    hex_ids = [_cell_int_to_hex(c) for c in cell_ints]
+
+    # Build rounded-vertex -> list-of-cell-indices index
+    vertex_to_cells = defaultdict(list)
+    for i, bnd in enumerate(boundaries):
+        # Exclude closing vertex (duplicate of first)
+        verts = bnd[:-1] if (len(bnd) > 1 and bnd[0] == bnd[-1]) else bnd
+        for v in verts:
+            key = (round(float(v[0]), precision), round(float(v[1]), precision))
+            vertex_to_cells[key].append(i)
+
+    # For each cell, count shared vertices with every other cell
+    adj = {h: [] for h in hex_ids}
+    for i, bnd in enumerate(boundaries):
+        verts = bnd[:-1] if (len(bnd) > 1 and bnd[0] == bnd[-1]) else bnd
+        shared_count = defaultdict(int)
+        for v in verts:
+            key = (round(float(v[0]), precision), round(float(v[1]), precision))
+            for j in vertex_to_cells[key]:
+                if j != i:
+                    shared_count[j] += 1
+        # Edge-sharing neighbours share exactly 2 vertices
+        adj[hex_ids[i]] = [hex_ids[j] for j, cnt in shared_count.items() if cnt == 2]
+
+    return adj
+
+
 def generate_mesh(geojson_path: str, resolution: int) -> List[dict]:
     """
-    Generate A5 pentagon mesh cells covering the AOI.
+    Generate A5 pentagon mesh cells covering the AOI with adjacency.
 
-    Uses pya5's native fill_polygon (polyfill) + uncompact to guarantee:
-      - All cells are exactly at `resolution` (no mixed-resolution artifacts)
-      - No holes (uncompact explodes any coarser cells from compacted results)
-      - No sample-grid or BFS approximation needed
+    Cell generation — two-pass approach:
+      Pass 1: fill_polygon+uncompact (if available) or sample-grid with
+              buffered AOI, producing an initial seed cell set.
+      Pass 2: grid_disk(cell,1) expansion — iteratively add neighbours
+              whose polygon intersects the AOI (shapely.intersects /
+              ST_Intersects equivalent). Candidates at wrong resolution
+              (pya5 compaction artefacts) are filtered by get_resolution.
+              Repeat until convergence.
 
-    Falls back to a sample-grid approach if fill_polygon is unavailable.
+    Adjacency — shared-vertex detection (NOT grid_disk):
+      Two cells are edge-sharing neighbours iff they share exactly 2
+      boundary vertices. This is geometrically exact and avoids pya5
+      grid_disk compaction artefacts which cause some cells to return
+      fewer than 5 neighbours. The adjacency is stored as a "neighbours"
+      column (list of hex ID strings) in the output parquet, eliminating
+      the need for grid_disk calls during Julia model initialisation.
     """
     with open(geojson_path, "r", encoding="utf-8") as f:
         geojson = json.load(f)
 
-    geometry  = _aoi_geometry(geojson)
-    geojson_coords = _geojson_to_coord_list(geometry)
+    geometry = _aoi_geometry(geojson)
 
-    # ── Phase 1: polyfill → uniform resolution ────────────────────────────
+    # ── Build Shapely AOI for ST_Intersects test ──────────────────────────
     try:
-        from a5 import geometry as a5_geometry
-        compact_cells = a5_geometry.fill_polygon(geojson_coords, resolution)
+        import shapely as _shapely
+        from shapely.geometry import shape as _shape
+        aoi_shp = _shapely.from_geojson(json.dumps(geometry))
     except Exception:
-        # fill_polygon unavailable — fall back to sample-grid + dedup
-        compact_cells = _sample_grid_coverage(geometry, resolution)
+        from shapely.geometry import shape as _shape
+        aoi_shp = _shape(geometry)
 
-    from a5 import uncompact
-    uniform_cells = uncompact(compact_cells, resolution)
+    def _intersects_aoi(bnd: list) -> bool:
+        try:
+            from shapely.geometry import Polygon as _Poly
+            poly = _Poly([(v[0], v[1]) for v in bnd])
+            return bool(aoi_shp.intersects(poly))
+        except Exception:
+            return True  # conservative fallback: include the cell
 
-    # ── Phase 2: fetch boundaries for unique cells ─────────────────────────
-    cell_ids   = list(set(uniform_cells))   # deduplicate
-    hex_ids    = [u64_to_hex(c)        for c in cell_ids]
-    centres    = [cell_to_lonlat(c)    for c in cell_ids]
-    boundaries = [cell_to_boundary(c)  for c in cell_ids]
+    # ── Approximate cell width for buffer distance ────────────────────────
+    import math
+    cell_deg = 90.0 / (2 ** (resolution * 1.16))
+    buf      = cell_deg * 1.5
 
-    # ── Phase 3: normalise coordinates (NumPy if available) ───────────────
+    min_lon, min_lat, max_lon, max_lat = _geometry_bbox(geometry)
+
+    # ── Pass 1: seed cell set ─────────────────────────────────────────────
+    try:
+        from a5 import geometry as a5_geometry, uncompact
+        geojson_coords = _geojson_to_coord_list(geometry)
+        compact_cells  = a5_geometry.fill_polygon(geojson_coords, resolution)
+        cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF
+                       for c in uncompact(compact_cells, resolution))
+        print(json.dumps({"status": "info", "message": f"fill_polygon + uncompact: {len(cell_set)} seed cells"}), flush=True)
+    except Exception:
+        # Sample-grid fallback using buffered bbox
+        compact_cells = _sample_grid_coverage_bbox(
+            min_lon - buf, min_lat - buf, max_lon + buf, max_lat + buf,
+            geometry, resolution)
+        try:
+            from a5 import uncompact
+            cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF
+                           for c in uncompact(compact_cells, resolution))
+        except Exception:
+            cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF for c in compact_cells)
+
+    # ── Pass 2: grid_disk expansion + ST_Intersects filter ────────────────
+    try:
+        from a5 import grid_disk, get_resolution as _a5_get_res
+        rounds = 0
+        while True:
+            candidates = set()
+            for c in cell_set:
+                try:
+                    for nb in grid_disk(c, 1):
+                        nb_id = int(nb) & 0xFFFFFFFFFFFFFFFF
+                        if nb_id != c and nb_id not in cell_set:
+                            candidates.add(nb_id)
+                except Exception:
+                    pass
+
+            new_cells = set()
+            for cid in candidates:
+                try:
+                    if int(_a5_get_res(cid)) != resolution:
+                        continue  # wrong resolution — compaction artefact
+                    bnd = cell_to_boundary(cid)
+                    bnd_norm = [[_wrap_lon(v[0]), v[1]] for v in bnd]
+                    if _intersects_aoi(bnd_norm):
+                        new_cells.add(cid)
+                except Exception:
+                    pass
+
+            if not new_cells:
+                break
+            cell_set |= new_cells
+            rounds += 1
+
+        # Final filter: remove any cell whose polygon doesn't intersect AOI
+        cell_set = {c for c in cell_set
+                    if _intersects_aoi([[_wrap_lon(v[0]), v[1]]
+                                        for v in cell_to_boundary(c)])}
+    except ImportError:
+        pass  # grid_disk unavailable — use seed cells only
+
+    # ── Phase 2: fetch boundaries and centres for all cells ───────────────
+    cell_ids   = list(cell_set)
+    hex_ids    = [_cell_int_to_hex(c) for c in cell_ids]
+    centres    = [cell_to_lonlat(c)   for c in cell_ids]
+    boundaries = [cell_to_boundary(c) for c in cell_ids]
+
     norm_boundaries = _norm_coords_np(boundaries)
     norm_lon = [_wrap_lon(c[0]) for c in centres]
     norm_lat = [max(-90.0, min(90.0, c[1])) for c in centres]
 
+    # ── Phase 3: shared-vertex adjacency ─────────────────────────────────
+    adj = _build_adjacency_shared_vertices(cell_ids, norm_boundaries)
+
+    # ── Phase 4: cell area in m² ─────────────────────────────────────────
+    # Computed from boundary geometry using the shoelace formula on an
+    # equirectangular projection centred on each cell's centroid.
+    # Accurate to ~0.1% for typical A5 cell sizes (matches Julia _polygon_area_m2).
+    import math as _math
+    _EARTH_R = 6_371_000.0
+
+    def _polygon_area_m2(boundary):
+        n = len(boundary)
+        if n < 3:
+            return 0.0
+        lat0 = sum(v[1] for v in boundary) / n
+        cos_lat = _math.cos(_math.radians(lat0))
+        area = 0.0
+        j = n - 1
+        for i in range(n):
+            xi = _math.radians(boundary[i][0]) * _EARTH_R * cos_lat
+            yi = _math.radians(boundary[i][1]) * _EARTH_R
+            xj = _math.radians(boundary[j][0]) * _EARTH_R * cos_lat
+            yj = _math.radians(boundary[j][1]) * _EARTH_R
+            area += (xj + xi) * (yj - yi)
+            j = i
+        return abs(area) / 2.0
+
+    cell_areas = [_polygon_area_m2(norm_boundaries[i]) for i in range(len(cell_ids))]
+
     return [
         {
-            "cell_id":    hex_ids[i],
-            "resolution": resolution,
-            "center_lon": norm_lon[i],
-            "center_lat": norm_lat[i],
-            "boundary":   norm_boundaries[i],
+            "cell_id":      hex_ids[i],
+            "resolution":   resolution,
+            "center_lon":   norm_lon[i],
+            "center_lat":   norm_lat[i],
+            "boundary":     norm_boundaries[i],
+            "neighbours":   adj[hex_ids[i]],
+            "cell_area":     cell_areas[i],
         }
         for i in range(len(cell_ids))
     ]
+
+
 
 
 def _geojson_to_coord_list(geometry: dict):
@@ -285,6 +442,35 @@ def _geojson_to_coord_list(geometry: dict):
         # Use the largest polygon by vertex count
         return max(geometry["coordinates"], key=lambda p: len(p[0]))[0]
     raise ValueError(f"Unsupported geometry type for fill_polygon: {t}")
+
+
+def _sample_grid_coverage_bbox(min_lon, min_lat, max_lon, max_lat,
+                               geometry: dict, resolution: int) -> list:
+    """
+    Sample-grid coverage over an explicit bounding box (may be buffered).
+    Uses geometry PIP to keep only cells whose seed point is inside the AOI.
+    Returns a list of raw cell IDs (ints).
+    """
+    approx_cell_deg = max(0.0001, 90.0 / (2 ** (resolution * 1.16)))
+    sample_step     = approx_cell_deg * 0.45
+
+    sample_lons, sample_lats = [], []
+    lat = min_lat
+    while lat <= max_lat + sample_step:
+        lon = min_lon
+        while lon <= max_lon + sample_step:
+            sample_lons.append(max(-179.9, min(lon, 179.9)))
+            sample_lats.append(min(lat, 89.9))
+            lon += sample_step
+        lat += sample_step
+
+    inside_mask = _pip_batch(sample_lons, sample_lats, geometry)
+    cell_ids = set()
+    for lo, la, ok in zip(sample_lons, sample_lats, inside_mask):
+        if ok:
+            try:    cell_ids.add(lonlat_to_cell(lo, la, resolution))
+            except TypeError: cell_ids.add(lonlat_to_cell([lo, la], resolution))
+    return list(cell_ids)
 
 
 def _sample_grid_coverage(geometry: dict, resolution: int) -> list:
@@ -365,11 +551,17 @@ def mesh_to_geoparquet(cells: List[dict], output_path: str):
         sample = cells[0].get(key)
         if isinstance(sample, (list, tuple)) or (
                 hasattr(sample, '__len__') and not isinstance(sample, str)):
-            # List column — store as Python lists (Arrow serialises as list<float64>)
-            data[key] = [
-                [float(x) if x is not None else float("nan") for x in c.get(key, [])]
-                for c in cells
-            ]
+            # Detect string-list columns (e.g. neighbours) vs numeric lists
+            if sample and isinstance(sample[0], str):
+                # String list column — store as-is (Arrow: list<string>)
+                data[key] = [list(c.get(key, [])) for c in cells]
+            else:
+                # Numeric list column — store as list<float64>
+                data[key] = [
+                    [float(x) if x is not None else float("nan")
+                     for x in c.get(key, [])]
+                    for c in cells
+                ]
         else:
             # Scalar column
             data[key] = [c.get(key, float("nan")) for c in cells]

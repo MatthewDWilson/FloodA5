@@ -263,15 +263,21 @@ mutable struct A5Mesh
     cells::Vector{A5Cell}
     static_vars::Dict{String, Vector{Float64}}
     array_vars::Dict{String, Matrix{Float64}}
+    adjacency::Dict{String, Vector{String}}   # cell_id → neighbour hex IDs
 end
 
 # Backwards-compatible constructors
 A5Mesh(res, aoi, cells) =
     A5Mesh(res, aoi, cells,
            Dict{String,Vector{Float64}}(),
-           Dict{String,Matrix{Float64}}())
+           Dict{String,Matrix{Float64}}(),
+           Dict{String,Vector{String}}())
 A5Mesh(res, aoi, cells, sv) =
-    A5Mesh(res, aoi, cells, sv, Dict{String,Matrix{Float64}}())
+    A5Mesh(res, aoi, cells, sv,
+           Dict{String,Matrix{Float64}}(),
+           Dict{String,Vector{String}}())
+A5Mesh(res, aoi, cells, sv, av) =
+    A5Mesh(res, aoi, cells, sv, av, Dict{String,Vector{String}}())
 
 Base.length(m::A5Mesh) = length(m.cells)
 Base.iterate(m::A5Mesh, s=1) = s > length(m.cells) ? nothing : (m.cells[s], s+1)
@@ -922,18 +928,21 @@ end
 """
     grid_disk_neighbours(cell_id_hex) → Vector{String}
 
-Return the exact topological neighbours of an A5 pentagon cell using
-`pya5.grid_disk(cell, 1)`.  grid_disk returns the cell itself plus all
-cells within 1 ring — we exclude the centre cell to return neighbours only.
+Return the topological neighbours of an A5 pentagon cell at the same
+resolution level.
 
-This gives the true edge-sharing adjacency (up to 5 neighbours for a
-pentagon) rather than the proximity heuristic used in _build_adjacency.
+`pya5.grid_disk(cell, 1)` returns a *compact* set — cells may be at
+coarser resolution levels than the input.  We call `pya5.uncompact` to
+expand the disk to the target resolution, then exclude the centre cell.
+This guarantees all returned neighbours are at the same resolution as
+the input cell, giving true same-level edge-sharing adjacency.
 """
 function grid_disk_neighbours(cell_id_hex::String)::Vector{String}
-    py_id   = _hex_to_pyint(cell_id_hex)
-    disk    = @py _a5.grid_disk(py_id, 1)
-    # Exclude the centre cell itself
-    return [_to_hex(c) for c in disk if _to_hex(c) != cell_id_hex]
+    py_id      = _hex_to_pyint(cell_id_hex)
+    resolution = Int(@py _a5.get_resolution(py_id))
+    disk       = @py _a5.grid_disk(py_id, 1)
+    expanded   = @py _a5.uncompact(disk, resolution)
+    return [_to_hex(c) for c in expanded if _to_hex(c) != cell_id_hex]
 end
 
 """
@@ -1196,22 +1205,33 @@ gdf = gpd.read_parquet('$(path_fwd)')
 BASE_COLS = {'cell_id', 'resolution', 'center_lon', 'center_lat', 'geometry'}
 extra_cols = [c for c in gdf.columns if c not in BASE_COLS]
 
-# Detect which extra columns are scalar vs list/array type
-scalar_cols = []
-array_cols  = []
+# Detect column types: string-list (neighbours), numeric list, or scalar
+scalar_cols  = []
+array_cols   = []
+strlist_cols = []  # e.g. 'neighbours'
 for col in extra_cols:
     sample = gdf[col].iloc[0] if len(gdf) > 0 else None
     if hasattr(sample, '__len__') and not isinstance(sample, str):
-        array_cols.append(col)
+        # List column — check element type
+        try:
+            first_elem = list(sample)[0] if len(sample) > 0 else None
+            if isinstance(first_elem, str):
+                strlist_cols.append(col)
+            else:
+                array_cols.append(col)
+        except Exception:
+            array_cols.append(col)
     else:
         scalar_cols.append(col)
 
 cells = []
+adjacency = {}  # cell_id -> list of neighbour hex IDs
 for _, row in gdf.iterrows():
     geom   = row.geometry
     coords = list(geom.exterior.coords)
+    cell_id = row['cell_id']
     cell   = {
-        'cell_id':    row['cell_id'],
+        'cell_id':    cell_id,
         'resolution': int(row['resolution']),
         'center_lon': float(row['center_lon']),
         'center_lat': float(row['center_lat']),
@@ -1226,12 +1246,17 @@ for _, row in gdf.iterrows():
             cell[col] = None
         else:
             arr = np.asarray(v, dtype=np.float64)
-            # Replace NaN/Inf with None so json.dumps writes null (valid JSON)
             cell[col] = [None if (x != x or x == float('inf') or x == float('-inf')) else x
                          for x in arr.tolist()]
+    for col in strlist_cols:
+        v = row[col]
+        if col == 'neighbours' and v is not None:
+            adjacency[cell_id] = [str(x) for x in v]
+        # other string-list cols ignored for now
     cells.append(cell)
 
-print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols, 'array_cols': array_cols}))
+print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols,
+                  'array_cols': array_cols, 'adjacency': adjacency}))
 """
     tmp_script = tempname() * ".py"
     write(tmp_script, py_code)
@@ -1250,6 +1275,7 @@ print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols, 'array_cols': arra
     raw_cells  = raw["cells"]
     scalar_cols = [String(k) for k in raw["scalar_cols"]]
     array_cols  = [String(k) for k in raw["array_cols"]]
+    raw_adj    = get(raw, "adjacency", Dict())
     nc = length(raw_cells)
 
     # Build static_vars (scalar) accumulator
@@ -1300,11 +1326,22 @@ print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols, 'array_cols': arra
     end
 
     res  = resolution > 0 ? resolution : (isempty(cells) ? 0 : cells[1].resolution)
-    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars)
+
+    # Build adjacency dict from the neighbours column (if present in parquet)
+    adjacency = Dict{String,Vector{String}}()
+    for (cell_id, nbrs) in raw_adj
+        adjacency[String(cell_id)] = [String(nb) for nb in nbrs]
+    end
+    if !isempty(adjacency)
+        @info "Loaded adjacency for $(length(adjacency)) cells from parquet neighbours column"
+    end
+
+    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars, adjacency)
 
     parts = String[]
     !isempty(scalar_cols) && push!(parts, "scalar: [$(join(scalar_cols, ", "))]")
     !isempty(array_cols)  && push!(parts, "arrays: [$(join(array_cols, ", "))]")
+    !isempty(adjacency)   && push!(parts, "adjacency: $(length(adjacency)) cells")
     isempty(parts) || @info "Loaded mesh — $(join(parts, ", "))"
     return mesh
 end
@@ -1346,6 +1383,9 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
     mkpath(dirname(path) == "" ? "." : dirname(path))
 
     # Build per-cell dict list including scalar static_vars and array_vars
+    # Build a cell_id → neighbours lookup for fast per-cell access
+    adj_by_id = mesh.adjacency   # Dict{String,Vector{String}}, may be empty
+
     cells_data = []
     for (i, c) in enumerate(mesh.cells)
         d = Dict{String,Any}(
@@ -1364,6 +1404,13 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
         for (varname, mat) in mesh.array_vars
             col = mat[:, i]
             d[varname] = [isfinite(v) ? v : nothing for v in col]
+        end
+        # Neighbours: preserve adjacency through re-saves (e.g. after DEM sampling).
+        # Look up by both raw ID and normalised ID to handle padding differences.
+        norm_id = _to_hex(parse(UInt64, c.id, base=16))
+        nbrs = get(adj_by_id, norm_id, get(adj_by_id, c.id, nothing))
+        if nbrs !== nothing
+            d["neighbours"] = nbrs
         end
         push!(cells_data, d)
     end

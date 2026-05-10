@@ -58,7 +58,6 @@ using JSON3
 using Dates
 using Statistics: mean
 using HDF5
-using Printf
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -288,19 +287,55 @@ function _haversine_deg(lon1, lat1, lon2, lat2)
 end
 
 """
-    _build_adjacency_grid_disk(mesh) → Dict{String, Vector{String}}
+    _build_adjacency_shared_vertices(mesh) → Dict{String,Vector{String}}
 
-Build exact topological adjacency using pya5.grid_disk(cell, 1).
-Returns only cells that are present in the mesh (inter-mesh boundary cells
-returned by grid_disk but not in the AOI are silently dropped).
+Build exact edge-sharing adjacency from cell boundary vertices.
+Two cells are edge-sharing neighbours iff their boundaries share exactly
+2 vertices (the endpoints of the shared edge).
+
+This bypasses pya5's grid_disk, which returns compact/mixed-resolution
+results that cause some cells to report fewer than 5 neighbours.
+Vertex coordinates are rounded to 7 decimal places (~1 cm) to handle
+floating-point differences between pya5's boundary representations for
+adjacent cells.
 """
-function _build_adjacency_grid_disk(mesh::A5Mesh)::Dict{String,Vector{String}}
-    all_ids = Set(c.id for c in mesh.cells)
-    adj     = Dict{String,Vector{String}}()
-    for cell in mesh.cells
-        nbrs = grid_disk_neighbours(cell.id)
-        adj[cell.id] = filter(id -> id in all_ids, nbrs)
+function _build_adjacency_shared_vertices(mesh::A5Mesh)::Dict{String,Vector{String}}
+    PREC = 1e7   # multiply then round to get 7 decimal places
+
+    norm = id -> A5Grid._to_hex(parse(UInt64, id, base=16))
+    ids  = [norm(c.id) for c in mesh.cells]
+    n    = length(ids)
+
+    # Build vertex → cell-index index
+    vertex_to_cells = Dict{Tuple{Int64,Int64}, Vector{Int}}()
+    for i in 1:n
+        bnd = mesh.cells[i].boundary
+        # Exclude closing vertex (duplicate of first) if present
+        verts = (length(bnd) > 1 && bnd[1] ≈ bnd[end]) ? bnd[1:end-1] : bnd
+        for v in verts
+            key = (round(Int64, v[1] * PREC), round(Int64, v[2] * PREC))
+            push!(get!(vertex_to_cells, key, Int[]), i)
+        end
     end
+
+    # For each cell count shared vertices with every other cell
+    adj = Dict{String,Vector{String}}(id => String[] for id in ids)
+    for i in 1:n
+        bnd = mesh.cells[i].boundary
+        verts = (length(bnd) > 1 && bnd[1] ≈ bnd[end]) ? bnd[1:end-1] : bnd
+        shared = Dict{Int,Int}()
+        for v in verts
+            key = (round(Int64, v[1] * PREC), round(Int64, v[2] * PREC))
+            for j in get(vertex_to_cells, key, Int[])
+                j == i && continue
+                shared[j] = get(shared, j, 0) + 1
+            end
+        end
+        adj[ids[i]] = [ids[j] for (j, cnt) in shared if cnt == 2]
+    end
+
+    n_edges = sum(length(v) for v in values(adj)) ÷ 2
+    @info "Adjacency built: $n cells, $n_edges undirected edges (shared-vertex method)"
     return adj
 end
 
@@ -339,7 +374,8 @@ function _build_adjacency_matrix!(adj_matrix :: Matrix{Int},
                                    id_idx     :: Dict{String,Int},
                                    adj        :: Dict{String,Vector{String}})
     n      = length(cells)
-    ids    = [c.id for c in cells]
+    _norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    ids    = [_norm(c.id) for c in cells]
     max_nb = size(adj_matrix, 1)
     for i in 1:n
         nbrs = get(adj, ids[i], String[])
@@ -377,7 +413,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                            sill_matrix :: Union{Matrix{Float64}, Nothing} = nothing,
                            elevations  :: Union{Vector{Float64}, Nothing} = nothing)::EdgeList
     n    = length(cells)
-    ids  = [c.id for c in cells]
+    _norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    ids  = [_norm(c.id) for c in cells]
 
     # Pre-size to worst case (5 edges per pentagon, each shared once = 5n/2)
     # +10% margin for boundary effects.  We compact at the end.
@@ -459,13 +496,11 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     end
 
     n_edges = e
-    @info @sprintf("Edge list built: %d edges for %d cells (%.2f edges/cell)",
-                   n_edges, n, n_edges / max(n, 1))
-
+    @info "Edge list built: $n_edges edges for $n cells ($(round(n_edges/max(n,1), digits=2)) edges/cell)"
+                   
     valid_ct = filter(isfinite, cts[1:n_edges])
     if !isempty(valid_ct)
-        @info @sprintf("Edge non-orthogonality (cos θ):  min=%.3f  mean=%.3f  max=%.3f",
-                       minimum(valid_ct), mean(valid_ct), maximum(valid_ct))
+        @info "Edge non-orthogonality (cos θ):  min=$(round(minimum(valid_ct),digits=3))  mean=$(round(mean(valid_ct),digits=3))  max=$(round(maximum(valid_ct),digits=3))"
     end
 
     return EdgeList(
@@ -502,7 +537,11 @@ function initialise_flow_model(mesh::A5Mesh,
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing)::FlowState
     n       = length(mesh)
-    ids     = [c.id for c in mesh.cells]
+    # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
+    # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
+    # leading zeros) and IDs returned by grid_disk_neighbours (always 16 chars).
+    _norm_id(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    ids     = [_norm_id(c.id) for c in mesh.cells]
     id_idx  = Dict{String,Int}(ids[i] => i for i in 1:n)
 
     # ── Elevation ──────────────────────────────────────────────────────────
@@ -543,16 +582,29 @@ function initialise_flow_model(mesh::A5Mesh,
         mesh.static_vars["sgs_cell_area"] = copy(areas)
     end
 
-    # ── Exact adjacency via grid_disk ──────────────────────────────────────
-    @info "Building exact topological adjacency via grid_disk..."
+    # ── Adjacency ───────────────────────────────────────────────────────────
+    # Prefer adjacency pre-computed during mesh generation and stored in the
+    # parquet (mesh.adjacency).  If absent (old parquets), fall back to the
+    # shared-vertex method computed from boundary geometry — which is
+    # geometrically exact and does not call pya5 at all.
     t0  = time()
-    adj = _build_adjacency_grid_disk(mesh)
-    @info "  Adjacency built in $(round(time()-t0, digits=1))s"
+    adj = if !isempty(mesh.adjacency)
+        @info "Using pre-computed adjacency from mesh parquet..."
+        # Normalise keys to match ids (16-char zero-padded hex)
+        norm = id -> A5Grid._to_hex(parse(UInt64, id, base=16))
+        Dict{String,Vector{String}}(
+            norm(k) => [norm(nb) for nb in v]
+            for (k, v) in mesh.adjacency
+        )
+    else
+        @info "No adjacency in parquet — computing via shared-vertex detection..."
+        _build_adjacency_shared_vertices(mesh)
+    end
+    @info "  Adjacency ready in $(round(time()-t0, digits=1))s ($(length(adj)) cells)"
 
     max_nb     = 5
     adj_matrix = zeros(Int, max_nb, n)
 
-    @info "Building adjacency matrix..."
     _build_adjacency_matrix!(adj_matrix, mesh.cells, id_idx, adj)
 
     # ── SGS tables ─────────────────────────────────────────────────────────
@@ -734,9 +786,10 @@ end
 Advance the standard (non-SGS) model by one timestep `dt` using the
 Bates et al. (2010) inertial formulation.
 
-WSE = elevation + water_depth.  The sill between adjacent cells is the
-maximum of their two bed elevations (weir-like).  The slope distance L
-is the centre-to-centre haversine distance stored in `state.edges.L`.
+WSE is derived from `volume / cell_area + elevation`.  Volume is the
+primary state variable; water_depth is a derived diagnostic.  The sill
+between adjacent cells is the maximum of their two bed elevations.  The
+slope distance L is stored in `state.edges.L`.
 """
 
 # ---------------------------------------------------------------------------
@@ -748,26 +801,26 @@ is the centre-to-centre haversine distance stored in `state.edges.L`.
 
 Apply a vector of net volume increments `dV` (m³) to a `StandardFlow` state.
 
-The limiter caps each cell's total net outflow at 50% of its current water
-volume, applied once after all edge fluxes have been accumulated.  This is
-more conservative than per-edge capping (which could allow up to 250%
-drainage across 5 edges) and avoids negative depths.
+`volume` is the primary state variable (mirrors SGS).  `water_depth` is
+derived as `volume / cell_area` after each update.  This avoids depth
+blow-up that could occur when depth was primary and a cell received a
+volume increment inconsistent with its area.
 
-Extensible: add new hydraulic methods by computing their own `dV` vector and
-calling this function (or `_apply_dV_sgs!`) for the state update.
+The limiter caps net outflow at 50% of the cell's current stored volume,
+applied once after all edge fluxes have been accumulated.
 """
 function _apply_dV_standard!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
     for i in 1:n
         A_i = state.cell_area[i]
         A_i < 1.0 && continue
-        # Cell-level limiter: net outflow capped at 50% of current volume
-        V_i = state.water_depth[i] * A_i
-        if dV[i] < -0.5 * V_i
-            dV[i] = -0.5 * V_i
+        # Cell-level limiter: net outflow capped at 50% of current volume.
+        # Volume is now primary state; water_depth is derived.
+        if dV[i] < -0.5 * state.volume[i]
+            dV[i] = -0.5 * state.volume[i]
         end
-        state.water_depth[i] = max(0.0, state.water_depth[i] + dV[i] / A_i)
-        state.volume[i]      = state.water_depth[i] * A_i
+        state.volume[i]      = max(0.0, state.volume[i] + dV[i])
+        state.water_depth[i] = state.volume[i] / A_i
     end
 end
 
@@ -813,8 +866,8 @@ function step_standard!(state::FlowState, dt::Float64)
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
-        wse_ci = state.elevation[ci] + state.water_depth[ci]
-        wse_cj = state.elevation[cj] + state.water_depth[cj]
+        wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
+        wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
 
         # Skip degenerate edges (should not occur in a well-formed EdgeList,
         # but guarded here for robustness against direct construction in tests)
@@ -925,6 +978,42 @@ end
 # ---------------------------------------------------------------------------
 
 """
+    InjectionPoint
+
+A fixed-rate point source: water added to the nearest mesh cell at a
+constant volumetric flow rate (m³/s) for the duration of the simulation.
+"""
+struct InjectionPoint
+    cell_index :: Int       # index into state.cell_ids
+    cell_id    :: String    # hex cell ID (for logging)
+    rate_m3s   :: Float64   # volumetric flow rate (m³/s)
+    lon        :: Float64   # source longitude (degrees)
+    lat        :: Float64   # source latitude (degrees)
+end
+
+"""
+    _find_nearest_cell(mesh, lon, lat) → (index, cell_id, dist_m)
+
+Return the index and ID of the mesh cell whose centre is closest to (lon, lat).
+Uses Euclidean distance in degree-space (sufficient for small AOIs).
+"""
+function _find_nearest_cell(mesh::A5Mesh, lon::Float64, lat::Float64)
+    best_i    = 1
+    best_dist = Inf
+    for (i, c) in enumerate(mesh.cells)
+        dlon = c.center_lon - lon
+        dlat = c.center_lat - lat
+        d    = sqrt(dlon^2 + dlat^2)
+        if d < best_dist
+            best_dist = d
+            best_i    = i
+        end
+    end
+    dist_m = best_dist * 111_000.0   # rough degrees → metres
+    return best_i, mesh.cells[best_i].id, dist_m
+end
+
+"""
     run_simulation!(state, mesh, sim_duration, dt_max, vis, vis_mode, output,
                     method, rainfall_rate)
 
@@ -939,15 +1028,16 @@ Arguments
   method         — `StandardFlow()` or `SGSFlow()`
   rainfall_rate  — uniform rainfall in m/s (default 0; e.g. 1e-5 for ~36 mm/hr)
 """
-function run_simulation!(state         :: FlowState,
-                         mesh          :: A5Mesh,
-                         sim_duration  :: Float64,
-                         dt_max        :: Float64,
+function run_simulation!(state            :: FlowState,
+                         mesh             :: A5Mesh,
+                         sim_duration     :: Float64,
+                         dt_max           :: Float64,
                          vis,
-                         vis_mode      :: Symbol = :none,
-                         output        :: SimOutput = SimOutput();
-                         method        :: FlowMethod = StandardFlow(),
-                         rainfall_rate :: Float64   = 0.0)
+                         vis_mode         :: Symbol = :none,
+                         output           :: SimOutput = SimOutput();
+                         method           :: FlowMethod = StandardFlow(),
+                         rainfall_rate    :: Float64   = 0.0,
+                         injection_points :: Vector{InjectionPoint} = InjectionPoint[])
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
@@ -957,15 +1047,19 @@ function run_simulation!(state         :: FlowState,
         dt = min(_cfl_dt(state, method), dt_max, sim_duration - t)
         dt = max(dt, 0.1)   # floor: 0.1s to prevent infinite loops on dry mesh
 
-        # Apply rainfall source (uniform, before routing)
+        # Apply rainfall source (uniform, before routing).
+        # Volume is primary state for both standard and SGS.
+        # dV = rate (m/s) × dt (s) × cell_area (m²)
         if rainfall_rate > 0.0
             for i in eachindex(state.cell_ids)
-                if use_sgs
-                    state.volume[i] += rainfall_rate * dt * state.cell_area[i]
-                else
-                    state.water_depth[i] += rainfall_rate * dt
-                end
+                state.volume[i] += rainfall_rate * dt * state.cell_area[i]
             end
+        end
+
+        # Apply injection point sources (fixed volumetric rate m³/s).
+        # Volume is primary state for both methods.
+        for inj in injection_points
+            state.volume[inj.cell_index] += inj.rate_m3s * dt
         end
 
         # Physics step
@@ -1008,10 +1102,14 @@ function run_simulation!(state         :: FlowState,
             n_wet     = count(>(1e-4), state.water_depth)
             max_depth = isempty(state.water_depth) ? 0.0 :
                         something(maximum(v for v in state.water_depth if isfinite(v); init=0.0), 0.0)
-            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  " *
-                  "dt=$(round(dt,digits=2))s  " *
-                  "wet=$n_wet  " *
-                  "max_depth=$(round(max_depth,digits=3))m"
+            # Mass balance: cumulative rainfall input vs total domain volume.
+            # mb_err > 0 means volume has left the domain (open boundaries or limiter loss).
+            input_vol  = rainfall_rate * t *
+                sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
+                sum(inj.rate_m3s * t for inj in injection_points; init=0.0)
+            domain_vol = sum(state.volume)
+            mb_err     = input_vol - domain_vol
+            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³"
         end
     end
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
@@ -1050,6 +1148,7 @@ Main application entry point.
 """
 function run_flood_model(;
     mesh_source      :: Tuple,
+    mesh_only        :: Bool    = false,
     vis_mode         :: Symbol  = :none,
     vis_port         :: Int     = 8080,
     dem_source                  = nothing,
@@ -1062,15 +1161,18 @@ function run_flood_model(;
     sgs_samples      :: Int     = 512,
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
-    sim_duration     :: Float64 = 3600.0,
-    dt_max           :: Float64 = 60.0,
-    rainfall_rate    :: Float64 = 0.0,
-    output_path      :: Union{String,Nothing} = nothing,
-    output_interval  :: Float64 = 60.0)
+    sim_duration      :: Float64 = 3600.0,
+    dt_max            :: Float64 = 60.0,
+    rainfall_rate     :: Float64 = 0.0,
+    injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
+    output_path       :: Union{String,Nothing} = nothing,
+    output_interval   :: Float64 = 60.0)
 
     @info "=== A5 Flood Model ===" Dates.now()
     @info "Vis mode    : $vis_mode"
-    @info "Flow method : $flow_method"
+    if !mesh_only
+        @info "Flow method : $flow_method"
+    end
 
     # 1. Start Cesium server early
     vis = if vis_mode === :cesium
@@ -1104,6 +1206,25 @@ function run_flood_model(;
         t0 = time()
         m = load_mesh_geoparquet(parquet_path)
         @info "Mesh loaded in $(round(time()-t0, digits=1))s — $(length(m)) cells"
+
+        # ── Compatibility check ──────────────────────────────────────────
+        if flow_method === :sgs && !haskey(m.array_vars, "sgs_elev_bins")
+            error(
+                "Mesh at '$parquet_path' has no SGS hypsometric tables, " *
+                "but --flow-model sgs was requested.\n" *
+                "  Re-generate the mesh with:\n" *
+                "    --meshgen <aoi.geojson> --meshres <N> --dem <dem.tif> " *
+                "--flow-model sgs --mesh-only --meshout <mesh.parquet>"
+            )
+        end
+        if flow_method !== :sgs && haskey(m.array_vars, "sgs_elev_bins")
+            @info "Note: mesh contains SGS tables but --flow-model standard was " *
+                  "requested — SGS data will be ignored."
+        end
+        if isempty(m.adjacency)
+            @warn "Mesh has no pre-computed adjacency (old format). " *
+                  "Adjacency will be computed from boundary geometry at initialisation."
+        end
         m
     end
 
@@ -1157,7 +1278,30 @@ function run_flood_model(;
         end
     end
 
-    # 4. SGS pre-processing (if using SGS flow)
+    # 4. Log mesh summary (before run guard — always shown)
+    @info mesh_summary(mesh)
+
+    # 4b. Run guard (first pass): if mesh_only but NOT sgs, exit now.
+    # If mesh_only AND sgs, we continue to step 5 to build SGS tables first,
+    # then exit after saving. If no water source and not mesh_only, also exit.
+    has_water = rainfall_rate > 0.0   # extend here for inflow/BC in Phase 2
+    if !mesh_only && !has_water
+        @info "No water source provided (rainfall=0, no inflow). " *
+              "Mesh saved and ready. Re-run with --rainfall <mm/hr> to simulate."
+        return nothing
+    end
+    if mesh_only && flow_method !== :sgs
+        @info "Mesh-only run complete (--mesh-only flag set). Exiting without simulation."
+        return nothing
+    end
+    # mesh_only+sgs: fall through to SGS pre-processing, then exit after.
+
+    # 5. SGS pre-processing — runs when flow_method === :sgs, regardless of
+    #    mesh_only flag.  Rationale: a mesh built with --flow-model sgs should
+    #    be fully ready for SGS simulation (including hypsometric tables) so the
+    #    user can inspect and validate the mesh before running the model.
+    #    A mesh built without --flow-model sgs will fail a compatibility check
+    #    at --meshload time if sgs is requested (see step 2 load guard).
     if flow_method === :sgs
         if !haskey(mesh.array_vars, "sgs_elev_bins")
             dem_source !== nothing ||
@@ -1181,8 +1325,12 @@ function run_flood_model(;
         end
     end
 
-    # 5. Log mesh summary
-    @info mesh_summary(mesh)
+    # 5c. Deferred mesh-only exit (after SGS tables built and saved)
+    if mesh_only
+        @info "Mesh-only run complete (--mesh-only --flow-model sgs). " *
+              "SGS tables built and saved. Exiting without simulation."
+        return nothing
+    end
 
     # 6. Hand mesh to visualiser
     if vis_mode === :makie
@@ -1208,6 +1356,14 @@ function run_flood_model(;
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n))"
 
+    # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
+    injection_points = InjectionPoint[]
+    for (lon, lat, rate) in injection_specs
+        idx, cid, dist_m = _find_nearest_cell(mesh, lon, lat)
+        push!(injection_points, InjectionPoint(idx, cid, rate, lon, lat))
+        @info "Injection point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  (dist=$(round(dist_m,digits=0))m)  rate=$(round(rate,digits=4)) m³/s"
+    end
+
     # 8. Prepare HDF5 output
     sim_output = SimOutput(
         path     = something(output_path, ""),
@@ -1221,8 +1377,9 @@ function run_flood_model(;
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr"
     run_simulation!(flow_state, mesh, sim_duration, dt_max,
                     vis, vis_mode, sim_output;
-                    method        = method_obj,
-                    rainfall_rate = rainfall_rate)
+                    method           = method_obj,
+                    rainfall_rate    = rainfall_rate,
+                    injection_points = injection_points)
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -1287,6 +1444,8 @@ Usage:
 Mesh options (choose one):
   --meshgen  FILE    GeoJSON area of interest. Triggers mesh generation via pya5.
   --meshres  N       A5 resolution level (required with --meshgen).
+  --mesh-only        Generate (or load) and save the mesh, then exit without
+                     simulating. Implied when no water source is provided.
   --meshout  FILE    Save generated mesh (optional). Extension controls format:
                        .parquet  → GeoParquet  (recommended)
                        .geojson  → GeoJSON
@@ -1322,6 +1481,10 @@ Flow model options:
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
+  --injection-point LAT,LON,RATE
+                     Add a point source at (lat, lon) with volumetric flow rate
+                     RATE (m³/s). Repeatable for multiple sources.
+                     Example: --injection-point -43.386,172.648,0.5
 
 Visualisation options:
   --vis [MODE]       Enable visualisation (off by default).
@@ -1338,7 +1501,7 @@ Examples:
   # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation
   julia --threads auto FloodModel.jl \\
       --meshgen christchurch_aoi.geojson --meshres 14 --meshout mesh_sgs.parquet \\
-      --dem linz_dem.tif --flow-model sgs --rainfall 30 --sim-duration 3600 --vis
+      --dem linz_dem.tif --mesh-only
 
   # Reload mesh with pre-built SGS tables, run with friction raster
   julia --threads auto FloodModel.jl \\
@@ -1408,11 +1571,12 @@ function main(args=String[])
     vis_port_val, args = _pop_flag(args, "--vis-port")
     vis_port = vis_port_val !== nothing ? parse(Int, vis_port_val) : 8080
 
-    # --meshgen / --meshres / --meshout / --meshload
+    # --meshgen / --meshres / --meshout / --meshload / --mesh-only
     meshgen_val,  args = _pop_flag(args, "--meshgen")
     meshres_val,  args = _pop_flag(args, "--meshres")
     meshout_val,  args = _pop_flag(args, "--meshout")
     meshload_val, args = _pop_flag(args, "--meshload")
+    mesh_only,    args = _pop_bool(args, "--mesh-only")
 
     # --dem / --dem-strict / --dem-method / --dem-samples / --dem-seed
     dem_val,         args = _pop_flag(args, "--dem")
@@ -1435,7 +1599,10 @@ function main(args=String[])
     manning_n_val,    args = _pop_flag(args, "--manning-n")
     friction_val,     args = _pop_flag(args, "--friction")
 
-    flow_method  = flow_method_val  !== nothing ? Symbol(flow_method_val)       : :sgs
+    # Default flow method: standard for mesh-only runs (no simulation needed),
+    # sgs for simulation runs (full accuracy by default).
+    flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) :
+                   mesh_only ? :standard : :sgs
     sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
     sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 512
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
@@ -1458,6 +1625,21 @@ function main(args=String[])
     output_val,     args = _pop_flag(args, "--output")
     output_int_val, args = _pop_flag(args, "--output-interval")
     output_interval = output_int_val !== nothing ? parse(Float64, output_int_val) : 60.0
+
+    # --injection-point lat,lon,rate  (repeatable)
+    # Format: --injection-point -43.386,172.648,0.5  (lat, lon, m³/s)
+    injection_specs = Tuple{Float64,Float64,Float64}[]
+    while true
+        inj_val, args = _pop_flag(args, "--injection-point")
+        inj_val === nothing && break
+        parts = split(inj_val, ",")
+        length(parts) == 3 ||
+            (println("ERROR: --injection-point must be lat,lon,rate_m3s\n"); print_help(1))
+        lat_inj = parse(Float64, strip(parts[1]))
+        lon_inj = parse(Float64, strip(parts[2]))
+        rate    = parse(Float64, strip(parts[3]))
+        push!(injection_specs, (lon_inj, lat_inj, rate))   # stored as (lon,lat,rate)
+    end
 
     # Validate mesh source
     has_gen  = meshgen_val !== nothing
@@ -1483,6 +1665,7 @@ function main(args=String[])
     
     run_flood_model(;
         mesh_source     = mesh_source,
+        mesh_only       = mesh_only,
         vis_mode        = vis_mode,
         vis_port        = vis_port,
         dem_source      = dem_source,
@@ -1497,15 +1680,20 @@ function main(args=String[])
         friction_source = friction_source,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
-        rainfall_rate   = rainfall_rate,
-        output_path     = output_val,
-        output_interval = output_interval,
+        rainfall_rate    = rainfall_rate,
+        injection_specs  = injection_specs,
+        output_path      = output_val,
+        output_interval  = output_interval,
     )
 end
 
 
 @info "Starting FloodA5 model..." Dates.now()
 let
+    # invokelatest is required under Julia 1.12+ strict world-age semantics.
+    # All top-level definitions (main, run_flood_model, etc.) are defined in
+    # a prior world relative to this let-block; invokelatest ensures we always
+    # call the most recent definition, which also suppresses the world-age warnings.
     # 1. First, check if we should apply REPL/Interactive defaults
     if isinteractive() && isempty(ARGS)
         @info "REPL detected. Applying default test set."
@@ -1517,7 +1705,7 @@ let
             "--sim-duration", "72000",
             "--flow-model", "sgs"
         ]
-        main(REPL_ARGS)
+        Base.invokelatest(main, REPL_ARGS)
 
     # 2. Otherwise, check for Debugger or Shell execution
     else
@@ -1525,7 +1713,7 @@ let
         is_shell = abspath(PROGRAM_FILE) == @__FILE__
         is_debugger = occursin("run_debugger.jl", PROGRAM_FILE)
         if is_shell || is_debugger
-            main(ARGS)
+            Base.invokelatest(main, ARGS)
         end
     end
 end

@@ -1,10 +1,99 @@
 {
     "version": "0.2.0",
     "configurations": [
-                {
+        {
             "type": "julia",
             "request": "launch",
-            "name": "Debug: [01] A5 mesh generate level 16, Standard flow model",
+            "name": "[01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${file}",
+            "args": [
+                "--meshgen", "test/kaiapoi_aoi.geojson", 
+                "--meshres", "16",
+                "--meshout", "test/kaiapoi_mesh16_standard.parquet",
+                "--dem", "test/kaiapoi_dem.tif",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[02] SGS-ready mesh (adds hypsometric tables)",
+            "program": "${file}",
+            "args": [
+                "--meshgen", "test/kaiapoi_aoi.geojson", 
+                "--meshres", "16",
+                "--meshout", "test/kaiapoi_mesh16_sgs.parquet",
+                "--dem", "test/kaiapoi_dem.tif",
+                "--mesh-only",
+                "--flow-model", "sgs"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[02] SGS-ready mesh (adds hypsometric tables)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[03] Run standard simulation (mesh must exist)",
+            "program": "${file}",
+            "args": [
+                "--meshload", "test/kaiapoi_mesh16_standard.parquet", 
+                "--rainfall", "50", 
+                "--output", "test/kaiapoi_test03.h5",
+                "--output-interval", "900",
+                "--sim-duration", "7200",
+                "--flow-model", "standard",
+                "--vis", "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[03] Run standard simulation (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[04] Run SGS simulation (mesh must have been built with --flow-model sgs)",
+            "program": "${file}",
+            "args": [
+                "--meshload", "test/kaiapoi_mesh16_sgs.parquet", 
+                "--rainfall", "50", 
+                "--output", "test/kaiapoi_test04.h5",
+                "--output-interval", "900",
+                "--sim-duration", "7200",
+                "--flow-model", "sgs",
+                "--vis", "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[04] Run SGS simulation (mesh must have been built with --flow-model sgs)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[05] Standard A5 mesh (geometry + neighbours + cell area)",
+            "program": "${file}",
+            "args": [
+                "--meshgen", "test/kaiapoi_aoi.geojson", 
+                "--meshres", "16",
+                "--meshout", "test/kaiapoi_mesh16_standard_nodem.parquet",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[05] Standard A5 mesh (geometry + neighbours + cell area)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+            {
+            "type": "julia",
+            "request": "launch",
+            "name": "[06] Standard A5 mesh followed by standard flow model",
             "program": "${file}",
             "args": [
                 "--meshgen", "test/kaiapoi_aoi.geojson", 
@@ -12,71 +101,27 @@
                 "--meshout", "test/kaiapoi_mesh16_standard.parquet",
                 "--dem", "test/kaiapoi_dem.tif",
                 "--rainfall", "50", 
-                "--output", "test/kaiapoi_test01.h5",
-                "--output-interval", "3600",
-                "--sim-duration", "72000",
+                "--output", "test/kaiapoi_test06.h5",
+                "--output-interval", "900",
+                "--sim-duration", "7200",
                 "--flow-model", "standard"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "Debug: [01] A5 mesh generate level 16, Standard flow model",
+                "DEBUG_PROFILE_NAME": "[06] Standard A5 mesh followed by standard flow model",
                 "JULIA_DEBUG": "Main"
             }
         },
         {
-            "type": "julia",
+            "type": "debugpy",
             "request": "launch",
-            "name": "Debug: [02] A5 mesh generate level 16, SGS flow model",
+            "name": "Python A5 mesh diagnostic",
             "program": "${file}",
             "args": [
-                "--meshgen", "test/kaiapoi_aoi.geojson", 
-                "--meshres", "16",
-                "--meshout", "test/kaiapoi_mesh16_sgs.parquet",
-                "--dem", "test/kaiapoi_dem.tif",
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test02.h5",
-                "--output-interval", "3600",
-                "--sim-duration", "72000",
-                "--flow-model", "sgs"
+                "test/kaiapoi_aoi.geojson", "12",
+                "test/kaiapoi_mesh12_diag.parquet"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "Debug: [02] A5 mesh generate level 16, SGS flow model",
-                "JULIA_DEBUG": "Main"
-            }
-        },
-        {
-            "type": "julia",
-            "request": "launch",
-            "name": "Debug: [03] Pre-defined A5 mesh, Standard flow model",
-            "program": "${file}",
-            "args": [
-                "--meshload", "test/kaiapoi_mesh16_standard.parquet", 
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test03.h5",
-                "--output-interval", "3600",
-                "--sim-duration", "72000",
-                "--flow-model", "standard"
-            ],
-            "env": {
-                "DEBUG_PROFILE_NAME": "Debug: [03] Pre-defined A5 mesh, Standard flow model",
-                "JULIA_DEBUG": "Main"
-            }
-        },
-        {
-            "type": "julia",
-            "request": "launch",
-            "name": "Debug: [04] Pre-defined A5 mesh, SGS flow model",
-            "program": "${file}",
-            "args": [
-                "--meshload", "test/kaiapoi_mesh16_sgs.parquet", 
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test04.h5",
-                "--output-interval", "3600",
-                "--sim-duration", "72000",
-                "--flow-model", "sgs"
-            ],
-            "env": {
-                "DEBUG_PROFILE_NAME": "Debug: [04] Pre-defined A5 mesh, SGS flow model",
-                "JULIA_DEBUG": "Main"
+                "DEBUG_PROFILE_NAME": "Python A5 mesh diagnostic"
             }
         }
     ]
