@@ -406,6 +406,62 @@ without modification.
 Logs the edge count, and the min/mean/max of cos θ for the non-orthogonality
 distribution of the loaded mesh.
 """
+
+"""
+    _check_mesh_connectivity(edges, n_cells) → Vector{Int}
+
+Finds connected components in the cell graph using BFS.
+Returns a component label vector (length n_cells) where cells with the
+same label are mutually reachable via edges.  Logs a warning if the mesh
+has more than one component, as isolated cells will never receive flux.
+"""
+function _check_mesh_connectivity(edges::EdgeList, n_cells::Int)::Vector{Int}
+    # Build adjacency list from EdgeList
+    adj = [Int[] for _ in 1:n_cells]
+    for e in 1:edges.n_edges
+        push!(adj[edges.cell_i[e]], edges.cell_j[e])
+        push!(adj[edges.cell_j[e]], edges.cell_i[e])
+    end
+
+    component = zeros(Int, n_cells)
+    comp_id   = 0
+
+    for start in 1:n_cells
+        component[start] != 0 && continue
+        comp_id += 1
+        queue = [start]
+        component[start] = comp_id
+        while !isempty(queue)
+            node = popfirst!(queue)
+            for nb in adj[node]
+                if component[nb] == 0
+                    component[nb] = comp_id
+                    push!(queue, nb)
+                end
+            end
+        end
+    end
+
+    if comp_id > 1
+        comp_sizes = [count(==(k), component) for k in 1:comp_id]
+        largest    = argmax(comp_sizes)
+        isolated   = n_cells - comp_sizes[largest]
+        @warn "Mesh has $comp_id disconnected components. " *
+              "Largest: $(comp_sizes[largest]) cells. " *
+              "Isolated (unreachable from largest): $isolated cells. " *
+              "These cells will never receive flux — consider a larger AOI."
+        for k in 1:comp_id
+            sz = comp_sizes[k]
+            mark = k == largest ? " (largest — source should be here)" : " (isolated)"
+            @info "  Component $k: $sz cells$mark"
+        end
+    else
+        @info "Mesh connectivity: fully connected ($n_cells cells, 1 component)"
+    end
+
+    return component
+end
+
 function _build_edge_list(cells       :: Vector{A5Cell},
                            id_idx      :: Dict{String,Int},
                            adj         :: Dict{String,Vector{String}},
@@ -569,6 +625,13 @@ function initialise_flow_model(mesh::A5Mesh,
     end
 
     # ── Cell areas ─────────────────────────────────────────────────────────
+    # Always recompute cell areas from polygon boundaries rather than trusting
+    # the parquet value. The Python bridge stores a "cell_area" column but it
+    # may reflect a total-AOI or approximate value rather than the exact geodetic
+    # area of each individual pentagon. _polygon_area_m2 is fast (< 1ms for
+    # typical mesh sizes) and guarantees correctness.
+    # SGS builds store "sgs_cell_area" computed the same way during build_sgs_tables!
+    # so we keep that path as it is already correct and consistent with the tables.
     areas = if haskey(mesh.static_vars, "sgs_cell_area")
         copy(mesh.static_vars["sgs_cell_area"])
     else
@@ -580,6 +643,15 @@ function initialise_flow_model(mesh::A5Mesh,
     # here so downstream tools (and the parquet) always have a cell_area column.
     if !haskey(mesh.static_vars, "sgs_cell_area")
         mesh.static_vars["sgs_cell_area"] = copy(areas)
+    end
+
+    # ── Debug: cell area sanity check ──────────────────────────────────────
+    n_nan_area = count(isnan, areas)
+    n_zero_area = count(a -> a < 1.0, areas)
+    @info "Cell areas: min=$(round(minimum(areas), sigdigits=4)) max=$(round(maximum(areas), sigdigits=4)) " *
+          "mean=$(round(sum(areas)/length(areas), sigdigits=4)) NaN=$n_nan_area zero/small=$n_zero_area"
+    if n_nan_area > 0 || n_zero_area > 0
+        @warn "Cell area problems detected — NaN or near-zero areas will cause NaN/Inf volumes"
     end
 
     # ── Adjacency ───────────────────────────────────────────────────────────
@@ -637,6 +709,9 @@ function initialise_flow_model(mesh::A5Mesh,
     edges = _build_edge_list(mesh.cells, id_idx, adj, areas,
                               sill_matrix, elevations)
     @info "  Edge list built in $(round(time()-t1, digits=1))s"
+
+    # Check graph connectivity -- warn if mesh has isolated components
+    _check_mesh_connectivity(edges, n)
 
     volumes = zeros(Float64, n)
 
@@ -724,6 +799,7 @@ For a future Riemann solver: replace with full over-relaxed decomposition
     # Flow depth at the edge: depth above sill on the higher side
     h_flow = max(wse_i, wse_j) - z_sill
     h_flow <= 0.0 && return 0.0
+    h_flow  = max(h_flow, 1e-6)   # floor to avoid h^(10/3) underflow → NaN denominator
 
     # WSE gradient (positive = flow i→j).
     # L_eff projects the centre-to-centre distance onto the face normal,
@@ -851,6 +927,9 @@ function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
     end
 end
 
+# Debug counter for step_standard! — counts calls, logs first 2
+const _step_debug_count = Ref{Int}(0)
+
 function step_standard!(state::FlowState, dt::Float64)
     n  = length(state.cell_ids)
     dV = zeros(Float64, n)   # net volume increment per cell this step (m³)
@@ -858,10 +937,39 @@ function step_standard!(state::FlowState, dt::Float64)
 
     # ── Phase 1: qroute — compute flux on every edge exactly once ─────────
     # Each edge is indexed by (cell_i, cell_j) with cell_i < cell_j.
-    # Sign convention: Q > 0 means flow from cell_i to cell_j.
-    # _bates_flux returns Q > 0 when wse_j > wse_i (flow toward the higher
-    # index is the "positive" direction as defined by cell_i < cell_j).
+    # Sign convention: Q < 0 means flow from cell_i to cell_j (i is higher).
+    #                  Q > 0 means flow from cell_j to cell_i (j is higher).
+    # When WSE_i > WSE_j: dWSE > 0 → q_new < 0 → Q < 0.
+    #   dV[ci] += Q*dt < 0  →  ci loses volume  ✓ (ci is the higher cell)
+    #   dV[cj] -= Q*dt > 0  →  cj gains volume  ✓
     # WSE arguments are passed as (wse_ci, wse_cj) matching (cell_i, cell_j).
+
+    # ── Debug: check for NaN / depth state before flux loop (first 2 calls) ──
+    if _step_debug_count[] < 2
+        _step_debug_count[] += 1
+        k = _step_debug_count[]
+        n_nan_vol   = count(isnan, state.volume)
+        n_nan_elev  = count(isnan, state.elevation)
+        n_nan_area  = count(isnan, state.cell_area)
+        n_zero_area = count(a -> a < 1.0, state.cell_area)
+        vol_sum     = sum(v for v in state.volume if isfinite(v); init=0.0)
+        max_depth   = maximum(state.water_depth; init=0.0)
+        @info "step_standard! call $k: NaN_vol=$n_nan_vol  NaN_elev=$n_nan_elev" *
+              " NaN_area=$n_nan_area  zero_area=$n_zero_area" *
+              " vol_sum=$(round(vol_sum,sigdigits=4))  max_water_depth=$(round(max_depth,sigdigits=4))"
+        if n_nan_vol > 0
+            bad = findall(isnan, state.volume)
+            @warn "  NaN volumes at indices: $(bad[1:min(5,end)])"
+        end
+        # Log WSE for first 3 cells and source cell
+        for i in [1, 2, 3, argmax(state.volume)]
+            wse = state.elevation[i] + state.volume[i] / max(state.cell_area[i], 1.0)
+            @info "  cell[$i]: vol=$(round(state.volume[i],sigdigits=4))" *
+                  "  depth=$(round(state.water_depth[i],sigdigits=4))" *
+                  "  wse=$(round(wse,sigdigits=6))"
+        end
+    end
+
     for e in 1:edges.n_edges
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
@@ -992,6 +1100,26 @@ struct InjectionPoint
 end
 
 """
+    RainPoint
+
+A localised rainfall source: water added to the nearest mesh cell at a
+rate equivalent to a given rainfall intensity (mm/hr) applied over that
+cell's plan area.  Unlike `--rainfall` (which applies to every cell),
+`--rainpoint` applies only to the single nearest cell.
+
+`rate_m3s` is pre-computed as `rainfall_mm_hr / 3_600_000 × cell_area_m2`
+and stored so the simulation loop is identical to the InjectionPoint path.
+"""
+struct RainPoint
+    cell_index     :: Int       # index into state.cell_ids
+    cell_id        :: String    # hex cell ID (for logging)
+    rate_m3s       :: Float64   # volumetric flow rate (m³/s) = mm_hr/3.6e6 × area
+    lon            :: Float64   # requested longitude (degrees)
+    lat            :: Float64   # requested latitude (degrees)
+    rainfall_mm_hr :: Float64   # original user input (mm/hr) — for logging
+end
+
+"""
     _find_nearest_cell(mesh, lon, lat) → (index, cell_id, dist_m)
 
 Return the index and ID of the mesh cell whose centre is closest to (lon, lat).
@@ -1010,6 +1138,11 @@ function _find_nearest_cell(mesh::A5Mesh, lon::Float64, lat::Float64)
         end
     end
     dist_m = best_dist * 111_000.0   # rough degrees → metres
+    # Warn if the nearest cell is far from the requested point — likely outside the mesh
+    if dist_m > 2000.0
+        @warn "_find_nearest_cell: requested point (lon=$lon, lat=$lat) is $(round(dist_m/1000,digits=1)) km from nearest mesh cell. " *
+              "Point may be outside the mesh AOI. Nearest cell: $(mesh.cells[best_i].id)"
+    end
     return best_i, mesh.cells[best_i].id, dist_m
 end
 
@@ -1025,8 +1158,10 @@ Writes HDF5 snapshots according to `output.output_interval`.
 
 Arguments
 ---------
-  method         — `StandardFlow()` or `SGSFlow()`
-  rainfall_rate  — uniform rainfall in m/s (default 0; e.g. 1e-5 for ~36 mm/hr)
+  method           — `StandardFlow()` or `SGSFlow()`
+  rainfall_rate    — uniform rainfall in m/s applied to every cell (default 0)
+  injection_points — fixed volumetric point sources (m³/s)
+  rain_points      — localised rainfall sources (single nearest cell, mm/hr × area)
 """
 function run_simulation!(state            :: FlowState,
                          mesh             :: A5Mesh,
@@ -1037,10 +1172,24 @@ function run_simulation!(state            :: FlowState,
                          output           :: SimOutput = SimOutput();
                          method           :: FlowMethod = StandardFlow(),
                          rainfall_rate    :: Float64   = 0.0,
-                         injection_points :: Vector{InjectionPoint} = InjectionPoint[])
+                         injection_points :: Vector{InjectionPoint} = InjectionPoint[],
+                         rain_points      :: Vector{RainPoint}      = RainPoint[])
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
+
+    # ── Debug: pre-simulation state check ──────────────────────────────────
+    @info "Pre-sim check: n_cells=$(length(state.volume))  " *
+          "initial_vol_sum=$(sum(state.volume))  " *
+          "rainfall_rate=$rainfall_rate  " *
+          "n_injection=$(length(injection_points))  n_rainpoints=$(length(rain_points))"
+    if !isempty(rain_points)
+        for (k, rp) in enumerate(rain_points)
+            @info "  rain_point[$k]: idx=$(rp.cell_index)  id=$(rp.cell_id)  " *
+                  "rate=$(rp.rate_m3s) m3/s  " *
+                  "valid_idx=$(1 <= rp.cell_index <= length(state.volume))"
+        end
+    end
 
     while t < sim_duration
         # Adaptive dt
@@ -1061,6 +1210,41 @@ function run_simulation!(state            :: FlowState,
         for inj in injection_points
             state.volume[inj.cell_index] += inj.rate_m3s * dt
         end
+
+        # Apply localised rainfall point sources.
+        # Each RainPoint pre-stores the effective m³/s for its cell
+        # (mm/hr converted to m/s × cell area), so the loop is identical
+        # to the injection-point path.
+        for rp in rain_points
+            state.volume[rp.cell_index] += rp.rate_m3s * dt
+        end
+
+        # ── Debug: post-source volume check (first 5 steps + every 10th) ──
+        if step <= 5 || step % 10 == 0
+            src_vols = isempty(rain_points) ? Float64[] :
+                       [state.volume[rp.cell_index] for rp in rain_points]
+            wet_now  = count(>(1e-4), state.water_depth)
+            non_src_wet = count(i -> state.water_depth[i] > 1e-4 &&
+                all(rp.cell_index != i for rp in rain_points), eachindex(state.volume))
+            @info "  Step $step: vol_sum=$(round(sum(state.volume),sigdigits=5))  " *
+                  "src_vol=$(round.(src_vols,sigdigits=5))  " *
+                  "wet=$wet_now (non-src=$non_src_wet)  dt=$dt"
+        end
+
+        # Sync water_depth from volume after all sources have been applied.
+        # Sources (rainfall, injection, rainpoint) write directly to state.volume
+        # but state.water_depth is only updated inside _apply_dV_standard!/sgs!.
+        # Without this sync, the first-step flux loop and the progress log both
+        # read stale water_depth = 0, giving wet=0 and wrong CFL even though
+        # volume is non-zero.
+        if !use_sgs
+            for i in eachindex(state.cell_ids)
+                state.cell_area[i] >= 1.0 &&
+                    (state.water_depth[i] = state.volume[i] / state.cell_area[i])
+            end
+        end
+        # SGS: water_depth is derived from the hypsometric curve, which is
+        # evaluated inside step_sgs! — no pre-sync needed for SGS.
 
         # Physics step
         if use_sgs
@@ -1106,7 +1290,8 @@ function run_simulation!(state            :: FlowState,
             # mb_err > 0 means volume has left the domain (open boundaries or limiter loss).
             input_vol  = rainfall_rate * t *
                 sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
-                sum(inj.rate_m3s * t for inj in injection_points; init=0.0)
+                sum(inj.rate_m3s * t for inj in injection_points; init=0.0) +
+                sum(rp.rate_m3s  * t for rp  in rain_points;      init=0.0)
             domain_vol = sum(state.volume)
             mb_err     = input_vol - domain_vol
             @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³"
@@ -1165,6 +1350,7 @@ function run_flood_model(;
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
+    rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     output_path       :: Union{String,Nothing} = nothing,
     output_interval   :: Float64 = 60.0)
 
@@ -1284,7 +1470,9 @@ function run_flood_model(;
     # 4b. Run guard (first pass): if mesh_only but NOT sgs, exit now.
     # If mesh_only AND sgs, we continue to step 5 to build SGS tables first,
     # then exit after saving. If no water source and not mesh_only, also exit.
-    has_water = rainfall_rate > 0.0   # extend here for inflow/BC in Phase 2
+    has_water = rainfall_rate > 0.0 ||
+                !isempty(injection_specs) ||
+                !isempty(rainpoint_specs)   # extend here for inflow/BC in Phase 2
     if !mesh_only && !has_water
         @info "No water source provided (rainfall=0, no inflow). " *
               "Mesh saved and ready. Re-run with --rainfall <mm/hr> to simulate."
@@ -1364,6 +1552,23 @@ function run_flood_model(;
         @info "Injection point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  (dist=$(round(dist_m,digits=0))m)  rate=$(round(rate,digits=4)) m³/s"
     end
 
+    # Resolve rainpoint specs (lon, lat, mm_hr) → RainPoint structs.
+    # Rate is converted from mm/hr to m/s, then multiplied by the cell area
+    # so the simulation loop treats it identically to an InjectionPoint.
+    rain_points = RainPoint[]
+    for (lon, lat, mm_hr) in rainpoint_specs
+        idx, cid, dist_m = _find_nearest_cell(mesh, lon, lat)
+        area_m2  = flow_state.cell_area[idx]
+        rate_m3s = (mm_hr / 3_600_000.0) * area_m2
+        push!(rain_points, RainPoint(idx, cid, rate_m3s, lon, lat, mm_hr))
+        @info "Rain point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  " *
+              "(dist=$(round(dist_m,digits=0))m)  $(round(mm_hr,digits=2)) mm/hr  " *
+              "= $(round(rate_m3s, sigdigits=4)) m³/s  (cell area $(round(area_m2,digits=0)) m²)"
+        @info "  RainPoint debug: idx=$idx  n_cells=$(length(flow_state.cell_area))  " *
+              "cell_area[idx]=$(flow_state.cell_area[idx])  " *
+              "isnan(area)=$(isnan(area_m2))  isnan(rate)=$(isnan(rate_m3s))"
+    end
+
     # 8. Prepare HDF5 output
     sim_output = SimOutput(
         path     = something(output_path, ""),
@@ -1379,7 +1584,8 @@ function run_flood_model(;
                     vis, vis_mode, sim_output;
                     method           = method_obj,
                     rainfall_rate    = rainfall_rate,
-                    injection_points = injection_points)
+                    injection_points = injection_points,
+                    rain_points      = rain_points)
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -1485,6 +1691,13 @@ Flow model options:
                      Add a point source at (lat, lon) with volumetric flow rate
                      RATE (m³/s). Repeatable for multiple sources.
                      Example: --injection-point -43.386,172.648,0.5
+  --rainpoint LAT,LON,RATE_MM_HR
+                     Add a localised rainfall source at (lat, lon) with intensity
+                     RATE_MM_HR (mm/hr) applied to the area of the single nearest
+                     cell only. Unlike --rainfall (which is applied to every cell),
+                     this injects water into one cell — useful for point-source
+                     testing and validation on flat meshes. Repeatable.
+                     Example: --rainpoint -43.531,172.636,50.0
 
 Visualisation options:
   --vis [MODE]       Enable visualisation (off by default).
@@ -1641,6 +1854,21 @@ function main(args=String[])
         push!(injection_specs, (lon_inj, lat_inj, rate))   # stored as (lon,lat,rate)
     end
 
+    # --rainpoint lat,lon,mm_hr  (repeatable)
+    # Format: --rainpoint -43.531,172.636,50.0  (lat, lon, mm/hr)
+    rainpoint_specs = Tuple{Float64,Float64,Float64}[]
+    while true
+        rp_val, args = _pop_flag(args, "--rainpoint")
+        rp_val === nothing && break
+        parts = split(rp_val, ",")
+        length(parts) == 3 ||
+            (println("ERROR: --rainpoint must be lat,lon,mm_hr\n"); print_help(1))
+        lat_rp  = parse(Float64, strip(parts[1]))
+        lon_rp  = parse(Float64, strip(parts[2]))
+        mm_hr   = parse(Float64, strip(parts[3]))
+        push!(rainpoint_specs, (lon_rp, lat_rp, mm_hr))   # stored as (lon,lat,mm_hr)
+    end
+
     # Validate mesh source
     has_gen  = meshgen_val !== nothing
     has_load = meshload_val !== nothing
@@ -1682,6 +1910,7 @@ function main(args=String[])
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
+        rainpoint_specs  = rainpoint_specs,
         output_path      = output_val,
         output_interval  = output_interval,
     )

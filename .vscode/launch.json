@@ -4,13 +4,30 @@
         {
             "type": "julia",
             "request": "launch",
-            "name": "[01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
-            "program": "${file}",
+            "name": "[00] Write flat test AOI GeoJSON (run once before [07])",
+            "program": "${workspaceFolder}/test_flat_rainpoint.jl",
             "args": [
-                "--meshgen", "test/kaiapoi_aoi.geojson", 
-                "--meshres", "16",
-                "--meshout", "test/kaiapoi_mesh16_standard.parquet",
-                "--dem", "test/kaiapoi_dem.tif",
+                "--gen"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[00] Write flat test AOI GeoJSON (run once before [07])",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",
+                "test/kaiapoi_aoi.geojson",
+                "--meshres",
+                "16",
+                "--meshout",
+                "test/kaiapoi_mesh16_standard.parquet",
+                "--dem",
+                "test/kaiapoi_dem.tif",
                 "--mesh-only"
             ],
             "env": {
@@ -22,14 +39,19 @@
             "type": "julia",
             "request": "launch",
             "name": "[02] SGS-ready mesh (adds hypsometric tables)",
-            "program": "${file}",
+            "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen", "test/kaiapoi_aoi.geojson", 
-                "--meshres", "16",
-                "--meshout", "test/kaiapoi_mesh16_sgs.parquet",
-                "--dem", "test/kaiapoi_dem.tif",
+                "--meshgen",
+                "test/kaiapoi_aoi.geojson",
+                "--meshres",
+                "16",
+                "--meshout",
+                "test/kaiapoi_mesh16_sgs.parquet",
+                "--dem",
+                "test/kaiapoi_dem.tif",
                 "--mesh-only",
-                "--flow-model", "sgs"
+                "--flow-model",
+                "sgs"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[02] SGS-ready mesh (adds hypsometric tables)",
@@ -40,15 +62,22 @@
             "type": "julia",
             "request": "launch",
             "name": "[03] Run standard simulation (mesh must exist)",
-            "program": "${file}",
+            "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshload", "test/kaiapoi_mesh16_standard.parquet", 
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test03.h5",
-                "--output-interval", "900",
-                "--sim-duration", "7200",
-                "--flow-model", "standard",
-                "--vis", "makie"
+                "--meshload",
+                "test/kaiapoi_mesh16_standard.parquet",
+                "--rainfall",
+                "50",
+                "--output",
+                "test/kaiapoi_test03.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "7200",
+                "--flow-model",
+                "standard",
+                "--vis",
+                "makie"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[03] Run standard simulation (mesh must exist)",
@@ -59,15 +88,22 @@
             "type": "julia",
             "request": "launch",
             "name": "[04] Run SGS simulation (mesh must have been built with --flow-model sgs)",
-            "program": "${file}",
+            "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshload", "test/kaiapoi_mesh16_sgs.parquet", 
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test04.h5",
-                "--output-interval", "900",
-                "--sim-duration", "7200",
-                "--flow-model", "sgs",
-                "--vis", "makie"
+                "--meshload",
+                "test/kaiapoi_mesh16_sgs.parquet",
+                "--rainfall",
+                "50",
+                "--output",
+                "test/kaiapoi_test04.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "7200",
+                "--flow-model",
+                "sgs",
+                "--vis",
+                "makie"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[04] Run SGS simulation (mesh must have been built with --flow-model sgs)",
@@ -77,37 +113,215 @@
         {
             "type": "julia",
             "request": "launch",
-            "name": "[05] Standard A5 mesh (geometry + neighbours + cell area)",
-            "program": "${file}",
+            "name": "[05] Standard A5 mesh \u2014 no DEM (geometry + neighbours + cell area only)",
+            "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen", "test/kaiapoi_aoi.geojson", 
-                "--meshres", "16",
-                "--meshout", "test/kaiapoi_mesh16_standard_nodem.parquet",
+                "--meshgen",
+                "test/kaiapoi_aoi.geojson",
+                "--meshres",
+                "16",
+                "--meshout",
+                "test/kaiapoi_mesh16_standard_nodem.parquet",
                 "--mesh-only"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[05] Standard A5 mesh (geometry + neighbours + cell area)",
+                "DEBUG_PROFILE_NAME": "[05] Standard A5 mesh \u2014 no DEM (geometry + neighbours + cell area only)",
                 "JULIA_DEBUG": "Main"
             }
         },
-            {
+        {
             "type": "julia",
             "request": "launch",
             "name": "[06] Standard A5 mesh followed by standard flow model",
-            "program": "${file}",
+            "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen", "test/kaiapoi_aoi.geojson", 
-                "--meshres", "16",
-                "--meshout", "test/kaiapoi_mesh16_standard.parquet",
-                "--dem", "test/kaiapoi_dem.tif",
-                "--rainfall", "50", 
-                "--output", "test/kaiapoi_test06.h5",
-                "--output-interval", "900",
-                "--sim-duration", "7200",
-                "--flow-model", "standard"
+                "--meshgen",
+                "test/kaiapoi_aoi.geojson",
+                "--meshres",
+                "16",
+                "--meshout",
+                "test/kaiapoi_mesh16_standard.parquet",
+                "--dem",
+                "test/kaiapoi_dem.tif",
+                "--rainfall",
+                "50",
+                "--output",
+                "test/kaiapoi_test06.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "7200",
+                "--flow-model",
+                "standard"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[06] Standard A5 mesh followed by standard flow model",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[07] Flat mesh gen \u2014 no DEM, standard, res 14 (rainpoint test prerequisite)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",
+                "test/flat_test_aoi.geojson",
+                "--meshres",
+                "14",
+                "--meshout",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[07] Flat mesh gen \u2014 no DEM, standard, res 14 (rainpoint test prerequisite)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[08] Flat rainpoint \u2014 single cell source, standard flow, no vis",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,50.0",
+                "--sim-duration",
+                "3600",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/flat_rainpoint_out.h5",
+                "--output-interval",
+                "300"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[08] Flat rainpoint \u2014 single cell source, standard flow, no vis",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[09] Flat rainpoint \u2014 single cell source, standard flow, Makie viewer",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,50.0",
+                "--sim-duration",
+                "3600",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/flat_rainpoint_out.h5",
+                "--output-interval",
+                "300",
+                "--vis",
+                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[09] Flat rainpoint \u2014 single cell source, standard flow, Makie viewer",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[08b] Flat rainpoint \u2014 2 hour run, 50 mm/hr (full domain spread)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,50.0",
+                "--sim-duration",
+                "7200",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/flat_rainpoint_2hr.h5",
+                "--output-interval",
+                "300"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[08b] Flat rainpoint \u2014 2 hour run, 50 mm/hr (full domain spread)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[08c] Flat rainpoint \u2014 1 hour run, 200 mm/hr (accelerated spread test)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,200.0",
+                "--sim-duration",
+                "3600",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/flat_rainpoint_200mmhr.h5",
+                "--output-interval",
+                "300"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[08c] Flat rainpoint \u2014 1 hour run, 200 mm/hr (accelerated spread test)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[08d] Flat rainpoint \u2014 1 hour, 1000 mm/hr (full-domain stress test)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,1000.0",
+                "--sim-duration",
+                "3600",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/flat_rainpoint_1000mmhr.h5",
+                "--output-interval",
+                "300"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[08d] Flat rainpoint \u2014 1 hour, 1000 mm/hr (full-domain stress test)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[10] Validate flat rainpoint output (--file 1hr|2hr|200|1000)",
+            "program": "${workspaceFolder}/test_flat_rainpoint.jl",
+            "args": [
+                "--analyse"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[10] Validate flat rainpoint output (--file 1hr|2hr|200|1000)",
                 "JULIA_DEBUG": "Main"
             }
         },
@@ -117,7 +331,8 @@
             "name": "Python A5 mesh diagnostic",
             "program": "${file}",
             "args": [
-                "test/kaiapoi_aoi.geojson", "12",
+                "test/kaiapoi_aoi.geojson",
+                "12",
                 "test/kaiapoi_mesh12_diag.parquet"
             ],
             "env": {
