@@ -1267,13 +1267,29 @@ function run_simulation!(state            :: FlowState,
                     "velocity"   => Float32.(state.velocity),
                 ))
             elseif vis_mode === :makie
+                # Compute cumulative volume budget for the mass-balance plots.
+                # vol_added  = all water injected since t=0 (rainfall + point sources).
+                # vol_domain = water currently in the domain (primary state sum).
+                # vol_removed is 0 until Phase 2 adds open outflow BCs.
+                _vis_vol_added = rainfall_rate * t *
+                    sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
+                    sum(inj.rate_m3s * t for inj in injection_points; init=0.0) +
+                    sum(rp.rate_m3s  * t for rp  in rain_points;      init=0.0)
+                _vis_vol_domain = sum(state.volume)
+                _vis_n_wet      = count(>(1e-4), state.water_depth)
                 MakieVisualiser.push_frame!(
                     vis, state.cell_ids,
                     state.water_depth,
                     sat,
                     state.volume,
                     state.velocity,
-                    t)
+                    t;
+                    vol_added   = _vis_vol_added,
+                    vol_domain  = _vis_vol_domain,
+                    vol_removed = 0.0,
+                    n_wet       = _vis_n_wet,
+                    sim_step    = step,
+                    sim_dt      = dt)
             end
         end
 
@@ -1520,13 +1536,9 @@ function run_flood_model(;
         return nothing
     end
 
-    # 6. Hand mesh to visualiser
-    if vis_mode === :makie
-        src_label = basename(mesh_source[2])
-        @info "Opening Makie viewer ($(length(mesh)) cells)..."
-        vis = MakieVisualiser.start(mesh;
-                  title = "FloodA5  res=$(mesh.resolution)  $src_label")
-    elseif vis_mode === :cesium
+    # 6. Hand mesh to Cesium visualiser.
+    # Makie is deferred to step 7b so source cell indices can be highlighted.
+    if vis_mode === :cesium
         @info "Pushing mesh to Cesium server ($(length(mesh)) cells)..."
         VisualisationServer.set_mesh!(vis, mesh_to_geojson_string(mesh),
                                     [c.id for c in mesh.cells])
@@ -1567,6 +1579,24 @@ function run_flood_model(;
         @info "  RainPoint debug: idx=$idx  n_cells=$(length(flow_state.cell_area))  " *
               "cell_area[idx]=$(flow_state.cell_area[idx])  " *
               "isnan(area)=$(isnan(area_m2))  isnan(rate)=$(isnan(rate_m3s))"
+    end
+
+    # 7b. Open Makie viewer now that source indices and the flow adjacency dict
+    # are both known.  Passing adjacency activates ring mode: a BFS from the
+    # source cells assigns each cell a ring index, enabling the "Ring index"
+    # map overlay and the per-ring volume bar chart in the bottom strip.
+    if vis_mode === :makie
+        src_label      = basename(mesh_source[2])
+        source_indices = vcat(
+            [inj.cell_index for inj in injection_points],
+            [rp.cell_index  for rp  in rain_points],
+        )
+        @info "Opening Makie viewer ($(length(mesh)) cells, " *
+              "$(length(source_indices)) source cell(s), ring mode active)..."
+        vis = MakieVisualiser.start(mesh;
+                  source_indices = source_indices,
+                  adjacency      = flow_state.adjacency,
+                  title          = "FloodA5  res=$(mesh.resolution)  $src_label")
     end
 
     # 8. Prepare HDF5 output
