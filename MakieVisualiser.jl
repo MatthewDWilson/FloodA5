@@ -5,24 +5,24 @@
 # Layout (1200 × 960 window)
 # --------------------------
 #
-#   ┌────────────────────────────────────┬───────────────────┐
-#   │                                    │  DIAGNOSTICS      │
-#   │   Map panel                        │  Sim time / step  │
-#   │   (A5 pentagons, variable colour)  │  dt / frame       │
-#   │   Source cells: bright stroke      │  Active variable  │
-#   │                                    │  Max / wet stats  │
-#   │                                    │  Mass balance     │
-#   │                                    │  Mesh info        │
-#   │                                    │  Lon/lat bounds   │
-#   │                                    │  Threads / clock  │
-#   ├────────────────────────────────────┤                   │
-#   │  colorbar ───────────────────────  │                   │
-#   ├────────────────────────────────────┤                   │
-#   │  Display variable:  [Depth ▾]      │                   │
-#   ├────────────┬──────────┬────────────┴──────────────────-┤
-#   │  Volume    │  Mass    │  Wet cells │  Ring vol (bars)  │
-#   │  budget    │  balance │            │  (test mode only) │
-#   └────────────┴──────────┴────────────┴───────────────────┘
+#   ┌────────────────────────────────────┬────────────────────┐
+#   │  fig[1,1]                          │  fig[1,2]          │
+#   │  Map panel  (ax_map)               │  DIAGNOSTICS       │
+#   │  A5 pentagons, variable colour     │  (ax_side)         │
+#   │  Source cells: bright stroke       │  Sim time/step/dt  │
+#   │  Quiver overlay (linesegments! +   │  Mass balance      │
+#   │    scatter!)                       │  Mesh info         │
+#   │                                    ├────────────────────┤
+#   ├────────────────────────────────────┤  fig[2,2]          │
+#   │  fig[2,1]  colorbar               │  CONTROLS          │
+#   ├────────────────────────────────────┤  (ctrl_grid)       │
+#   │  fig[3,1]  Pause [||]  (toolbar)  │  Display var [▾]   │
+#   ├────────────┬──────────┬────────────┤  ──────────────    │
+#   │  fig[4,1:2] time-series strip      │  Flow arrows ○     │
+#   │  Volume    │  Mass    │  Wet cells │  Scale   [────]    │
+#   │  budget    │  balance │  (+Ring)   │  Stride  [────]    │
+#   └────────────┴──────────┴────────────┴  Vel min [────]    │
+#                                        └────────────────────┘
 #
 # Ring-index feature (test mode)
 # --------------------------------
@@ -75,6 +75,7 @@ module MakieVisualiser
 using GLMakie
 using Printf
 using Dates
+using Statistics
 
 export MakieVis, start, stop, push_frame!
 
@@ -133,6 +134,23 @@ mutable struct MakieVis
     data_sat   :: Observable{Vector{Float64}}
     data_vol   :: Observable{Vector{Float64}}
     data_vel   :: Observable{Vector{Float64}}
+
+    # Velocity vector components (geographic, m/s) — used for quiver overlay
+    data_vel_u :: Observable{Vector{Float64}}
+    data_vel_v :: Observable{Vector{Float64}}
+
+    # Quiver overlay state
+    quiver_visible  :: Observable{Bool}
+    quiver_segs_obs  :: Observable{Vector{Point2f}}  # linesegments shaft data
+    quiver_tips_obs  :: Observable{Vector{Point2f}}  # scatter tip positions
+    quiver_rots_obs  :: Observable{Vector{Float32}}  # scatter tip rotations
+    quiver_sizes_obs :: Observable{Vector{Float32}}  # scatter markersize per arrow
+    quiver_lw_obs    :: Observable{Float32}          # linesegments linewidth (scalar, peak-based)
+    quiver_scale    :: Observable{Float64}  # arrow length multiplier (user slider)
+    quiver_stride   :: Observable{Int}      # plot every N-th cell (density control)
+    cell_lons       :: Vector{Float64}    # cell centre longitudes (mesh order)
+    cell_lats       :: Vector{Float64}    # cell centre latitudes  (mesh order)
+    paused          :: Threads.Atomic{Bool}  # true = sim loop is paused
 
     # Ring index data (fixed after construction; Float64 for colormap use)
     # Empty when ring mode is inactive.
@@ -285,6 +303,8 @@ function start(mesh;
     cell_ids = [c.id for c in mesh.cells]
     lons     = [c.center_lon for c in mesh.cells]
     lats     = [c.center_lat for c in mesh.cells]
+    cell_lons_fixed = copy(lons)   # fixed mesh-order copy for quiver
+    cell_lats_fixed = copy(lats)
 
     polys = Vector{Vector{Point2f}}(undef, n)
     for (i, c) in enumerate(mesh.cells)
@@ -328,6 +348,9 @@ function start(mesh;
     data_sat   = Observable(copy(zeros_n))
     data_vol   = Observable(copy(zeros_n))
     data_vel   = Observable(copy(zeros_n))
+    data_vel_u = Observable(copy(zeros_n))
+    data_vel_v = Observable(copy(zeros_n))
+    quiver_visible = Observable(false)
 
     # --- Display Observables -------------------------------------------------
     selected_var = Observable(1)
@@ -364,13 +387,10 @@ function start(mesh;
     ring_vol_obs = Observable(zeros(Float64, max(n_display, 1)))
 
     # --- Figure & layout (1200 × 960) ----------------------------------------
-    fig = Figure(size = (1200, 960), backgroundcolor = BG_DARK)
+    fig = Figure(size = (1100, 740), backgroundcolor = BG_DARK)
 
     # Row 1: map axis
     ax_map = Axis(fig[1, 1];
-        title           = @lift("t = " * _fmt_time($(sim_time))),
-        titlecolor      = COL_TEXT,
-        titlesize       = 14,
         xlabel          = "Longitude",
         ylabel          = "Latitude",
         xlabelcolor     = COL_LABEL,
@@ -380,7 +400,10 @@ function start(mesh;
         backgroundcolor = BG_MAP,
         xgridcolor      = COL_GRID,
         ygridcolor      = COL_GRID,
-        aspect          = DataAspect(),
+        # Geographic aspect correction: AxisAspect(cos(lat)) corrects lon/lat
+        # distortion at the domain latitude without the whitespace overflow
+        # that DataAspect() causes. Computed from mean cell latitude below.
+        aspect          = AxisAspect(cos(deg2rad(mean(lats)))),
     )
 
     # Base polygon layer — uniform thin stroke, colour-mapped fill.
@@ -418,23 +441,28 @@ function start(mesh;
         height         = 18,
     )
 
-    # Row 3: variable selector Menu
-    menu_box = fig[3, 1] = GridLayout()
-    Label(menu_box[1, 1], "Display variable:";
-        color     = COL_LABEL,
-        fontsize  = 13,
-        halign    = :right,
-        tellwidth = false,
-    )
-    menu = Menu(menu_box[1, 2];
-        options   = var_labels,
-        default   = var_labels[1],
-        width     = 180,
-        tellwidth = false,
-    )
+    # Quiver control Observables — defined before ctrl_grid widgets that use them
+    quiver_scale   = Observable(1.0)
+    quiver_stride  = Observable(1)
+    _quiver_updating = Ref(false)
 
-    # Row 4: bottom time-series strip (3 panels always + 1 ring panel if active)
-    ts_grid    = fig[4, 1:2] = GridLayout()
+    # Helper: recompute quiver arrays with current settings
+    function _refresh_quiver()
+        _quiver_updating[] && return
+        _quiver_updating[] = true
+        try
+            _update_quiver!(quiver_segs_obs, quiver_tips_obs, quiver_rots_obs, quiver_sizes_obs, quiver_lw_obs,
+                            cell_lons_fixed, cell_lats_fixed,
+                            data_vel_u[], data_vel_v[],
+                            ax_map, quiver_scale[], quiver_stride[],
+                            vel_thresh_obs[] * 1e-3)
+        finally
+            _quiver_updating[] = false
+        end
+    end
+
+    # ── Row 4: bottom time-series strip ──────────────────────────────────────
+    ts_grid    = fig[3, 1:2] = GridLayout()
     n_ts_cols  = ring_mode ? 4 : 3
 
     # Left — volume budget
@@ -540,8 +568,27 @@ function start(mesh;
         nothing
     end
 
-    # --- Sidebar (col 2, rows 1–3) -------------------------------------------
-    ax_side = Axis(fig[1:3, 2];
+    # Time label: drawn inside the map axis at top-centre so it creates no
+    # protrusion that would push the sidebar grid down.
+    text!(ax_map, @lift("t = " * _fmt_time($(sim_time)));
+        position  = (0.5, 0.99),
+        align     = (:center, :top),
+        space     = :relative,
+        fontsize  = 14,
+        color     = COL_TEXT,
+    )
+
+    # --- Sidebar col 2 --------------------------------------------------------
+    # Right sidebar: a nested GridLayout spanning fig rows 1:2 (map+colorbar
+    # height) so it is fully independent of the left column's row structure.
+    # Internally: row 1 = controls (shrink-wraps), row 2 = diagnostics (fills).
+    sidebar_grid = fig[1:2, 2] = GridLayout()
+
+    # Controls panel — top of sidebar
+    ctrl_grid = sidebar_grid[1, 1] = GridLayout()
+
+    # Diagnostics panel — fills remaining sidebar height below controls
+    ax_side = Axis(sidebar_grid[2, 1];
         backgroundcolor    = BG_SIDE,
         leftspinevisible   = false,
         rightspinevisible  = false,
@@ -551,26 +598,195 @@ function start(mesh;
         ygridvisible       = false,
     )
     hidedecorations!(ax_side)
-    # "DejaVu Sans Mono" is bundled with Julia/Makie and rendered as a vector
-    # outline through GLMakie's own text pipeline (same as axis tick labels),
-    # giving sharp, crisp glyphs at all sizes.  "Courier New" is a GDI bitmap
-    # font that blurs when composited into an OpenGL framebuffer.
     text!(ax_side, 0.06, 0.97;
         text      = diag_text,
         align     = (:left, :top),
         space     = :relative,
         font      = "DejaVu Sans Mono",
-        fontsize  = 14.5,
+        fontsize  = 11.0,
         color     = COL_TEXT,
     )
 
+    # Controls row shrinks to content; diagnostics row fills the rest
+    rowsize!(sidebar_grid, 1, Auto())       # controls: shrinks to content
+    rowsize!(sidebar_grid, 2, Auto())       # diagnostics: fills remaining height
+    rowgap!(sidebar_grid, 4)
+
+    # Background box (Axis with no decorations gives a coloured background)
+    ax_ctrl = Axis(ctrl_grid[1:8, 1:2];
+        backgroundcolor    = BG_SIDE,
+        leftspinevisible   = false,
+        rightspinevisible  = false,
+        topspinevisible    = false,
+        bottomspinevisible = false,
+        xgridvisible       = false,
+        ygridvisible       = false,
+    )
+    hidedecorations!(ax_ctrl)
+
+    # Title
+    Label(ctrl_grid[1, 1:2], "Controls";
+        color    = COL_TEXT,
+        fontsize = 11,
+        font     = "DejaVu Sans Mono",
+        halign   = :left,
+        tellwidth = false,
+    )
+
+    # Separator line via a thin coloured Label
+    Label(ctrl_grid[2, 1:2], "─────────────────────────────";
+        color    = COL_LABEL,
+        fontsize = 10,
+        halign   = :left,
+        tellwidth = false,
+    )
+
+    # Row 3: Display variable selector
+    Label(ctrl_grid[3, 1], "Display:";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    menu = Menu(ctrl_grid[3, 2];
+        options   = var_labels,
+        default   = var_labels[1],
+        width     = 130,
+        tellwidth = false,
+    )
+
+    # Row 4: Flow arrows toggle
+    Label(ctrl_grid[4, 1], "Flow arrows:";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    quiver_toggle = Toggle(ctrl_grid[4, 2]; active = false, halign = :left, tellwidth = false)
+
+    # Row 5: arrow scale — full widget-column slider
+    Label(ctrl_grid[5, 1], "Arrow scale:";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    quiver_scale_slider = Slider(ctrl_grid[5, 2];
+        range = 0.1:0.1:5.0, startvalue = 1.0, width = 130, tellwidth = false)
+    on(quiver_scale_slider.value) do v; quiver_scale[] = v; end
+
+    # Row 6: arrow stride
+    Label(ctrl_grid[6, 1], "Arrow stride:";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    quiver_stride_slider = Slider(ctrl_grid[6, 2];
+        range = 1:1:10, startvalue = 1, width = 130, tellwidth = false)
+    on(quiver_stride_slider.value) do v; quiver_stride[] = v; end
+
+    # Row 7: velocity threshold
+    Label(ctrl_grid[7, 1], "Vel min (mm/s):";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    vel_thresh_obs = Observable(0.01)
+    vel_thresh_slider = Slider(ctrl_grid[7, 2];
+        range = vcat(0.001f0, 0.01f0:0.01f0:0.1f0, 0.2f0:0.1f0:2.0f0),
+        startvalue = 0.01f0, width = 130, tellwidth = false)
+    on(vel_thresh_slider.value) do v; vel_thresh_obs[] = Float64(v); end
+
+    # Row 8: pause / play
+    Label(ctrl_grid[8, 1], "Simulation:";
+        color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
+    _sim_paused = Ref(false)
+    _paused_obs = Observable(false)
+    pause_btn = Button(ctrl_grid[8, 2];
+        label     = @lift($(_paused_obs) ? "Play  [>]" : "Pause [||]"),
+        width = 90, tellwidth = false)
+    on(pause_btn.clicks) do _
+        _sim_paused[] = !_sim_paused[]
+        _paused_obs[] = _sim_paused[]
+    end
+
+    colsize!(ctrl_grid, 1, Auto())
+    colsize!(ctrl_grid, 2, Auto())
+    rowgap!(ctrl_grid, 3)
+
+    # Wire quiver widgets → update function (all defined above)
+    on(quiver_toggle.active) do val
+        quiver_visible[] = val
+        val && !isempty(data_vel_u[]) && _refresh_quiver()
+    end
+    on(quiver_scale)   do _; quiver_visible[] && _refresh_quiver(); end
+    on(quiver_stride)  do _; quiver_visible[] && _refresh_quiver(); end
+    on(vel_thresh_obs) do _; quiver_visible[] && _refresh_quiver(); end
+
+    # ── Quiver overlay — built from linesegments! + scatter! ────────────────
+    # We avoid arrows!/arrows2d! due to version-specific dispatch issues with
+    # empty Observable arrays at construction time.  Instead each arrow is drawn
+    # as a shaft (linesegments!) plus a filled triangle head (scatter! with
+    # marker=:utriangle, rotated per-arrow via rotations observable).
+    #
+    # _update_quiver! populates three Observables every frame:
+    #   quiver_segs_obs  — Vec2f pairs [tail, tip] for linesegments!
+    #   quiver_tips_obs  — tip positions for scatter! arrowheads
+    #   quiver_rots_obs  — rotation angle (radians) for each arrowhead
+    #   quiver_sizes_obs — markersize (pixels) per arrowhead, scales with speed
+    _domain_lon_span = lon_range[2] - lon_range[1]
+
+    quiver_segs_obs  = Observable(Point2f[])   # interleaved [tail, tip, tail, tip …]
+    quiver_tips_obs  = Observable(Point2f[])   # one per arrow
+    quiver_rots_obs  = Observable(Float32[])   # one per arrow (radians)
+    quiver_sizes_obs = Observable(Float32[])   # markersize per arrowhead
+    quiver_lw_obs    = Observable(1.5f0)       # scalar linewidth, updated each frame
+
+    # Capture plot objects so we can set .visible directly in the on() listener.
+    # Passing an Observable as `visible=` at construction is not guaranteed to
+    # create a live subscription in Makie 0.24 — we set it explicitly instead.
+    quiver_lines = linesegments!(ax_map, quiver_segs_obs;
+        color       = :white,
+        linewidth   = quiver_lw_obs,
+        visible     = false,
+        inspectable = false,
+    )
+    quiver_heads = scatter!(ax_map, quiver_tips_obs;
+        color        = :white,
+        marker       = :utriangle,
+        markersize   = quiver_sizes_obs,
+        rotation     = quiver_rots_obs,
+        visible      = false,
+        inspectable  = false,
+    )
+
+    # Explicit visibility listener — directly sets the plot attribute.
+    on(quiver_visible) do val
+        quiver_lines.visible[] = val
+        quiver_heads.visible[] = val
+    end
+
+    # Recompute filtered quiver arrays whenever vel_u changes.
+    # vel_v.val is updated silently before vel_u[] is notified (see push_frame!).
+    on(data_vel_u) do _
+        _quiver_updating[] && return
+        _quiver_updating[] = true
+        try
+            _update_quiver!(quiver_segs_obs, quiver_tips_obs, quiver_rots_obs, quiver_sizes_obs, quiver_lw_obs,
+                            cell_lons_fixed, cell_lats_fixed,
+                            data_vel_u[], data_vel_v[],
+                            ax_map, quiver_scale[], quiver_stride[])
+        finally
+            _quiver_updating[] = false
+        end
+    end
+
     # --- Column / row sizing -------------------------------------------------
-    colsize!(fig.layout, 1, Relative(0.74))
-    colsize!(fig.layout, 2, Relative(0.26))
-    rowsize!(fig.layout, 1, Relative(0.46))
-    rowsize!(fig.layout, 2, Fixed(42))
-    rowsize!(fig.layout, 3, Fixed(36))
-    rowsize!(fig.layout, 4, Relative(0.28))
+    # Col 1 (map+ts): fills all width not used by the fixed sidebar.
+    # Col 2 (sidebar): Fixed 300px — controls and diagnostics never reflow.
+    # Row 1 (map+sidebar): fills all height not used by fixed rows below.
+    # Row 2 (colorbar): Fixed 50px — always the same thin strip.
+    # Row 3 (time-series): Fixed 240px — keeps plots readable at any size.
+    #
+    # Result: resizing the window stretches the map and colorbar; the sidebar,
+    # time-series panels, and colorbar strip stay a constant size.
+    # Auto() = fill all space not claimed by Fixed columns/rows.
+    # This is correct — Relative(1.0) means 100% of figure, overriding Fixed.
+    # Follow Makie tutorial pattern: Auto() for scalable content.
+    # Col 1 (map): Auto — expands to fill all width not taken by sidebar.
+    # Col 2 (sidebar): Auto — sizes to its content (ctrl_grid + ax_side).
+    # Row 1 (map+sidebar): Auto — fills all height not taken by fixed rows.
+    # Row 2 (colorbar): Fixed 44px thin strip.
+    # Row 3 (time-series): Fixed 200px — keeps plots readable at any window size.
+    colsize!(fig.layout, 1, Auto())
+    colsize!(fig.layout, 2, Fixed(280))  # sidebar fixed width; map fills rest
+    rowsize!(fig.layout, 1, Auto())
+    rowsize!(fig.layout, 2, Fixed(44))
+    rowsize!(fig.layout, 3, Fixed(200))
+    rowgap!(fig.layout, 1, 4)
+    rowgap!(fig.layout, 2, 4)
 
     # Equal-width time-series panels
     for c in 1:n_ts_cols
@@ -617,9 +833,15 @@ function start(mesh;
     @info "MakieVisualiser: window open — $(n) cells, res $(mesh.resolution)" *
           (ring_mode ? "  [ring mode: $(n_rings) rings]" : "")
 
-    return MakieVis(
+    _vis = MakieVis(
         cell_ids, n, mesh.resolution, lon_range, lat_range,
         data_depth, data_sat, data_vol, data_vel,
+        data_vel_u, data_vel_v,
+        quiver_visible,
+        quiver_segs_obs, quiver_tips_obs, quiver_rots_obs, quiver_sizes_obs, quiver_lw_obs,
+        quiver_scale, quiver_stride,
+        cell_lons_fixed, cell_lats_fixed,
+        Threads.Atomic{Bool}(false),   # paused — starts unpaused
         ring_index, data_ring_f64, n_rings, ring_cell_map,
         display_data, colorrange, colormap_obs, cbar_label, selected_var,
         var_labels, var_cmaps, var_units,
@@ -631,6 +853,13 @@ function start(mesh;
         fig,
         Threads.Atomic{Bool}(true),
     )
+    # Wire _sim_paused Ref to vis.paused after construction.
+    # The on(pause_btn.clicks) handler writes to _sim_paused[]; here we add
+    # a second listener that mirrors it to vis.paused so the sim loop sees it.
+    on(pause_btn.clicks) do _
+        _vis.paused[] = _sim_paused[]
+    end
+    return _vis
 end
 
 """
@@ -651,6 +880,8 @@ function push_frame!(vis         :: MakieVis,
                      saturations :: Vector{Float64},
                      volumes     :: Vector{Float64},
                      velocities  :: Vector{Float64},
+                     vel_u       :: Vector{Float64},
+                     vel_v       :: Vector{Float64},
                      t           :: Float64;
                      vol_added   :: Float64 = 0.0,
                      vol_domain  :: Float64 = 0.0,
@@ -671,10 +902,14 @@ function push_frame!(vis         :: MakieVis,
         out
     end
 
-    vis.data_depth[] = _align(depths)
-    vis.data_sat[]   = _align(saturations)
-    vis.data_vol[]   = _align(volumes)
-    vis.data_vel[]   = _align(velocities)
+    vis.data_depth[]  = _align(depths)
+    vis.data_sat[]    = _align(saturations)
+    vis.data_vol[]    = _align(volumes)
+    vis.data_vel[]    = _align(velocities)
+    # Update vel_v silently first (no notification), then notify vel_u once.
+    # This ensures _update_quiver! sees the current vel_v when it fires.
+    vis.data_vel_v.val = _align(vel_v)
+    vis.data_vel_u[]   = _align(vel_u)   # triggers on(data_vel_u) with both current
 
     # Update the displayed variable
     idx      = vis.selected_var[]
@@ -759,6 +994,127 @@ end
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+"""
+    _update_quiver!(segs_obs, tips_obs, rots_obs, sizes_obs, lw_obs, lons, lats, vel_u, vel_v, ax, usr_scale=1.0, stride=1, vel_thresh=QUIVER_MIN_SPEED)
+
+Filter cells to those with non-trivial speed and update the three quiver Observables:
+- `segs_obs`  — interleaved [tail, tip, tail, tip …] Point2f pairs for linesegments!
+- `tips_obs`  — tip Point2f positions for scatter! arrowheads
+- `rots_obs`  — arrowhead rotation angle (radians) for scatter! rotations
+
+Arrow length is scaled so the peak-speed cell draws an arrow ≈2% of the
+domain longitude span.  Cells with speed below `QUIVER_MIN_SPEED` (1 mm/s)
+are omitted to avoid rendering zero-length arrows over dry cells.
+
+The arrowhead rotation follows Makie's scatter convention: 0 rad = pointing
+upward (+y), so we use `atan(u, v)` (note argument order) to get the angle
+from north, matching the arrow direction in lon/lat space.
+"""
+const QUIVER_MIN_SPEED = 1e-5   # m/s — below this, cell is skipped in quiver (~0.01 mm/s)
+
+function _update_quiver!(segs_obs   :: Observable{Vector{Point2f}},
+                          tips_obs   :: Observable{Vector{Point2f}},
+                          rots_obs   :: Observable{Vector{Float32}},
+                          sizes_obs  :: Observable{Vector{Float32}},
+                          lw_obs     :: Observable{Float32},
+                          lons       :: Vector{Float64},
+                          lats       :: Vector{Float64},
+                          vel_u      :: Vector{Float64},
+                          vel_v      :: Vector{Float64},
+                          ax         :: Axis,
+                          usr_scale  :: Float64 = 1.0,
+                          stride     :: Int      = 1,
+                          vel_thresh :: Float64  = QUIVER_MIN_SPEED)
+    n = length(lons)
+
+    peak = maximum(sqrt(vel_u[i]^2 + vel_v[i]^2) for i in 1:n; init=0.0)
+    if peak <= vel_thresh
+        segs_obs[]  = Point2f[]
+        tips_obs[]  = Point2f[]
+        rots_obs[]  = Float32[]
+        sizes_obs[] = Float32[]
+        lw_obs[]    = 1.5f0
+        return
+    end
+
+    # Convert shaft lengths from screen pixels → data (lon/lat) degrees.
+    # We read the axis pixel area and data limits at the moment of the call,
+    # so the conversion is always current (works after zoom/pan too).
+    # deg_per_px_lon and deg_per_px_lat give the data-space size of one pixel.
+    lims      = ax.finallimits[]          # Rect2{Float32} in data coords
+    px_area   = ax.scene.viewport[]       # Rect2 in device-independent units
+    deg_per_px_lon = width(lims)  / width(px_area)
+    deg_per_px_lat = height(lims) / height(px_area)
+    # Use the average so arrows are symmetric regardless of aspect ratio
+    deg_per_px = (deg_per_px_lon + deg_per_px_lat) / 2.0
+
+    # Shaft: peak-speed → SHAFT_PEAK_PX pixels; floor → SHAFT_MIN_PX pixels.
+    # Both scale linearly with usr_scale (slider 0.1 – 5.0).
+    SHAFT_PEAK_PX = 28.0 * usr_scale   # pixels for the fastest cell
+    SHAFT_MIN_PX  =  6.0 * usr_scale   # minimum visible shaft for any wet cell
+
+    shaft_at_peak = SHAFT_PEAK_PX * deg_per_px          # in data degrees
+    shaft_min     = SHAFT_MIN_PX  * deg_per_px
+
+    # Head: screen-pixel size, 4px (dot) → 16px, scaled by usr_scale
+    HEAD_MIN = 3.0f0
+    HEAD_MAX = 16.0f0
+
+    segs  = Point2f[]
+    tips  = Point2f[]
+    rots  = Float32[]
+    sizes = Float32[]
+    peak_lw = 1.5f0   # will be updated to scaled value for peak-speed arrow
+
+    for i in 1:stride:n
+        u = vel_u[i]; v = vel_v[i]
+        speed = sqrt(u^2 + v^2)
+        speed < vel_thresh && continue
+
+        # Convert velocity direction to screen-pixel space so the shaft and
+        # arrowhead always point in exactly the same visual direction.
+        # ux_px/uy_px is the unit vector in screen pixels.
+        ux_px = u / deg_per_px_lon
+        uy_px = v / deg_per_px_lat
+        px_len = sqrt(ux_px^2 + uy_px^2)
+        px_len < 1e-12 && continue
+        ux_px /= px_len;  uy_px /= px_len   # normalise to unit screen vector
+
+        # Shaft length in data coordinates, using the screen-space direction
+        sc     = max(shaft_at_peak * (speed / peak), shaft_min)
+        tail   = Point2f(lons[i], lats[i])
+        tip    = Point2f(lons[i] + Float32(ux_px * sc * deg_per_px_lon),
+                         lats[i] + Float32(uy_px * sc * deg_per_px_lat))
+
+        # Head size scales with speed and usr_scale
+        frac      = Float32(speed / peak)
+        head_size = HEAD_MIN + frac * (HEAD_MAX - HEAD_MIN)
+        head_size = clamp(head_size * Float32(usr_scale), HEAD_MIN,
+                          HEAD_MAX * Float32(usr_scale))
+
+        # Shaft linewidth scales with head size so thick-head arrows have
+        # proportionally thicker shafts (min 0.8px, max ~3px)
+        lw = clamp(head_size * 0.12f0, 0.8f0, 3.0f0)
+
+        # Rotation: atan(screen_x, screen_y) because Makie's :utriangle
+        # points up (+y screen) at rotation=0, so we rotate from +y.
+        # Note ux_px is the screen x-component, uy_px is screen y-component.
+        rot = Float32(atan(ux_px, uy_px))
+
+        push!(segs, tail);  push!(segs, tip)
+        push!(tips, tip)
+        push!(rots, rot)
+        push!(sizes, head_size)
+        peak_lw = max(peak_lw, lw)   # track max linewidth for this frame
+    end
+
+    segs_obs[]  = segs
+    tips_obs[]  = tips
+    rots_obs[]  = rots
+    sizes_obs[] = sizes
+    lw_obs[]    = peak_lw
+end
+
 function _pick_data(idx, d_depth, d_sat, d_vol, d_vel)
     idx == 1 && return d_depth[]
     idx == 2 && return d_sat[]
@@ -839,11 +1195,6 @@ function _build_diag(
         " $s",
         @sprintf(" Mesh cells %10d",   n_cells),
         @sprintf(" Resolution %10d",   res),
-        " $s",
-        " Lon range",
-        @sprintf("  %.4f → %.4f", lon_range[1], lon_range[2]),
-        " Lat range",
-        @sprintf("  %.4f → %.4f", lat_range[1], lat_range[2]),
         " $s",
         @sprintf(" Threads    %10d",  Threads.nthreads()),
         @sprintf(" Updated    %s",    Dates.format(now(), "HH:MM:SS")),

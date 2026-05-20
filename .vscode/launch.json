@@ -237,6 +237,34 @@
         {
             "type": "julia",
             "request": "launch",
+            "name": "[09d] Quiver debug \u2014 1000 mm/hr, auto-toggle at 1hr, pause at 2hr",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/flat_mesh_res14.parquet",
+                "--flow-model",
+                "standard",
+                "--rainpoint",
+                "-43.4043,172.6644,1000.0",
+                "--sim-duration",
+                "14400",
+                "--dt-max",
+                "30",
+                "--output",
+                "test/quiver_debug_out.h5",
+                "--output-interval",
+                "300",
+                "--vis",
+                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[09d] Quiver debug",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
             "name": "[08b] Flat rainpoint \u2014 2 hour run, 50 mm/hr (full domain spread)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
@@ -322,6 +350,23 @@
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[10] Validate flat rainpoint output (--file 1hr|2hr|200|1000)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+                {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",    "16",
+                "--meshout",    "test/carlisle/carlisle_mesh16_standard.parquet",
+                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
             }
         },

@@ -147,9 +147,13 @@ mutable struct FlowState
     water_depth :: Vector{Float64}   # m above local bed (diagnostic)
     volume      :: Vector{Float64}   # m³ stored — primary state variable
     velocity    :: Vector{Float64}   # m/s scalar magnitude (diagnostic)
+    vel_u       :: Vector{Float64}   # m/s eastward  velocity component (lon direction)
+    vel_v       :: Vector{Float64}   # m/s northward velocity component (lat direction)
     elevation   :: Vector{Float64}   # bed elevation above datum (m)
     manning_n   :: Vector{Float64}   # Manning's roughness per cell
     cell_area   :: Vector{Float64}   # plan area (m²)
+    cell_lons   :: Vector{Float64}   # cell centre longitude (degrees, EPSG:4326)
+    cell_lats   :: Vector{Float64}   # cell centre latitude  (degrees, EPSG:4326)
     adjacency   :: Dict{String, Vector{String}}  # cell_id → neighbour ids
     adj_matrix  :: Matrix{Int}       # (max_nb × n_cells) index matrix, 0=none
     edges       :: EdgeList          # all undirected edges, computed once
@@ -715,14 +719,21 @@ function initialise_flow_model(mesh::A5Mesh,
 
     volumes = zeros(Float64, n)
 
+    lons = [c.center_lon for c in mesh.cells]
+    lats = [c.center_lat for c in mesh.cells]
+
     return FlowState(
         ids,
         zeros(Float64, n),
         volumes,
         zeros(Float64, n),
+        zeros(Float64, n),
+        zeros(Float64, n),
         elevations,
         n_vec,
         areas,
+        lons,
+        lats,
         adj,
         adj_matrix,
         edges,
@@ -927,6 +938,97 @@ function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
     end
 end
 
+# ---------------------------------------------------------------------------
+# Velocity computation — called at end of every step_standard! / step_sgs!
+# ---------------------------------------------------------------------------
+
+"""
+    _compute_velocity!(state)
+
+Compute per-cell scalar speed and (u, v) velocity components from the edge
+flux array stored in `state.edges.flux`.
+
+Each undirected edge `e` carries unit discharge `q` (m²/s) with sign
+convention: `q > 0` means flow from `cell_j` to `cell_i`.  The volumetric
+flux is `Q = q * width` (m³/s).
+
+The (u, v) components are accumulated in geographic coordinates:
+  - u  eastward  (positive = flow toward increasing longitude)
+  - v  northward (positive = flow toward increasing latitude)
+
+The unit direction vector from cell_i to cell_j is:
+  dx = lon_j - lon_i,  dy = lat_j - lat_i   (un-normalised geographic delta)
+normalised to a unit vector.  When `Q > 0` (flow j→i), the momentum
+contribution to cell_i is in the −(dx,dy) direction and to cell_j in the
++(dx,dy) direction, and vice versa when `Q < 0`.
+
+After accumulation each cell's speed is:
+  speed = sqrt(u² + v²)
+  u, v are normalised to m/s by dividing by `cell_area * max(depth, h_min)`.
+
+Dry cells (depth < h_min) have velocity zeroed.
+"""
+function _compute_velocity!(state::FlowState)
+    n      = length(state.cell_ids)
+    edges  = state.edges
+    h_min  = 1e-4   # m — depth threshold below which velocity = 0
+
+    # Accumulate flux-weighted vector momentum contributions
+    sum_u  = zeros(Float64, n)
+    sum_v  = zeros(Float64, n)
+
+    for e in 1:edges.n_edges
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+
+        # Unit direction vector from ci to cj (geographic, approx. planar OK
+        # at the scale of individual A5 cells)
+        dlon = state.cell_lons[cj] - state.cell_lons[ci]
+        dlat = state.cell_lats[cj] - state.cell_lats[ci]
+        dist = sqrt(dlon*dlon + dlat*dlat)
+        dist < 1e-12 && continue   # degenerate edge — skip
+        ux = dlon / dist
+        uy = dlat / dist
+
+        # Signed volumetric flux (m³/s): Q > 0 → flow j→i, Q < 0 → flow i→j
+        Q = edges.flux[e] * edges.width[e]
+
+        # Contribution to each cell.
+        # Flow i→j (Q < 0): ci loses in +direction (i→j), cj gains in +direction.
+        # We add |Q| in the direction of actual motion for each cell.
+        # For ci: motion is toward cj when Q < 0, away from cj when Q > 0.
+        # Direction of motion for ci: -sign(Q)*(ux,uy) × |Q|
+        # Direction of motion for cj:  sign(Q)*(ux,uy) × |Q|  (opposite end)
+        absQ = abs(Q)
+        if Q < 0.0
+            # flow i→j: ci moves toward cj (+ux,+uy), cj receives from ci (−ux,−uy)
+            sum_u[ci] += absQ *  ux;  sum_v[ci] += absQ *  uy
+            sum_u[cj] += absQ * -ux;  sum_v[cj] += absQ * -uy
+        else
+            # flow j→i: ci receives from cj (−ux,−uy), cj moves toward ci (+ux,+uy)
+            sum_u[ci] += absQ * -ux;  sum_v[ci] += absQ * -uy
+            sum_u[cj] += absQ *  ux;  sum_v[cj] += absQ *  uy
+        end
+    end
+
+    # Convert accumulated flux to velocity (m/s) per cell
+    for i in 1:n
+        h = state.water_depth[i]
+        if h < h_min
+            state.velocity[i] = 0.0
+            state.vel_u[i]    = 0.0
+            state.vel_v[i]    = 0.0
+            continue
+        end
+        denom = state.cell_area[i] * h
+        u = sum_u[i] / denom
+        v = sum_v[i] / denom
+        state.vel_u[i]    = u
+        state.vel_v[i]    = v
+        state.velocity[i] = sqrt(u*u + v*v)
+    end
+end
+
 # Debug counter for step_standard! — counts calls, logs first 2
 const _step_debug_count = Ref{Int}(0)
 
@@ -995,6 +1097,9 @@ function step_standard!(state::FlowState, dt::Float64)
 
     # ── Phase 2: depth_update — apply limiter and update cell state ───────
     _apply_dV_standard!(state, dV)
+
+    # ── Phase 3: velocity ─────────────────────────────────────────────────
+    _compute_velocity!(state)
 end
 
 """
@@ -1050,6 +1155,9 @@ function step_sgs!(state::FlowState, dt::Float64)
 
     # Step 3: depth_update — apply limiter and update cell state
     _apply_dV_sgs!(state, dV)
+
+    # Step 4: velocity
+    _compute_velocity!(state)
 end
 
 # ---------------------------------------------------------------------------
@@ -1192,6 +1300,15 @@ function run_simulation!(state            :: FlowState,
     end
 
     while t < sim_duration
+        # ── Pause polling: if Makie pause button pressed, sleep until resumed ──
+        # Checks vis.paused (Threads.Atomic{Bool}) between steps — safe with GPU
+        # because CUDA kernels complete synchronously before this point.
+        if vis_mode === :makie && vis !== nothing
+            while vis.paused[]
+                sleep(0.05)
+            end
+        end
+
         # Adaptive dt
         dt = min(_cfl_dt(state, method), dt_max, sim_duration - t)
         dt = max(dt, 0.1)   # floor: 0.1s to prevent infinite loops on dry mesh
@@ -1283,6 +1400,8 @@ function run_simulation!(state            :: FlowState,
                     sat,
                     state.volume,
                     state.velocity,
+                    state.vel_u,
+                    state.vel_v,
                     t;
                     vol_added   = _vis_vol_added,
                     vol_domain  = _vis_vol_domain,
