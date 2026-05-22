@@ -547,10 +547,12 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                     end
                 end
                 isnan(s) ? (elevations !== nothing ?
-                    max(elevations[lo], elevations[hi]) : 0.0) : s
+                    (isnan(elevations[lo]) || isnan(elevations[hi]) ? NaN :
+                    max(elevations[lo], elevations[hi])) : 0.0) : s
             else
                 elevations !== nothing ?
-                    max(elevations[lo], elevations[hi]) : 0.0
+                    (isnan(elevations[lo]) || isnan(elevations[hi]) ? NaN :
+                    max(elevations[lo], elevations[hi])) : 0.0
             end
         end
     end
@@ -610,6 +612,11 @@ function initialise_flow_model(mesh::A5Mesh,
     else
         @warn "No elevation data — all cells at z=0. Use --dem before running."
         zeros(Float64, n)
+    end
+
+    nan_elev_idx = findall(isnan, elevations)
+    if !isempty(nan_elev_idx)
+        @warn "$(length(nan_elev_idx)) cells have NaN elevation and will be hydraulically inert (no flux on any adjacent edge). Indices: $(nan_elev_idx[1:min(10,end)])"
     end
 
     # ── Manning's n ────────────────────────────────────────────────────────
@@ -1081,8 +1088,9 @@ function step_standard!(state::FlowState, dt::Float64)
 
         # Skip degenerate edges (should not occur in a well-formed EdgeList,
         # but guarded here for robustness against direct construction in tests)
-        (isnan(edges.width[e]) || isnan(edges.L[e]) ||
-         isnan(edges.cos_theta[e])) && continue
+        (isnan(edges.width[e])    || isnan(edges.L[e])       ||
+        isnan(edges.cos_theta[e]) || isnan(edges.sill[e])   ||
+        isnan(state.elevation[ci]) || isnan(state.elevation[cj])) && continue
 
         Q = _bates_flux(edges.flux[e], wse_ci, wse_cj, edges.sill[e],
                         edges.width[e], edges.L[e], edges.cos_theta[e],
@@ -1135,6 +1143,7 @@ function step_sgs!(state::FlowState, dt::Float64)
         cj = edges.cell_j[e]
 
         z_sill = edges.sill[e]
+        (isnan(state.elevation[ci]) || isnan(state.elevation[cj])) && continue
         if isnan(z_sill)
             z_sill = min(state.sgs_tables[ci].z_min, state.sgs_tables[cj].z_min)
         end

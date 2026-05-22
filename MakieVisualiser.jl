@@ -386,10 +386,34 @@ function start(mesh;
     n_display = min(n_rings, max_ring_display)
     ring_vol_obs = Observable(zeros(Float64, max(n_display, 1)))
 
-    # --- Figure & layout (1200 × 960) ----------------------------------------
-    fig = Figure(size = (1100, 740), backgroundcolor = BG_DARK)
+    # --- Figure & layout ----------------------------------------
+    fig = Figure(size = (1200, 800), backgroundcolor = BG_DARK)
 
-    # Row 1: map axis
+    # Geographic limits: expand lon half-span by 1/cos(lat) so that one degree
+    # of longitude occupies the same data-unit length as one degree of latitude.
+    # DataAspect() then maps equal data units to equal pixels, giving a
+    # Cartesian-correct display that honours window resize without distortion.
+    # Compute extent from polygon boundaries, not cell centres,
+    # so boundary cells are not clipped at the axis edge.
+    all_boundary_lons = [Float64(v[1]) for c in mesh.cells for v in c.boundary]
+    all_boundary_lats = [Float64(v[2]) for c in mesh.cells for v in c.boundary]
+    bnd_lon_range = extrema(all_boundary_lons)
+    bnd_lat_range = extrema(all_boundary_lats)
+
+    _pad      = 0.04          # small cosmetic padding only — extent already covers boundaries
+    _mean_lat = mean(lats)
+    _cos_lat  = cos(deg2rad(_mean_lat))
+    _lon_c    = (bnd_lon_range[1] + bnd_lon_range[2]) / 2
+    _lat_c    = (bnd_lat_range[1] + bnd_lat_range[2]) / 2
+
+    # Each half-span must (a) contain the data with padding, and (b) maintain
+    # the correct geographic aspect so DataAspect() renders without distortion.
+    # Take the max of both constraints in each axis.
+    _lat_half_data = (bnd_lat_range[2] - bnd_lat_range[1]) / 2 * (1 + _pad)
+    _lon_half_data = (bnd_lon_range[2] - bnd_lon_range[1]) / 2 * (1 + _pad)
+    _lon_half = max(_lon_half_data, _lat_half_data / _cos_lat)
+    _lat_half = max(_lat_half_data, _lon_half_data * _cos_lat)
+
     ax_map = Axis(fig[1, 1];
         xlabel          = "Longitude",
         ylabel          = "Latitude",
@@ -400,10 +424,9 @@ function start(mesh;
         backgroundcolor = BG_MAP,
         xgridcolor      = COL_GRID,
         ygridcolor      = COL_GRID,
-        # Geographic aspect correction: AxisAspect(cos(lat)) corrects lon/lat
-        # distortion at the domain latitude without the whitespace overflow
-        # that DataAspect() causes. Computed from mean cell latitude below.
-        aspect          = AxisAspect(cos(deg2rad(mean(lats)))),
+        aspect          = DataAspect(),
+        limits          = (_lon_c - _lon_half, _lon_c + _lon_half,
+                        _lat_c - _lat_half, _lat_c + _lat_half),
     )
 
     # Base polygon layer — uniform thin stroke, colour-mapped fill.
@@ -781,7 +804,7 @@ function start(mesh;
     # Row 2 (colorbar): Fixed 44px thin strip.
     # Row 3 (time-series): Fixed 200px — keeps plots readable at any window size.
     colsize!(fig.layout, 1, Auto())
-    colsize!(fig.layout, 2, Fixed(280))  # sidebar fixed width; map fills rest
+    colsize!(fig.layout, 2, Fixed(280))
     rowsize!(fig.layout, 1, Auto())
     rowsize!(fig.layout, 2, Fixed(44))
     rowsize!(fig.layout, 3, Fixed(200))

@@ -1106,6 +1106,7 @@ function mesh_for_aoi(geojson_path_or_str::String, resolution::Int;
 
         if output_path !== nothing
             cp(tmp_out, output_path; force=true)
+            endswith(output_path, ".parquet") && _write_prj_sidecar(output_path)
         end
 
         return mesh
@@ -1452,6 +1453,7 @@ print('ok')
         end
 
         cp(tmp_out, path; force=true)
+        endswith(path, ".parquet") && _write_prj_sidecar(path)
         info_parts = String[]
         !isempty(mesh.static_vars) &&
             push!(info_parts, "static: [$(join(keys(mesh.static_vars), ", "))]")
@@ -1472,6 +1474,17 @@ function save_mesh_geojson(mesh::A5Mesh, path::String)
     end
     @info "Saved $(length(mesh.cells)) cells to $path (GeoJSON)"
 end
+
+"""Write a WKT CRS sidecar .prj file alongside a GeoParquet mesh.
+Needed because GDAL < 3.6 silently drops the PROJJSON CRS metadata
+when opening .parquet files in QGIS."""
+function _write_prj_sidecar(parquet_path::String)
+    prj_path = parquet_path[1:findlast('.', parquet_path)-1] * ".prj"
+    wkt = """GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433],AUTHORITY["EPSG","4326"]]"""
+    write(prj_path, wkt)
+    @info "Wrote CRS sidecar: $prj_path"
+end
+
 
 # ---------------------------------------------------------------------------
 # Utilities

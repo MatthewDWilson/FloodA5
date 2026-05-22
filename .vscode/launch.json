@@ -353,20 +353,39 @@
                 "JULIA_DEBUG": "Main"
             }
         },
-                {
+        {
             "type": "julia",
             "request": "launch",
             "name": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
-                "--meshres",    "16",
-                "--meshout",    "test/carlisle/carlisle_mesh16_standard.parquet",
+                "--meshres",    "14",
+                "--meshout",    "test/carlisle/carlisle_mesh14_standard.parquet",
                 "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
                 "--mesh-only"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 02] Run standard simulation (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",           "test/carlisle/carlisle_mesh14_standard.parquet",
+                "--rainfall",           "50",
+                "--output",             "test/carlisle/carlisle_test02.h5",
+                "--output-interval",    "900",
+                "--sim-duration",       "7200",
+                "--flow-model",         "standard",
+                "--vis",                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 02] Run standard simulation (mesh must exist)",
                 "JULIA_DEBUG": "Main"
             }
         },
