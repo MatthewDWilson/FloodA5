@@ -1,6 +1,6 @@
 # FloodA5 — Project State Summary
 
-_Last updated: 2026-05-12 (hydraulics validation session). Paste this into a new conversation to resume._
+_Last updated: 2026-05-22 (Bug 46 — volume limiter mass creation fix). Paste this into a new conversation to resume._
 
 ---
 
@@ -245,6 +245,7 @@ res 14 to ensure full connectivity. The test AOI (~5.5 km²) gives 61 fully-conn
 | 43 | **Julia 1.12 rejects `Main.varname =` in function** — debug code used `Main._step_std_debug_done = true`; Julia 1.12 forbids assigning new globals in `Main` from within a function | Replaced with module-level `const _step_debug_count = Ref{Int}(0)` |
 | 44 | **Disconnected mesh components** — small AOIs at res 14 produce two A5 sublattices that form isolated graph components; 12/29 cells permanently unreachable | Added `_check_mesh_connectivity` (BFS); warns with component sizes. Use AOI ≥5 km² at res 14. |
 | 45 | **Wrong sign convention comment** — `step_standard!` had inline comment "Q>0 means flow from cell_i to cell_j" which is backwards | Corrected: Q<0 when i is higher (flow i→j), Q>0 when j is higher (flow j→i) |
+| 46 | **Volume limiter creates mass — asymmetric flux clipping (Bug 46)** — The old cell-level post-hoc limiter (`dV[i] = -0.5*vol[i]` if dV too negative) clipped the donor's loss without reducing the recipient's gain. On a flat zero-DEM mesh WSE gradients are tiny so fluxes stay within limits and the bug is latent; on a real DEM (e.g. Carlisle, 24.6 m elevation range) step-1 fluxes vastly exceed 50% of cell volume, the limiter triggers heavily, and `domain_vol` grows to ~2× `input_vol` by t=2h. Fix: moved the limiter into the flux accumulation loop as a per-edge **donor** limit — each edge transfer is capped at `volume[donor] / N_SIDES` (= volume/5 for A5 pentagons). The same clipped value is applied to both donor and recipient, so mass is conserved exactly. Removed the post-hoc clip from `_apply_dV_standard!` and `_apply_dV_sgs!`; the `max(0,…)` floor is retained as a last-resort guard only. Added constant `N_SIDES = 5`. |
 
 ---
 
@@ -282,6 +283,22 @@ insufficient depth at outer ring cells rather than any hydraulic bug.
 - **Analytical validation** — compare against Thacker planar surface (exact solution for
   oscillating water surface in parabolic bowl). See Validation Strategy section below.
 - **LINZ DEM ingestion** — Kaiapoi domain at res 14 with 1m LiDAR.
+- **Bug 46 follow-up: consider two-pass proportional limiter as a user option** —
+  The current per-edge donor limit (volume/N_SIDES per edge) is conservative and exact
+  for mass balance, but the choice of divisor N_SIDES=5 is somewhat arbitrary: it assumes
+  all edges of a cell are simultaneously at maximum outflow, which is physically unlikely
+  but possible in pathological cases (e.g. a cell surrounded by dry cells on all sides
+  suddenly receiving a large flux).
+  A more physically correct alternative is a **two-pass proportional limiter**: in pass 1,
+  accumulate raw dV per cell; in pass 2, if any cell's net dV would drain more than 50%
+  of its volume, scale all outgoing edge fluxes from that cell down proportionally (so the
+  most-demanded edges still get priority and the total drain is capped at exactly 50%).
+  The pair-wise correction (reducing the recipient's gain by the same amount) must then
+  be applied to maintain mass conservation.
+  This would be exposed as `--limiter-mode donor_per_edge|proportional` (default:
+  `donor_per_edge` for speed). Performance testing on large meshes is needed before
+  making `proportional` the default, as the two-pass requires an additional cell-indexed
+  loop and conditional scatter-gather over the edge list.
 
 ### Visualisation (deferred)
 - CesiumJS flash on frame updates

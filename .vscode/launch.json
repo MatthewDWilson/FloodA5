@@ -356,7 +356,7 @@
         {
             "type": "julia",
             "request": "launch",
-            "name": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+            "name": "[Carlise 01] Standard res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
@@ -366,14 +366,14 @@
                 "--mesh-only"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[Carlise 01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
+                "DEBUG_PROFILE_NAME": "[Carlise 01] Standard res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
             }
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[Carlise 02] Run standard simulation (mesh must exist)",
+            "name": "[Carlise 02] Run standard simulation res 14 - uniform rainfall (mesh must exist)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",           "test/carlisle/carlisle_mesh14_standard.parquet",
@@ -385,7 +385,61 @@
                 "--vis",                "makie"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[Carlise 02] Run standard simulation (mesh must exist)",
+                "DEBUG_PROFILE_NAME": "[Carlise 02] Run standard simulation res 14 - uniform rainfall (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 03] Standard res 17 A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",    "17",
+                "--meshout",    "test/carlisle/carlisle_mesh17_standard.parquet",
+                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 03] Standard res 17 A5 mesh (geometry + neighbours + elevation + cell area)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 04] Run standard simulation res 17 - single cell rain injection (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",           "test/carlisle/carlisle_mesh17_standard.parquet",
+                "--rainpoint",          "54.908,-2.896,1000.0",
+                "--output",             "test/carlisle/carlisle_test02.h5",
+                "--output-interval",    "900",
+                "--sim-duration",       "72000",
+                "--flow-model",         "standard",
+                "--vis",                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 04] Run standard simulation res 17 - single cell rain injection (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            }
+        },
+                {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 05] SGS res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",    "14",
+                "--meshout",    "test/carlisle/carlisle_mesh14_sgs.parquet",
+                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--mesh-only",
+                "--flow-model", "sgs"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 05] SGS res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
             }
         },

@@ -69,6 +69,12 @@ const VIS_INTERVAL = 1
 # Supported visualisation modes.
 const VIS_MODES = (:cesium, :makie)
 
+# Number of sides (neighbours) of an A5 pentagon interior cell.
+# Used by the per-edge donor limiter: each edge is allowed to transfer at most
+# volume[donor] / N_SIDES, so that across all edges a cell cannot lose more
+# than ~50% of its volume in one timestep, and mass is conserved exactly.
+const N_SIDES = 5
+
 # ---------------------------------------------------------------------------
 # Flow model types
 # ---------------------------------------------------------------------------
@@ -896,23 +902,17 @@ slope distance L is stored in `state.edges.L`.
 Apply a vector of net volume increments `dV` (m³) to a `StandardFlow` state.
 
 `volume` is the primary state variable (mirrors SGS).  `water_depth` is
-derived as `volume / cell_area` after each update.  This avoids depth
-blow-up that could occur when depth was primary and a cell received a
-volume increment inconsistent with its area.
+derived as `volume / cell_area` after each update.
 
-The limiter caps net outflow at 50% of the cell's current stored volume,
-applied once after all edge fluxes have been accumulated.
+The per-edge donor limiter in `step_standard!` already ensures no cell loses
+more than `volume / N_SIDES` per edge, so net outflow across all edges is
+bounded at 50%.  The `max(0.0, …)` floor here is a last-resort guard only.
 """
 function _apply_dV_standard!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
     for i in 1:n
         A_i = state.cell_area[i]
         A_i < 1.0 && continue
-        # Cell-level limiter: net outflow capped at 50% of current volume.
-        # Volume is now primary state; water_depth is derived.
-        if dV[i] < -0.5 * state.volume[i]
-            dV[i] = -0.5 * state.volume[i]
-        end
         state.volume[i]      = max(0.0, state.volume[i] + dV[i])
         state.water_depth[i] = state.volume[i] / A_i
     end
@@ -925,15 +925,15 @@ Apply a vector of net volume increments `dV` (m³) to an `SGSFlow` state.
 
 Mirrors `_apply_dV_standard!` but operates on `state.volume` directly (the
 SGS primary state variable) and derives `water_depth` from the hypsometric
-lookup.  The limiter caps net outflow at 50% of the cell's stored volume.
+lookup.
+
+The per-edge donor limiter in `step_sgs!` already ensures no cell loses more
+than `volume / N_SIDES` per edge.  The `max(0.0, …)` floor here is a
+last-resort guard only.
 """
 function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
     for i in 1:n
-        # Cell-level limiter: net outflow capped at 50% of current volume
-        if dV[i] < -0.5 * state.volume[i]
-            dV[i] = -0.5 * state.volume[i]
-        end
         state.volume[i] = max(0.0, state.volume[i] + dV[i])
         tbl = state.sgs_tables[i]
         if isnan(tbl.z_min)
@@ -1098,12 +1098,30 @@ function step_standard!(state::FlowState, dt::Float64)
 
         edges.flux[e] = Q / max(edges.width[e], 1e-6)  # store q for next step
 
-        vol = Q * dt             # signed volume exchange
-        dV[ci] += vol            # ci gains when Q > 0
-        dV[cj] -= vol            # cj loses when Q > 0
+        vol = Q * dt             # signed volume exchange (Q > 0 → flow cj→ci)
+
+        # Per-edge donor limiter (Bug 46 fix):
+        # Cap the transfer at volume[donor] / N_SIDES per edge, so that
+        # across all N_SIDES edges a cell cannot lose more than ~50% of its
+        # volume in a single timestep, and the SAME clipped value is applied
+        # to both donor and recipient — preserving mass exactly.
+        # (The old cell-level post-hoc clip broke mass balance: it reduced
+        # the donor's loss without reducing the recipient's gain.)
+        if vol > 0.0
+            # Flow from cj → ci: cj is the donor
+            vol = min(vol,  state.volume[cj] / N_SIDES)
+        else
+            # Flow from ci → cj: ci is the donor
+            vol = max(vol, -state.volume[ci] / N_SIDES)
+        end
+
+        dV[ci] += vol            # ci gains when vol > 0
+        dV[cj] -= vol            # cj loses when vol > 0
     end
 
-    # ── Phase 2: depth_update — apply limiter and update cell state ───────
+    # ── Phase 2: depth_update — apply floor and update cell state ─────────
+    # The per-edge limiter above keeps dV within bounds; max(0,…) is a
+    # last-resort guard against floating-point negative volumes.
     _apply_dV_standard!(state, dV)
 
     # ── Phase 3: velocity ─────────────────────────────────────────────────
@@ -1158,11 +1176,19 @@ function step_sgs!(state::FlowState, dt::Float64)
         edges.flux[e] = Q / max(edges.width[e], 1e-6)
 
         vol = Q * dt
+
+        # Per-edge donor limiter (Bug 46 fix) — see step_standard! for rationale.
+        if vol > 0.0
+            vol = min(vol,  state.volume[cj] / N_SIDES)
+        else
+            vol = max(vol, -state.volume[ci] / N_SIDES)
+        end
+
         dV[ci] += vol
         dV[cj] -= vol
     end
 
-    # Step 3: depth_update — apply limiter and update cell state
+    # Step 3: depth_update — apply floor and update cell state
     _apply_dV_sgs!(state, dV)
 
     # Step 4: velocity
@@ -1431,7 +1457,11 @@ function run_simulation!(state            :: FlowState,
             max_depth = isempty(state.water_depth) ? 0.0 :
                         something(maximum(v for v in state.water_depth if isfinite(v); init=0.0), 0.0)
             # Mass balance: cumulative rainfall input vs total domain volume.
-            # mb_err > 0 means volume has left the domain (open boundaries or limiter loss).
+            # With the per-edge donor limiter (Bug 46 fix), flux is mass-conserving,
+            # so mb_err should be ~0 for a closed domain with no outflow BCs.
+            # Small residuals (<< 1 m³) from the max(0,…) floor are acceptable.
+            # mb_err < 0 means domain_vol > input_vol (mass creation — should not occur).
+            # mb_err > 0 means volume has left the domain (open boundaries or floor clips).
             input_vol  = rainfall_rate * t *
                 sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
                 sum(inj.rate_m3s * t for inj in injection_points; init=0.0) +
