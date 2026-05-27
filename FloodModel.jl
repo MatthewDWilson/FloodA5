@@ -910,7 +910,7 @@ bounded at 50%.  The `max(0.0, …)` floor here is a last-resort guard only.
 """
 function _apply_dV_standard!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
-    for i in 1:n
+    Threads.@threads for i in 1:n
         A_i = state.cell_area[i]
         A_i < 1.0 && continue
         state.volume[i]      = max(0.0, state.volume[i] + dV[i])
@@ -933,7 +933,7 @@ last-resort guard only.
 """
 function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
-    for i in 1:n
+    Threads.@threads for i in 1:n
         state.volume[i] = max(0.0, state.volume[i] + dV[i])
         tbl = state.sgs_tables[i]
         if isnan(tbl.z_min)
@@ -980,46 +980,34 @@ function _compute_velocity!(state::FlowState)
     edges  = state.edges
     h_min  = 1e-4   # m — depth threshold below which velocity = 0
 
-    # Accumulate flux-weighted vector momentum contributions
+    # Flux-weighted momentum scatter (serial — ci/cj not unique across edges)
     sum_u  = zeros(Float64, n)
     sum_v  = zeros(Float64, n)
 
-    for e in 1:edges.n_edges
+    @inbounds for e in 1:edges.n_edges
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
-        # Unit direction vector from ci to cj (geographic, approx. planar OK
-        # at the scale of individual A5 cells)
         dlon = state.cell_lons[cj] - state.cell_lons[ci]
         dlat = state.cell_lats[cj] - state.cell_lats[ci]
         dist = sqrt(dlon*dlon + dlat*dlat)
-        dist < 1e-12 && continue   # degenerate edge — skip
+        dist < 1e-12 && continue
         ux = dlon / dist
         uy = dlat / dist
 
-        # Signed volumetric flux (m³/s): Q > 0 → flow j→i, Q < 0 → flow i→j
-        Q = edges.flux[e] * edges.width[e]
-
-        # Contribution to each cell.
-        # Flow i→j (Q < 0): ci loses in +direction (i→j), cj gains in +direction.
-        # We add |Q| in the direction of actual motion for each cell.
-        # For ci: motion is toward cj when Q < 0, away from cj when Q > 0.
-        # Direction of motion for ci: -sign(Q)*(ux,uy) × |Q|
-        # Direction of motion for cj:  sign(Q)*(ux,uy) × |Q|  (opposite end)
+        Q    = edges.flux[e] * edges.width[e]
         absQ = abs(Q)
         if Q < 0.0
-            # flow i→j: ci moves toward cj (+ux,+uy), cj receives from ci (−ux,−uy)
             sum_u[ci] += absQ *  ux;  sum_v[ci] += absQ *  uy
             sum_u[cj] += absQ * -ux;  sum_v[cj] += absQ * -uy
         else
-            # flow j→i: ci receives from cj (−ux,−uy), cj moves toward ci (+ux,+uy)
             sum_u[ci] += absQ * -ux;  sum_v[ci] += absQ * -uy
             sum_u[cj] += absQ *  ux;  sum_v[cj] += absQ *  uy
         end
     end
 
-    # Convert accumulated flux to velocity (m/s) per cell
-    for i in 1:n
+    # Per-cell normalisation (parallel — each i is independent)
+    Threads.@threads for i in 1:n
         h = state.water_depth[i]
         if h < h_min
             state.velocity[i] = 0.0
@@ -1039,21 +1027,48 @@ end
 # Debug counter for step_standard! — counts calls, logs first 2
 const _step_debug_count = Ref{Int}(0)
 
+"""
+    step_standard!(state, dt)
+
+Advance the standard diffusive-wave model by one timestep `dt`.
+
+## Parallel two-phase design
+
+The combined read-compute-scatter loop is split into three phases so that
+the expensive flux computation is embarrassingly parallel while the
+write-hazard (multiple edges sharing a cell) is confined to a cheap serial
+scatter pass.
+
+**Phase A — edge flux computation** (`Threads.@threads`, one task per edge):
+  - Reads `state.volume`, `elevation`, `cell_area`, `manning_n` — all
+    read-only during this phase; no writes to cell state.
+  - Writes only to `edge_vol[e]` and `edges.flux[e]`, each indexed by `e`
+    (unique per thread — no data race).
+  - `_bates_flux` is a pure function with no side effects.
+
+**Phase B — dV scatter with donor limiter** (serial):
+  - Applies the Bug-46 per-edge donor limit using the start-of-step volume
+    (still unmodified) then accumulates into `dV[ci]` / `dV[cj]`.
+  - Must be serial: `ci` and `cj` are not unique across edges, so
+    concurrent `+=` would race.  Cost is O(n_edges) additions — negligible.
+
+**Phase C — cell volume update** (`Threads.@threads`, one task per cell):
+  - Each thread works on a unique index `i` — no data race.
+
+## GPU roadmap
+When `SOLVER_BACKEND[] == :gpu` (Phase 5):
+  - Phase A → CUDA kernel, one thread per edge.
+  - Phase B → `CUDA.@atomic` scatter-add kernel, or prefix-sum reduce.
+  - Phase C → CUDA kernel, one thread per cell.
+  The interface between phases (edge_vol, dV vectors) is the same for
+  both CPU and GPU paths; only the dispatch changes.
+"""
 function step_standard!(state::FlowState, dt::Float64)
-    n  = length(state.cell_ids)
-    dV = zeros(Float64, n)   # net volume increment per cell this step (m³)
+    n     = length(state.cell_ids)
     edges = state.edges
+    ne    = edges.n_edges
 
-    # ── Phase 1: qroute — compute flux on every edge exactly once ─────────
-    # Each edge is indexed by (cell_i, cell_j) with cell_i < cell_j.
-    # Sign convention: Q < 0 means flow from cell_i to cell_j (i is higher).
-    #                  Q > 0 means flow from cell_j to cell_i (j is higher).
-    # When WSE_i > WSE_j: dWSE > 0 → q_new < 0 → Q < 0.
-    #   dV[ci] += Q*dt < 0  →  ci loses volume  ✓ (ci is the higher cell)
-    #   dV[cj] -= Q*dt > 0  →  cj gains volume  ✓
-    # WSE arguments are passed as (wse_ci, wse_cj) matching (cell_i, cell_j).
-
-    # ── Debug: check for NaN / depth state before flux loop (first 2 calls) ──
+    # ── Debug: log NaN/depth state before flux loop (first 2 calls) ───────
     if _step_debug_count[] < 2
         _step_debug_count[] += 1
         k = _step_debug_count[]
@@ -1065,12 +1080,12 @@ function step_standard!(state::FlowState, dt::Float64)
         max_depth   = maximum(state.water_depth; init=0.0)
         @info "step_standard! call $k: NaN_vol=$n_nan_vol  NaN_elev=$n_nan_elev" *
               " NaN_area=$n_nan_area  zero_area=$n_zero_area" *
-              " vol_sum=$(round(vol_sum,sigdigits=4))  max_water_depth=$(round(max_depth,sigdigits=4))"
+              " vol_sum=$(round(vol_sum,sigdigits=4))" *
+              "  max_water_depth=$(round(max_depth,sigdigits=4))"
         if n_nan_vol > 0
             bad = findall(isnan, state.volume)
             @warn "  NaN volumes at indices: $(bad[1:min(5,end)])"
         end
-        # Log WSE for first 3 cells and source cell
         for i in [1, 2, 3, argmax(state.volume)]
             wse = state.elevation[i] + state.volume[i] / max(state.cell_area[i], 1.0)
             @info "  cell[$i]: vol=$(round(state.volume[i],sigdigits=4))" *
@@ -1079,72 +1094,88 @@ function step_standard!(state::FlowState, dt::Float64)
         end
     end
 
-    for e in 1:edges.n_edges
+    # ── Phase A: parallel edge flux computation ────────────────────────────
+    # Each iteration reads cell state (read-only) and writes to unique edge
+    # slots edge_vol[e] and edges.flux[e].  No two threads share a write
+    # target — this is provably race-free.
+    edge_vol = Vector{Float64}(undef, ne)
+
+    Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
+        # Degenerate edge guard (NaN in geometry or elevation).
+        if (isnan(edges.width[e])      || isnan(edges.L[e])          ||
+            isnan(edges.cos_theta[e])  || isnan(edges.sill[e])       ||
+            isnan(state.elevation[ci]) || isnan(state.elevation[cj]))
+            edge_vol[e] = 0.0   # mark no-flux; edges.flux[e] left unchanged
+            continue
+        end
+
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
-
-        # Skip degenerate edges (should not occur in a well-formed EdgeList,
-        # but guarded here for robustness against direct construction in tests)
-        (isnan(edges.width[e])    || isnan(edges.L[e])       ||
-        isnan(edges.cos_theta[e]) || isnan(edges.sill[e])   ||
-        isnan(state.elevation[ci]) || isnan(state.elevation[cj])) && continue
 
         Q = _bates_flux(edges.flux[e], wse_ci, wse_cj, edges.sill[e],
                         edges.width[e], edges.L[e], edges.cos_theta[e],
                         min(state.manning_n[ci], state.manning_n[cj]), dt)
 
-        edges.flux[e] = Q / max(edges.width[e], 1e-6)  # store q for next step
-
-        vol = Q * dt             # signed volume exchange (Q > 0 → flow cj→ci)
-
-        # Per-edge donor limiter (Bug 46 fix):
-        # Cap the transfer at volume[donor] / N_SIDES per edge, so that
-        # across all N_SIDES edges a cell cannot lose more than ~50% of its
-        # volume in a single timestep, and the SAME clipped value is applied
-        # to both donor and recipient — preserving mass exactly.
-        # (The old cell-level post-hoc clip broke mass balance: it reduced
-        # the donor's loss without reducing the recipient's gain.)
-        if vol > 0.0
-            # Flow from cj → ci: cj is the donor
-            vol = min(vol,  state.volume[cj] / N_SIDES)
-        else
-            # Flow from ci → cj: ci is the donor
-            vol = max(vol, -state.volume[ci] / N_SIDES)
-        end
-
-        dV[ci] += vol            # ci gains when vol > 0
-        dV[cj] -= vol            # cj loses when vol > 0
+        edges.flux[e] = Q / max(edges.width[e], 1e-6)   # q (m²/s) for next step
+        edge_vol[e]   = Q * dt                           # signed volume (m³)
     end
 
-    # ── Phase 2: depth_update — apply floor and update cell state ─────────
-    # The per-edge limiter above keeps dV within bounds; max(0,…) is a
-    # last-resort guard against floating-point negative volumes.
+    # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
+    # state.volume[] is still the start-of-step snapshot here (Phase A did
+    # not modify it), so the donor-limit comparison is consistent.
+    dV = zeros(Float64, n)
+    @inbounds for e in 1:ne
+        ev = edge_vol[e]
+        iszero(ev) && continue   # NaN-guarded edges written 0.0 in Phase A
+
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+
+        # Per-edge donor limiter (Bug 46): cap at volume[donor]/N_SIDES so
+        # the same clipped value goes to both sides — mass-exact.
+        if ev > 0.0
+            ev = min(ev,  state.volume[cj] / N_SIDES)   # cj is donor
+        else
+            ev = max(ev, -state.volume[ci] / N_SIDES)   # ci is donor
+        end
+
+        dV[ci] += ev   # ci gains when ev > 0
+        dV[cj] -= ev   # cj loses when ev > 0
+    end
+
+    # ── Phase C: parallel cell volume update ──────────────────────────────
     _apply_dV_standard!(state, dV)
 
-    # ── Phase 3: velocity ─────────────────────────────────────────────────
+    # ── Phase D: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
 end
 
 """
     step_sgs!(state, dt)
 
-Advance the SGS diffusive-wave model by one timestep `dt` using the
-Bates et al. (2010) inertial formulation.
+Advance the SGS diffusive-wave model by one timestep `dt`.
 
-WSE for each cell is derived from its stored volume via the hypsometric
-curve (inverse lookup of vol_curve).  Wetted area is obtained from the
-area_curve.  The edge sill is the minimum DEM elevation along the shared
-boundary, stored in `state.edges.sill`.  The slope distance L is the
-centre-to-centre haversine distance stored in `state.edges.L`.
+Uses the same parallel A/B/C/D phase structure as `step_standard!` — see
+that function's docstring for the thread-safety rationale.  The only
+differences are:
+  - WSE is derived from the hypsometric lookup (not elevation + depth).
+  - The edge sill is the pre-computed SGS minimum along the shared boundary.
+  - Phase A reads the pre-computed `wse[]` array (computed serially in
+    the SGS-specific Step 0) rather than computing WSE inline.
 """
 function step_sgs!(state::FlowState, dt::Float64)
-    n  = length(state.cell_ids)
-    dV = zeros(Float64, n)
+    n     = length(state.cell_ids)
+    edges = state.edges
+    ne    = edges.n_edges
 
-    # Step 1: WSE and wetted area for all cells from hypsometric lookup
+    # ── Step 0: WSE and wetted area from hypsometric lookup (serial) ──────
+    # Must be serial: wse_from_volume / wetted_area_from_wse each read a
+    # cell's SGS table — no shared writes, but the lookup is not @inline
+    # and benefits from sequential cache access patterns.
+    # Can be made @threads if profiling shows it is a bottleneck.
     wse   = Vector{Float64}(undef, n)
     A_wet = Vector{Float64}(undef, n)
     for i in 1:n
@@ -1153,45 +1184,60 @@ function step_sgs!(state::FlowState, dt::Float64)
         A_wet[i] = wetted_area_from_wse(tbl, wse[i])
     end
 
-    # Step 2: qroute — compute flux on every edge exactly once.
-    # Same single-pass edge-list pattern as step_standard!.
-    edges = state.edges
-    for e in 1:edges.n_edges
+    # ── Phase A: parallel edge flux computation ────────────────────────────
+    # Reads: wse[] (just computed, read-only), state.elevation, manning_n,
+    #        edges geometry.  Writes only to edge_vol[e] and edges.flux[e]
+    #        (unique per thread — no data race).
+    edge_vol = Vector{Float64}(undef, ne)
+
+    Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
+        (isnan(state.elevation[ci]) || isnan(state.elevation[cj])) &&
+            (edge_vol[e] = 0.0; continue)
+
         z_sill = edges.sill[e]
-        (isnan(state.elevation[ci]) || isnan(state.elevation[cj])) && continue
         if isnan(z_sill)
             z_sill = min(state.sgs_tables[ci].z_min, state.sgs_tables[cj].z_min)
         end
 
-        (isnan(edges.width[e]) || isnan(edges.L[e]) ||
-         isnan(edges.cos_theta[e])) && continue
+        if (isnan(edges.width[e]) || isnan(edges.L[e]) || isnan(edges.cos_theta[e]))
+            edge_vol[e] = 0.0
+            continue
+        end
 
         Q = _bates_flux(edges.flux[e], wse[ci], wse[cj], z_sill,
                         edges.width[e], edges.L[e], edges.cos_theta[e],
                         min(state.manning_n[ci], state.manning_n[cj]), dt)
 
         edges.flux[e] = Q / max(edges.width[e], 1e-6)
-
-        vol = Q * dt
-
-        # Per-edge donor limiter (Bug 46 fix) — see step_standard! for rationale.
-        if vol > 0.0
-            vol = min(vol,  state.volume[cj] / N_SIDES)
-        else
-            vol = max(vol, -state.volume[ci] / N_SIDES)
-        end
-
-        dV[ci] += vol
-        dV[cj] -= vol
+        edge_vol[e]   = Q * dt
     end
 
-    # Step 3: depth_update — apply floor and update cell state
+    # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
+    dV = zeros(Float64, n)
+    @inbounds for e in 1:ne
+        ev = edge_vol[e]
+        iszero(ev) && continue
+
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+
+        if ev > 0.0
+            ev = min(ev,  state.volume[cj] / N_SIDES)
+        else
+            ev = max(ev, -state.volume[ci] / N_SIDES)
+        end
+
+        dV[ci] += ev
+        dV[cj] -= ev
+    end
+
+    # ── Phase C: parallel cell volume update ──────────────────────────────
     _apply_dV_sgs!(state, dV)
 
-    # Step 4: velocity
+    # ── Phase D: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
 end
 
@@ -2111,8 +2157,15 @@ let
     # All top-level definitions (main, run_flood_model, etc.) are defined in
     # a prior world relative to this let-block; invokelatest ensures we always
     # call the most recent definition, which also suppresses the world-age warnings.
-    # 1. First, check if we should apply REPL/Interactive defaults
-    if isinteractive() && isempty(ARGS)
+
+    # 0. Skip execution entirely when included by an external script (e.g.
+    #    benchmark_sim.jl).  The caller sets this env var before include() and
+    #    clears it immediately after; we just need to not call main() in that case.
+    if get(ENV, "FLOODMODEL_INCLUDE_ONLY", "") == "1"
+        # nothing — symbols are now defined; caller drives execution
+
+    # 1. REPL / interactive session with no args: apply default test set
+    elseif isinteractive() && isempty(ARGS)
         @info "REPL detected. Applying default test set."
         REPL_ARGS = [
             "--meshload", "test/kaiapoi_mesh16_sgs.parquet", 
@@ -2124,10 +2177,9 @@ let
         ]
         Base.invokelatest(main, REPL_ARGS)
 
-    # 2. Otherwise, check for Debugger or Shell execution
+    # 2. Shell or VS Code debugger: run with the supplied ARGS
     else
-        # We check for the Debugger or the Shell separately to be safe
-        is_shell = abspath(PROGRAM_FILE) == @__FILE__
+        is_shell    = abspath(PROGRAM_FILE) == @__FILE__
         is_debugger = occursin("run_debugger.jl", PROGRAM_FILE)
         if is_shell || is_debugger
             Base.invokelatest(main, ARGS)

@@ -12,7 +12,8 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[00] Write flat test AOI GeoJSON (run once before [07])",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -33,7 +34,8 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[01] Standard A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -56,7 +58,8 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[02] SGS-ready mesh (adds hypsometric tables)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -82,7 +85,8 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[03] Run standard simulation (mesh must exist)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -108,12 +112,13 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[04] Run SGS simulation (mesh must have been built with --flow-model sgs)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[05] Standard A5 mesh \u2014 no DEM (geometry + neighbours + cell area only)",
+            "name": "[05] Standard A5 mesh — no DEM (geometry + neighbours + cell area only)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshgen",
@@ -125,9 +130,10 @@
                 "--mesh-only"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[05] Standard A5 mesh \u2014 no DEM (geometry + neighbours + cell area only)",
+                "DEBUG_PROFILE_NAME": "[05] Standard A5 mesh — no DEM (geometry + neighbours + cell area only)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -157,12 +163,13 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[06] Standard A5 mesh followed by standard flow model",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[07] Flat mesh gen \u2014 no DEM, standard, res 14 (rainpoint test prerequisite)",
+            "name": "[07] Flat mesh gen — no DEM, standard, res 14 (rainpoint test prerequisite)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshgen",
@@ -176,14 +183,15 @@
                 "--mesh-only"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[07] Flat mesh gen \u2014 no DEM, standard, res 14 (rainpoint test prerequisite)",
+                "DEBUG_PROFILE_NAME": "[07] Flat mesh gen — no DEM, standard, res 14 (rainpoint test prerequisite)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[08] Flat rainpoint \u2014 single cell source, standard flow, no vis",
+            "name": "[08] Flat rainpoint — single cell source, standard flow, no vis",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -202,14 +210,15 @@
                 "300"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[08] Flat rainpoint \u2014 single cell source, standard flow, no vis",
+                "DEBUG_PROFILE_NAME": "[08] Flat rainpoint — single cell source, standard flow, no vis",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[09] Flat rainpoint \u2014 single cell source, standard flow, Makie viewer",
+            "name": "[09] Flat rainpoint — single cell source, standard flow, Makie viewer",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -230,14 +239,15 @@
                 "makie"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[09] Flat rainpoint \u2014 single cell source, standard flow, Makie viewer",
+                "DEBUG_PROFILE_NAME": "[09] Flat rainpoint — single cell source, standard flow, Makie viewer",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[09d] Quiver debug \u2014 1000 mm/hr, auto-toggle at 1hr, pause at 2hr",
+            "name": "[09d] Quiver debug — 1000 mm/hr, auto-toggle at 1hr, pause at 2hr",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -260,12 +270,13 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[09d] Quiver debug",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[08b] Flat rainpoint \u2014 2 hour run, 50 mm/hr (full domain spread)",
+            "name": "[08b] Flat rainpoint — 2 hour run, 50 mm/hr (full domain spread)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -284,14 +295,15 @@
                 "300"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[08b] Flat rainpoint \u2014 2 hour run, 50 mm/hr (full domain spread)",
+                "DEBUG_PROFILE_NAME": "[08b] Flat rainpoint — 2 hour run, 50 mm/hr (full domain spread)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[08c] Flat rainpoint \u2014 1 hour run, 200 mm/hr (accelerated spread test)",
+            "name": "[08c] Flat rainpoint — 1 hour run, 200 mm/hr (accelerated spread test)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -310,14 +322,15 @@
                 "300"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[08c] Flat rainpoint \u2014 1 hour run, 200 mm/hr (accelerated spread test)",
+                "DEBUG_PROFILE_NAME": "[08c] Flat rainpoint — 1 hour run, 200 mm/hr (accelerated spread test)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
             "request": "launch",
-            "name": "[08d] Flat rainpoint \u2014 1 hour, 1000 mm/hr (full-domain stress test)",
+            "name": "[08d] Flat rainpoint — 1 hour, 1000 mm/hr (full-domain stress test)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
                 "--meshload",
@@ -336,9 +349,10 @@
                 "300"
             ],
             "env": {
-                "DEBUG_PROFILE_NAME": "[08d] Flat rainpoint \u2014 1 hour, 1000 mm/hr (full-domain stress test)",
+                "DEBUG_PROFILE_NAME": "[08d] Flat rainpoint — 1 hour, 1000 mm/hr (full-domain stress test)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -351,7 +365,8 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "[10] Validate flat rainpoint output (--file 1hr|2hr|200|1000)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -359,16 +374,21 @@
             "name": "[Carlise 01] Standard res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
-                "--meshres",    "14",
-                "--meshout",    "test/carlisle/carlisle_mesh14_standard.parquet",
-                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--meshgen",
+                "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",
+                "14",
+                "--meshout",
+                "test/carlisle/carlisle_mesh14_standard.parquet",
+                "--dem",
+                "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
                 "--mesh-only"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 01] Standard res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -376,18 +396,26 @@
             "name": "[Carlise 02] Run standard simulation res 14 - uniform rainfall (mesh must exist)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshload",           "test/carlisle/carlisle_mesh14_standard.parquet",
-                "--rainfall",           "50",
-                "--output",             "test/carlisle/carlisle_test02.h5",
-                "--output-interval",    "900",
-                "--sim-duration",       "7200",
-                "--flow-model",         "standard",
-                "--vis",                "makie"
+                "--meshload",
+                "test/carlisle/carlisle_mesh14_standard.parquet",
+                "--rainfall",
+                "50",
+                "--output",
+                "test/carlisle/carlisle_test02.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "7200",
+                "--flow-model",
+                "standard",
+                "--vis",
+                "makie"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 02] Run standard simulation res 14 - uniform rainfall (mesh must exist)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -395,16 +423,21 @@
             "name": "[Carlise 03] Standard res 17 A5 mesh (geometry + neighbours + elevation + cell area)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
-                "--meshres",    "17",
-                "--meshout",    "test/carlisle/carlisle_mesh17_standard.parquet",
-                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--meshgen",
+                "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",
+                "17",
+                "--meshout",
+                "test/carlisle/carlisle_mesh17_standard.parquet",
+                "--dem",
+                "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
                 "--mesh-only"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 03] Standard res 17 A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
         {
             "type": "julia",
@@ -412,35 +445,87 @@
             "name": "[Carlise 04] Run standard simulation res 17 - single cell rain injection (mesh must exist)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshload",           "test/carlisle/carlisle_mesh17_standard.parquet",
-                "--rainpoint",          "54.908,-2.896,1000.0",
-                "--output",             "test/carlisle/carlisle_test02.h5",
-                "--output-interval",    "900",
-                "--sim-duration",       "72000",
-                "--flow-model",         "standard",
-                "--vis",                "makie"
+                "--meshload",
+                "test/carlisle/carlisle_mesh17_standard.parquet",
+                "--rainpoint",
+                "54.908,-2.896,1000.0",
+                "--output",
+                "test/carlisle/carlisle_test02.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "72000",
+                "--flow-model",
+                "standard",
+                "--vis",
+                "makie"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 04] Run standard simulation res 17 - single cell rain injection (mesh must exist)",
                 "JULIA_DEBUG": "Main"
-            }
+            },
+            "juliaNumThreads": "auto"
         },
-                {
+        {
             "type": "julia",
             "request": "launch",
             "name": "[Carlise 05] SGS res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
             "program": "${workspaceFolder}/FloodModel.jl",
             "args": [
-                "--meshgen",    "test/carlisle/Carlisle_domain.geojson",
-                "--meshres",    "14",
-                "--meshout",    "test/carlisle/carlisle_mesh14_sgs.parquet",
-                "--dem",        "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--meshgen",
+                "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",
+                "14",
+                "--meshout",
+                "test/carlisle/carlisle_mesh14_sgs.parquet",
+                "--dem",
+                "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
                 "--mesh-only",
-                "--flow-model", "sgs"
+                "--flow-model",
+                "sgs"
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 05] SGS res 14 A5 mesh (geometry + neighbours + elevation + cell area)",
                 "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Bench 01] Benchmark standard flow — all configured meshes",
+            "program": "${workspaceFolder}/benchmark_sim.jl",
+            "args": [
+                "--warmup",
+                "10",
+                "--steps",
+                "200",
+                "--dt",
+                "30"
+            ],
+            "juliaNumThreads": "auto",
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Bench 01] Benchmark standard flow — all configured meshes",
+                "JULIA_DEBUG": ""
+            }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Bench 02] Benchmark — single thread (scaling baseline)",
+            "program": "${workspaceFolder}/benchmark_sim.jl",
+            "args": [
+                "--warmup",
+                "10",
+                "--steps",
+                "200",
+                "--dt",
+                "30"
+            ],
+            "juliaNumThreads": "1",
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Bench 02] Benchmark — single thread (scaling baseline)",
+                "JULIA_DEBUG": ""
             }
         },
         {
