@@ -541,15 +541,35 @@ function _build_edge_list(cells       :: Vector{A5Cell},
             # Prefer SGS pre-computed sill; fall back to max(elev_i, elev_j).
             # The caller is responsible for passing the correct sill_matrix
             # for SGS runs; for standard runs this defaults to bed elevation.
+            #
+            # SGS sill lookup: sill_matrix[slot, cell] stores the minimum
+            # DEM elevation along the shared edge, indexed by adjacency slot.
+            # The slot ordering in sill_matrix was set during build_sgs_tables!
+            # using grid_disk_neighbours_batch(), which may differ from the
+            # adjacency ordering stored in the parquet adj columns and loaded
+            # into the adj dict here.  To guard against ordering mismatches
+            # we search BOTH the lo-cell and hi-cell perspectives and take
+            # whichever returns a valid (non-NaN) result first.
             sls[e] = if sill_matrix !== nothing
-                # sill_matrix is (max_nb × n), indexed from each cell's slot.
-                # Look up from the lo-index cell's perspective.
                 s = NaN
+                # Try lo → hi
                 lo_nbrs = get(adj, ids[lo], String[])
                 for (slot, nb_id2) in enumerate(lo_nbrs)
+                    slot > size(sill_matrix, 1) && break
                     if get(id_idx, nb_id2, 0) == hi
                         s = sill_matrix[slot, lo]
                         break
+                    end
+                end
+                # If lo lookup failed, try hi → lo
+                if isnan(s)
+                    hi_nbrs = get(adj, ids[hi], String[])
+                    for (slot, nb_id2) in enumerate(hi_nbrs)
+                        slot > size(sill_matrix, 1) && break
+                        if get(id_idx, nb_id2, 0) == lo
+                            s = sill_matrix[slot, hi]
+                            break
+                        end
                     end
                 end
                 isnan(s) ? (elevations !== nothing ?
@@ -569,6 +589,22 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     valid_ct = filter(isfinite, cts[1:n_edges])
     if !isempty(valid_ct)
         @info "Edge non-orthogonality (cos θ):  min=$(round(minimum(valid_ct),digits=3))  mean=$(round(mean(valid_ct),digits=3))  max=$(round(maximum(valid_ct),digits=3))"
+    end
+
+    if sill_matrix !== nothing
+        # Diagnostic: count how many edges used the SGS sill vs the fallback.
+        # Any edge where sls[e] == max(elev_lo, elev_hi) AND elevations are valid
+        # may have fallen back.  We count NaN sills (geometry fallback) separately.
+        n_nan_sill  = count(isnan,  sls[1:n_edges])
+        n_sgs_sill  = n_edges - n_nan_sill   # all finite sills came from somewhere
+        # Warn if a significant fraction are NaN — indicates sill lookup failures
+        if n_nan_sill > 0
+            @warn "SGS edge sills: $n_nan_sill / $n_edges edges have NaN sill " *
+                  "(no DEM data along edge). These edges will have no flux. " *
+                  "Check DEM coverage."
+        else
+            @info "SGS edge sills: all $n_edges edges have valid sill elevations ✓"
+        end
     end
 
     return EdgeList(
@@ -1188,6 +1224,14 @@ function step_sgs!(state::FlowState, dt::Float64)
     # Reads: wse[] (just computed, read-only), state.elevation, manning_n,
     #        edges geometry.  Writes only to edge_vol[e] and edges.flux[e]
     #        (unique per thread — no data race).
+    #
+    # Dry-cell WSE correction (Bug 48):
+    # wse_from_volume(V=0) returns tbl.z_min (the cell thalweg elevation).
+    # For a high-elevation dry cell, z_min can be >> z_sill of an adjacent edge,
+    # creating a spurious driving head that drives large flux from a dry cell.
+    # The fix: for flux computation only, cap a dry cell's effective WSE at z_sill,
+    # so it contributes zero head above the sill — matching the standard solver's
+    # behaviour where a dry cell never drives flux.
     edge_vol = Vector{Float64}(undef, ne)
 
     Threads.@threads for e in 1:ne
@@ -1207,7 +1251,19 @@ function step_sgs!(state::FlowState, dt::Float64)
             continue
         end
 
-        Q = _bates_flux(edges.flux[e], wse[ci], wse[cj], z_sill,
+        # Use z_sill as the effective WSE for dry cells so they contribute no
+        # driving head above the sill.  Wet cells use their true hypsometric WSE.
+        wse_ci_eff = state.volume[ci] > 0.0 ? wse[ci] : z_sill
+        wse_cj_eff = state.volume[cj] > 0.0 ? wse[cj] : z_sill
+
+        # If both cells are dry, skip (h_flow = 0 regardless)
+        if state.volume[ci] <= 0.0 && state.volume[cj] <= 0.0
+            edge_vol[e] = 0.0
+            edges.flux[e] = 0.0
+            continue
+        end
+
+        Q = _bates_flux(edges.flux[e], wse_ci_eff, wse_cj_eff, z_sill,
                         edges.width[e], edges.L[e], edges.cos_theta[e],
                         min(state.manning_n[ci], state.manning_n[cj]), dt)
 

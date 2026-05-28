@@ -200,11 +200,21 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     Run `n_warmup + n_timed` simulation steps at a fixed `dt`.
 
-    Returns `(median_ms, min_ms, max_ms, first_step_ms)` where:
-    - `median/min/max_ms` are per-step wall-clock times over the `n_timed` timed steps.
-    - `first_step_ms` is the wall-clock time of the very first step (pass 1), which
-      includes JIT compilation cost.  Comparing this to `median_ms` gives the JIT
-      overhead multiplier.
+    Returns a named tuple with timing and flow-model diagnostic fields:
+
+    **Timing**
+    - `median_ms`, `min_ms`, `max_ms` — per-step wall-clock over timed steps (ms)
+    - `first_step_ms` — wall time of step 1 including JIT compilation
+
+    **Flow model metrics** (computed over the `n_timed` timed steps only)
+    - `max_depth_m`       — peak water depth seen in any cell at any timed step (m)
+    - `max_wet_area_m2`   — peak flood extent: Σ(saturation_i × cell_area_i) (m²),
+                            SGS-correct (uses hypsometric wetted fraction per cell)
+    - `final_wet_area_m2` — flood extent at the last timed step (m²)
+    - `final_vol_m3`      — total stored volume at the last timed step (m³)
+    - `mb_err_m3`         — mass balance error over timed steps: expected input
+                            minus actual domain-volume change (m³); ~0 = perfect
+    - `mb_err_pct`        — same as a percentage of total injected volume
     """
     function _time_steps(state, flow_model::Symbol,
                          dt::Float64, rainfall_rate::Float64,
@@ -222,6 +232,29 @@ if abspath(PROGRAM_FILE) == @__FILE__
         times         = Vector{Float64}(undef, n_timed)
         first_step_ms = 0.0
 
+        # Flow model tracking (timed steps only)
+        max_depth_m      = 0.0
+        max_wet_area_m2  = 0.0
+        final_wet_area_m2 = 0.0
+        vol_start        = sum(state.volume)   # volume at start of timed phase
+        input_vol_timed  = 0.0                 # cumulative injection during timed steps
+
+        # Helper: SGS-correct wetted area (fractional for SGS, binary for standard)
+        function _wet_area(state)
+            if isempty(state.sgs_tables)
+                return sum(state.cell_area[i]
+                           for i in eachindex(state.cell_ids)
+                           if state.water_depth[i] > 1e-4; init=0.0)
+            else
+                return sum(begin
+                    tbl    = state.sgs_tables[i]
+                    w_area = wetted_area_from_wse(tbl,
+                                 wse_from_volume(tbl, state.volume[i]))
+                    clamp(w_area, 0.0, tbl.cell_area)
+                end for i in eachindex(state.cell_ids); init=0.0)
+            end
+        end
+
         for pass in 1:(n_warmup + n_timed)
             if rainfall_rate > 0.0
                 for i in eachindex(state.cell_ids)
@@ -234,29 +267,70 @@ if abspath(PROGRAM_FILE) == @__FILE__
             elapsed_ms = (time_ns() - t0) / 1.0e6
 
             if pass == 1
-                first_step_ms = elapsed_ms   # JIT-inclusive first call
+                first_step_ms = elapsed_ms
             end
+
             if pass > n_warmup
                 times[pass - n_warmup] = elapsed_ms
+
+                # Accumulate input volume for this timed step
+                input_vol_timed += rainfall_rate * dt *
+                    sum(a for a in state.cell_area if a >= 1.0; init=0.0)
+
+                # Track peak depth
+                for d in state.water_depth
+                    isfinite(d) && d > max_depth_m && (max_depth_m = d)
+                end
+
+                # Track peak and final wetted area
+                wa = _wet_area(state)
+                wa > max_wet_area_m2 && (max_wet_area_m2 = wa)
+                if pass == n_warmup + n_timed
+                    final_wet_area_m2 = wa
+                end
             end
         end
 
-        return median(times), minimum(times), maximum(times), first_step_ms
+        final_vol_m3 = sum(state.volume)
+        vol_change   = final_vol_m3 - vol_start
+        mb_err_m3    = input_vol_timed - vol_change
+        mb_err_pct   = input_vol_timed > 0.0 ?
+                       100.0 * mb_err_m3 / input_vol_timed : 0.0
+
+        return (
+            median_ms        = median(times),
+            min_ms           = minimum(times),
+            max_ms           = maximum(times),
+            first_step_ms    = first_step_ms,
+            max_depth_m      = max_depth_m,
+            max_wet_area_m2  = max_wet_area_m2,
+            final_wet_area_m2 = final_wet_area_m2,
+            final_vol_m3     = final_vol_m3,
+            mb_err_m3        = mb_err_m3,
+            mb_err_pct       = mb_err_pct,
+        )
     end
 
-    # ── Step 4: open CSV output ────────────────────────────────────────────
-    csv_path = cfg["out"]
-    out_dir  = dirname(abspath(csv_path))
+    # ── Step 4: open CSV output (append if file exists, create if not) ───────
+    csv_path   = cfg["out"]
+    out_dir    = dirname(abspath(csv_path))
     out_dir != "" && !isdir(out_dir) && mkpath(out_dir)
-    csv_io   = open(csv_path, "w")
-    println(csv_io,
-        "timestamp,hostname,threads,run_name,flow_model,n_cells,n_edges," *
-        "mesh_res,dt_s,warmup_steps,timed_steps," *
-        "median_ms_per_step,min_ms_per_step,max_ms_per_step," *
-        "first_step_ms,jit_overhead_x," *
-        "cells_per_second,steps_per_sim_hour," *
-        "mesh_load_s,model_init_s,startup_s,sim_only_s,total_wall_s," *
-        "state_memory_mb,bytes_per_cell")
+    file_exists = isfile(csv_path)
+    csv_io      = open(csv_path, file_exists ? "a" : "w")
+    # Write header only when creating a new file; appending skips it so that
+    # multiple julia --threads N runs all land in the same CSV cleanly.
+    if !file_exists
+        println(csv_io,
+            "timestamp,hostname,threads,run_name,flow_model,n_cells,n_edges," *
+            "mesh_res,dt_s,warmup_steps,timed_steps," *
+            "median_ms_per_step,min_ms_per_step,max_ms_per_step," *
+            "first_step_ms,jit_overhead_x," *
+            "cells_per_second,steps_per_sim_hour," *
+            "mesh_load_s,model_init_s,startup_s,sim_only_s,total_wall_s," *
+            "state_memory_mb,bytes_per_cell," *
+            "mb_err_m3,mb_err_pct," *
+            "max_depth_m,max_wet_area_m2,final_wet_area_m2,final_vol_m3")
+    end
 
     # ── Step 5: run each benchmark ─────────────────────────────────────────
     for run in runs
@@ -319,25 +393,21 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 n_warmup, n_steps, dt)
         flush(stdout)
 
-        med_ms, min_ms, max_ms, first_step_ms =
-            _time_steps(state, flow_model, dt, rainfall_rate, n_warmup, n_steps)
+        r = _time_steps(state, flow_model, dt, rainfall_rate, n_warmup, n_steps)
 
-        # Pure computation time: median step time × number of timed steps.
-        # This excludes warmup (JIT), I/O, and mesh initialisation — it is the
-        # best estimate of how long the solver itself would take in production
-        # for a run of the same length.
-        sim_only_s      = n_steps * med_ms / 1000.0
+        # Pure computation time: median step × n timed steps (no warmup/JIT/IO)
+        sim_only_s      = n_steps * r.median_ms / 1000.0
 
-        cells_per_sec   = round(Int, n_cells / (med_ms / 1000.0))
-        steps_per_simhr = 3600.0 / dt / (med_ms / 1000.0)
-        jit_overhead_x  = med_ms > 0.0 ? first_step_ms / med_ms : 0.0
+        cells_per_sec   = round(Int, n_cells / (r.median_ms / 1000.0))
+        steps_per_simhr = 3600.0 / dt / (r.median_ms / 1000.0)
+        jit_overhead_x  = r.median_ms > 0.0 ? r.first_step_ms / r.median_ms : 0.0
         startup_s       = t_load + t_init
         total_wall_s    = startup_s + sim_only_s
 
         @printf("  step timing:  median %8.3f ms   min %8.3f   max %8.3f\n",
-                med_ms, min_ms, max_ms)
+                r.median_ms, r.min_ms, r.max_ms)
         @printf("  first step:   %8.3f ms  (JIT overhead: %.1fx median)\n",
-                first_step_ms, jit_overhead_x)
+                r.first_step_ms, jit_overhead_x)
         @printf("  throughput:   %-10s cells/s   %.1f steps per sim-hour\n",
                 format_si(cells_per_sec), steps_per_simhr)
         @printf("  sim only:     %.3f s for %d steps  (%.1f%% of total wall)\n",
@@ -347,26 +417,38 @@ if abspath(PROGRAM_FILE) == @__FILE__
         @printf("  total wall:   %.2f s\n", total_wall_s)
         @printf("  memory:       %.1f MB state  (%.0f B/cell)\n",
                 state_mem_mb, bytes_per_cell)
+        @printf("  mass balance: err = %+.4f m³  (%+.6f%%)\n",
+                r.mb_err_m3, r.mb_err_pct)
+        @printf("  flood extent: max = %.0f m²  final = %.0f m²  (%.2f km²)\n",
+                r.max_wet_area_m2, r.final_wet_area_m2, r.max_wet_area_m2 / 1e6)
+        @printf("  max depth:    %.3f m   final domain vol: %.1f m³\n",
+                r.max_depth_m, r.final_vol_m3)
 
         println(csv_io, join([
             timestamp, hostname, n_threads,
             "\"$name\"", flow_model,
             n_cells, n_edges, res, dt,
             n_warmup, n_steps,
-            round(med_ms,          digits=4),
-            round(min_ms,          digits=4),
-            round(max_ms,          digits=4),
-            round(first_step_ms,   digits=4),
-            round(jit_overhead_x,  digits=2),
+            round(r.median_ms,       digits=4),
+            round(r.min_ms,          digits=4),
+            round(r.max_ms,          digits=4),
+            round(r.first_step_ms,   digits=4),
+            round(jit_overhead_x,    digits=2),
             cells_per_sec,
-            round(steps_per_simhr, digits=2),
-            round(t_load,          digits=3),
-            round(t_init,          digits=3),
-            round(startup_s,       digits=3),
-            round(sim_only_s,      digits=3),
-            round(total_wall_s,    digits=3),
-            round(state_mem_mb,    digits=2),
-            round(bytes_per_cell,  digits=0),
+            round(steps_per_simhr,   digits=2),
+            round(t_load,            digits=3),
+            round(t_init,            digits=3),
+            round(startup_s,         digits=3),
+            round(sim_only_s,        digits=3),
+            round(total_wall_s,      digits=3),
+            round(state_mem_mb,      digits=2),
+            round(bytes_per_cell,    digits=0),
+            round(r.mb_err_m3,       digits=4),
+            round(r.mb_err_pct,      digits=6),
+            round(r.max_depth_m,     digits=4),
+            round(r.max_wet_area_m2, digits=0),
+            round(r.final_wet_area_m2, digits=0),
+            round(r.final_vol_m3,    digits=2),
         ], ","))
         flush(csv_io)
     end

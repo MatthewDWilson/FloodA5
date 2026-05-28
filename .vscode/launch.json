@@ -490,6 +490,58 @@
             },
             "juliaNumThreads": "auto"
         },
+                {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 06] Run SGS simulation res 14 - single cell rain injection (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/carlisle/carlisle_mesh14_sgs.parquet",
+                "--rainpoint",
+                "54.908,-2.896,1000.0",
+                "--output",
+                "test/carlisle/carlisle_test02.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "72000",
+                "--flow-model",         "sgs",
+                "--vis",                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 06] Run SGS simulation res 14 - single cell rain injection (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 07] Run standard simulation res 14 - single cell rain injection (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/carlisle/carlisle_mesh14_standard.parquet",
+                "--rainpoint",
+                "54.908,-2.896,1000.0",
+                "--output",
+                "test/carlisle/carlisle_test02.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "72000",
+                "--flow-model",
+                "standard",
+                "--vis",
+                "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 07] Run standard simulation res 14 - single cell rain injection (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
         {
             "type": "julia",
             "request": "launch",
