@@ -17,6 +17,10 @@
 #   4. Water flows downhill — source cell accumulates most volume
 #   5. No sloshing — domain volume never exceeds injected volume
 
+# Top-level imports — must be before the if block so macros are available
+# when Julia parses the body (even though execution is guarded).
+using Test, Printf
+
 if abspath(PROGRAM_FILE) == @__FILE__
 
     project_dir      = dirname(abspath(@__FILE__))
@@ -27,8 +31,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
     include(flood_model_path)
     delete!(ENV, "FLOODMODEL_INCLUDE_ONLY")
     _step_debug_count[] = typemax(Int)   # suppress first-step debug logging
-
-    using Test
 
     println("\n", "="^60)
     println("SGS unit test — 5-cell linear chain")
