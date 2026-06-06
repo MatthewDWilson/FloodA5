@@ -542,7 +542,7 @@
             },
             "juliaNumThreads": "auto"
         },
-                {
+        {
             "type": "julia",
             "request": "launch",
             "name": "[Carlise 08A] SGS res 17 A5 mesh (geometry + neighbours + elevation + cell area)",
@@ -586,6 +586,102 @@
             ],
             "env": {
                 "DEBUG_PROFILE_NAME": "[Carlise 08B] Run sgs simulation res 17 - single cell rain injection, 50 mm/h (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 09A] Standard res 18 A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",
+                "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",
+                "18",
+                "--meshout",
+                "test/carlisle/carlisle_mesh18_standard.parquet",
+                "--dem",
+                "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--flow-model", "standard",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 09A] Standard res 18 A5 mesh (geometry + neighbours + elevation + cell area)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 09B] Run standard simulation res 18 - single cell rain injection, 50 mm/h (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/carlisle/carlisle_mesh18_standard.parquet",
+                "--rainpoint",
+                "54.908,-2.896,50.0",
+                "--output",
+                "test/carlisle/carlisle_test09_standard.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "144000",
+                "--flow-model",     "standard",
+                "--vis",            "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 09B] Run standard simulation res 18 - single cell rain injection, 50 mm/h (mesh must exist)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 09C] SGS res 18 A5 mesh (geometry + neighbours + elevation + cell area)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",
+                "test/carlisle/Carlisle_domain.geojson",
+                "--meshres",
+                "18",
+                "--meshout",
+                "test/carlisle/carlisle_mesh18_sgs.parquet",
+                "--dem",
+                "test/carlisle/Carlisle_LiDAR_5m_mean.tif",
+                "--flow-model", "sgs",
+                "--mesh-only"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 09C] SGS res 18 A5 mesh (geometry + neighbours + elevation + cell area)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[Carlise 09D] Run SGS simulation res 18 - single cell rain injection, 50 mm/h (mesh must exist)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",
+                "test/carlisle/carlisle_mesh18_sgs.parquet",
+                "--rainpoint",
+                "54.908,-2.896,50.0",
+                "--output",
+                "test/carlisle/carlisle_test09_sgs.h5",
+                "--output-interval",
+                "900",
+                "--sim-duration",
+                "144000",
+                "--flow-model",     "sgs",
+                "--vis",            "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[Carlise 09D] Run SGS simulation res 18 - single cell rain injection, 50 mm/h (mesh must exist)",
                 "JULIA_DEBUG": "Main"
             },
             "juliaNumThreads": "auto"

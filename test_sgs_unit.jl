@@ -139,29 +139,32 @@ if abspath(PROGRAM_FILE) == @__FILE__
         )
     end
 
-    # ── 4. Bug 48 regression: dry cells drive no spurious flux ────────────────
-    @testset "Bug 48 — dry cells drive no flux" begin
+    # ── 4. Bug 48 / refinement: dry-cell effective WSE = max(z_sill, z_min) ────
+    @testset "Bug 48 — dry cells: wse_eff = max(z_sill, z_min)" begin
         state = fresh_state()
-        # Inject 1 m³ into source cell only; all others dry
-        state.volume[1] = 1.0
+        # Source (cell 1): z_min=5m.  Give it volume so WSE = 5+1 = 6m.
+        # Cell 2: z_min=6m, sill between 1&2 = min(5,6)-0.5 = 4.5m.
+        #   wse_eff_dry = max(4.5, 6.0) = 6.0m = source WSE -> h_flow=0 -> no flow.
+        # Cell 3: z_min=7m (> source WSE=6m) -> definitely no flow.
+        # Cells 4,5: z_min=8,9m (non-adjacent anyway) -> no flow.
+        state.volume[1] = 1.0 * cell_area   # WSE = z_min[1] + 1.0 = 6.0m
 
         vol_before = sum(state.volume)
         step_sgs!(state, 60.0)
 
-        # Non-adjacent cells (3,4,5) must remain completely dry
-        @test state.volume[3] ≈ 0.0 atol=1e-10
+        # Cells with z_min > source WSE must remain dry
+        @test state.volume[3] ≈ 0.0 atol=1e-10   # z_min=7m > WSE=6m
         @test state.volume[4] ≈ 0.0 atol=1e-10
         @test state.volume[5] ≈ 0.0 atol=1e-10
 
         # Mass must be conserved
         @test sum(state.volume) ≈ vol_before atol=1e-8
 
-        # Cell 1 must not GAIN volume from its dry neighbour (cell 2 is higher, dry)
-        # so volume[1] should be ≤ starting value (it can only lose to cell 2)
-        @test state.volume[1] <= 1.0 + 1e-8
+        # Cell 1 should not GAIN from dry cell 2 (its z_min = source WSE -> blocked)
+        @test state.volume[1] <= 1.0 * cell_area + 1e-8
 
-        println("  Bug 48 regression: dry cells drive no spurious flux — OK")
-        println("    vol after 1 step: ", round.(state.volume; digits=5))
+        println("  Bug 48 refinement: max(z_sill, z_min) dry-cell check — OK")
+        println("    vol after 1 step: ", round.(state.volume; digits=3))
     end
 
     # ── 5. Mass conservation over 100 steps ───────────────────────────────────

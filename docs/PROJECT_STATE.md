@@ -1,6 +1,6 @@
 # FloodA5 — Project State Summary
 
-_Last updated: 2026-05-22 (Bug 46 — volume limiter mass creation fix). Paste this into a new conversation to resume._
+_Last updated: 2026-06-06 (Bugs 46–50; parallel solver; SGS fixes; benchmarking; synthetic DEM tests). Paste this into a new conversation to resume._
 
 ---
 
@@ -27,6 +27,10 @@ FloodA5/
 ├── a5_bridge.py               # Python bridge: pya5, GeoParquet I/O
 ├── a5_mesh_diagnostic.py      # Mesh diagnostic utilities
 ├── test_flat_rainpoint.jl     # Flat-terrain point-source validation test
+├── test_sgs_unit.jl           # SGS 5-cell unit test (Bug 48 regression)
+├── benchmark_sim.jl           # Standalone simulation performance benchmark
+├── run_benchmarks.ps1         # PowerShell thread-sweep benchmark runner
+├── run_benchmarks.sh          # Bash equivalent
 ├── viz/
 │   ├── index.html             # CesiumJS viewer
 │   ├── config.json            # Runtime config — gitignored
@@ -35,7 +39,16 @@ FloodA5/
 │   ├── flat_test_aoi.geojson  # Small AOI for point-source tests (~5.5 km²)
 │   ├── flat_mesh_res14.parquet # 61-cell flat mesh (no DEM)
 │   ├── kaiapoi_aoi.geojson
-│   └── kaiapoi_dem.tif
+│   ├── kaiapoi_dem.tif
+│   ├── carlisle/                  # Carlisle test meshes and results
+│   └── synthetic_dem/             # Synthetic DEM validation suite
+│       ├── generate_synthetic_dem.py
+│       ├── test_sgs_synthetic.jl
+│       ├── synthetic_dem.tif      # generated, gitignored
+│       ├── synthetic_dem_params.json
+│       ├── synthetic_aoi.geojson
+│       ├── synthetic_mesh_sgs.parquet  # generated, gitignored
+│       └── synthetic_mesh_std.parquet  # generated, gitignored
 └── .vscode/
     └── launch.json            # VS Code debug configurations [00]–[10]
 ```
@@ -247,11 +260,13 @@ res 14 to ensure full connectivity. The test AOI (~5.5 km²) gives 61 fully-conn
 | 45 | **Wrong sign convention comment** — `step_standard!` had inline comment "Q>0 means flow from cell_i to cell_j" which is backwards | Corrected: Q<0 when i is higher (flow i→j), Q>0 when j is higher (flow j→i) |
 | 46 | **Volume limiter creates mass — asymmetric flux clipping (Bug 46)** — The old cell-level post-hoc limiter (`dV[i] = -0.5*vol[i]` if dV too negative) clipped the donor's loss without reducing the recipient's gain. On a flat zero-DEM mesh WSE gradients are tiny so fluxes stay within limits and the bug is latent; on a real DEM (e.g. Carlisle, 24.6 m elevation range) step-1 fluxes vastly exceed 50% of cell volume, the limiter triggers heavily, and `domain_vol` grows to ~2× `input_vol` by t=2h. Fix: moved the limiter into the flux accumulation loop as a per-edge **donor** limit — each edge transfer is capped at `volume[donor] / N_SIDES` (= volume/5 for A5 pentagons). The same clipped value is applied to both donor and recipient, so mass is conserved exactly. Removed the post-hoc clip from `_apply_dV_standard!` and `_apply_dV_sgs!`; the `max(0,…)` floor is retained as a last-resort guard only. Added constant `N_SIDES = 5`. |
 | 47 | **SGS edge sill lookup fails silently for ordering-mismatched adjacency (Bug 47)** — `_build_edge_list` looked up the pre-computed SGS sill for each edge by searching only the `lo`-cell's adjacency slots in `sill_matrix`. The sill matrix was built during `build_sgs_tables!` using `grid_disk_neighbours_batch()`, which may return neighbours in a different order than the adjacency loaded from the parquet `adj_0..adj_4` columns. When the slot search failed to find the `hi` cell in `lo`'s list, `s` stayed `NaN` and the code fell back silently to `max(elev_lo, elev_hi)` — the standard-solver sill — eliminating the SGS benefit on those edges. Fix: the slot search now tries **both** the `lo→hi` and `hi→lo` perspectives. |
-| 48 | **SGS dry-cell drives spurious flux via z_min WSE (Bug 48)** — `wse_from_volume(V=0)` correctly returns `tbl.z_min` (the cell's thalweg elevation). For a dry high-elevation cell, `z_min` can be substantially higher than the SGS edge sill. In `step_sgs!`, this causes the dry hilltop cell to appear to have a high WSE, producing large `h_flow = max(wse_i, wse_j) - z_sill` values and driving large flux even when no water is present. Result: sloshing oscillations, water spreading faster in SGS than standard (dry hilltops apparently injecting water into the domain), and depth patterns that jump erratically between frames. The standard solver is immune because its `z_sill = max(elev_i, elev_j)` always equals or exceeds both WSEs for dry cells. Fix: in `step_sgs!` Phase A, a dry cell's effective WSE for flux computation is clamped to `z_sill` (not `z_min`), so it contributes zero driving head above the sill. Both-dry edges are skipped entirely. Added `test_sgs_unit.jl` as a regression test with a 5-cell flat-bed chain covering this case and mass conservation. |
+| 48 | **SGS dry-cell drives spurious flux — two-stage fix (Bug 48)** — `wse_from_volume(V=0)` returns `tbl.z_min`. Original fix: dry-cell `wse_eff = z_sill`. Refinement (from diagnostic window): when a neighbour's `z_min > source WSE`, using `wse_eff = z_sill` still allows flow through the sub-cell channel, but water immediately pools at `z_min` of the receiving cell (above source WSE), then drives backflow — ping-pong oscillation with nbr1 [91] (z_min=14.84m, sill=10m, source WSE=13.72m). Correct condition: a dry cell's effective WSE = `max(z_sill, tbl.z_min)`, requiring the source WSE to exceed BOTH the channel bed AND the receiving basin floor. This blocks flow into higher-basin dry cells while preserving sub-cell channel flow into lower-basin cells (nbr5 [62]: sill=13.3m, z_min=10m -> wse_eff=13.3m -> correct). Updated `test_sgs_unit.jl` test to verify this condition. |
+| 49 | **SGS oscillations from donor limiter 100% drain + h_flow amplification (Bug 49)** — Two compounding issues caused sloshing after Bug 48 fix. **(Fix A)** Per-edge donor cap was `V/N_SIDES = V/5`, so all 5 edges firing simultaneously drained 100% of cell volume in one step, causing fill-drain oscillation. Fixed by changing cap to `V/DONOR_EDGE_DIVISOR` where `DONOR_EDGE_DIVISOR = 2×N_SIDES = 10`, guaranteeing ≤50% drain even when all edges fire. **(Fix B)** SGS `z_sill` (minimum DEM on edge arc) can be well below `z_min` of both cells, making `h_flow = max(wse_i,wse_j) − z_sill` >> actual water depth and driving unrealistically large Bates flux. Fixed by capping `h_flow` at `max(depth_ci, depth_cj)` via an effective sill `z_sill_eff = max(wse) − h_flow_cap` passed to `_bates_flux`. Added SGS hypsometric diagnostic window (`_open_sgs_diagnostic`) showing depth/area curves with live WSE line for source cell and its 5 neighbours. |
+| 50 | **`_shared_edge` crashes multi-threaded SGS mesh build (Bug 50)** — `_shared_edge` built a `Set{Tuple{Float64,Float64}}` from cell boundary vertices. The `Set` constructor triggers `Dict` rehash → GC allocation → PyCall finaliser on non-main thread → `EXCEPTION_ACCESS_VIOLATION` in `PyObject_ClearWeakRefs`. Crashed reliably at res 18 (29,902 cells) with `--threads auto`. Fix: replaced `Set` with an O(n²) linear scan over both boundary vertex lists (≤36 iterations for pentagons — faster in practice, zero heap allocation of PyCall-visible objects). Workaround until patched: use `--threads 1` for mesh generation. |
 
 ---
 
-## Validation Results (2026-05-12)
+## Validation Results
 
 Flat-terrain point-source test (standard flow, no DEM, single `--rainpoint`):
 
@@ -268,6 +283,22 @@ Flat-terrain point-source test (standard flow, no DEM, single `--rainpoint`):
 **Spread is rate/time limited** — the wet-cell frontier advances predictably; stalls are due to
 insufficient depth at outer ring cells rather than any hydraulic bug.
 
+
+---
+
+## Carlisle Validation Results (2026-06-05)
+
+Standard flow, res 14 (144 cells), single rainpoint 1000 mm/hr, 20h:
+- Mass balance: exact (MB error ~7e-9 m³)
+- Max depth: 5.7m; 58/144 cells wet at t=20h
+- Behaviour: correct ponding — source in local depression, neighbours at 15–22m
+
+SGS flow, res 14 (144 cells), single rainpoint 1000 mm/hr, 20h (after Bug 47–49 fixes):
+- Mass balance: exact
+- Max depth: 6.1m; 58/144 cells wet at t=20h
+- Residual oscillations at 1000 mm/hr are acceptable (extreme injection rate)
+- Hypsometric diagnostic window confirms correct sill behaviour
+
 **Ring cascade timing at 1000 mm/hr:**
 - Ring 1 (5 cells): t=120s (step 4)
 - Ring 2 (11 cells): t=900s (step 30)
@@ -279,7 +310,31 @@ insufficient depth at outer ring cells rather than any hydraulic bug.
 
 ## Pending Work
 
-### Immediate (before further development)
+### Immediate
+
+1. **Confirm test_sgs_synthetic.jl T2/T3/T4 pass** — T2 `dn_vol > 0.0` assertion was still failing at handover; the 3000-step Phase 2 should fix it. Run and verify.
+
+2. **NaN elevation cells in synthetic mesh** — cells 36 and 46 show NaN despite full DEM coverage. Check boundary DEM sampling.
+
+3. **Bug 46 follow-up: two-pass proportional limiter as user option** —
+  The current per-edge donor limit (volume/DONOR_EDGE_DIVISOR per edge) is conservative.
+  A two-pass proportional limiter would be more physically correct (see prior notes).
+  Expose as `--limiter-mode donor_per_edge|proportional`. Needs performance benchmarking.
+
+4. **Bug 36: implement velocity computation** — `state.velocity` always zero. Should be
+  computed from edge fluxes: per-cell magnitude from `Σ|Q|_edges / (cell_area × depth)`.
+  `_compute_velocity!` now exists but has not been validated.
+
+5. **LINZ DEM ingestion** — Kaiapoi domain at res 14 with 1m LiDAR.
+
+6. **SGS validation at realistic injection rates** — run Carlisle SGS with 50 mm/hr
+  uniform rainfall (not single-cell 1000 mm/hr) to confirm oscillations are eliminated.
+
+### Important: SGS mesh generation thread safety (Bug 50)
+Use `--threads 1` for mesh generation until `A5Grid.jl` Bug 50 fix is applied.
+The simulation loop (step_standard!, step_sgs!) is safe with any thread count.
+
+### Old immediate items
 - **Bug 36: implement velocity computation** — `state.velocity` always zero. Should be
   computed from edge fluxes: per-cell magnitude from `Σ|Q|_edges / (cell_area × depth)`.
 - **Analytical validation** — compare against Thacker planar surface (exact solution for

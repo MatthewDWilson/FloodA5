@@ -1702,17 +1702,26 @@ floating-point rounding in pya5's boundary computation.
 """
 function _shared_edge(bnd_i::Vector{Vector{Float64}},
                       bnd_j::Vector{Vector{Float64}})
+    # Thread-safe implementation: linear scan with no heap-allocated Set or Dict.
+    # The original Set{Tuple} construction triggered PyCall GC finalisation on
+    # non-main threads (EXCEPTION_ACCESS_VIOLATION in PyObject_ClearWeakRefs),
+    # because Julia's GC can run on any thread during Dict rehash allocation.
+    # A pentagon boundary has at most 6 vertices (5 + closing repeat), so the
+    # O(n²) scan over ≤36 pairs is faster than a Set for this input size.
     tol = 1e-9
-    # Build a set of rounded vertex tuples from cell j for fast lookup
-    verts_j = Set((round(v[1], digits=9), round(v[2], digits=9)) for v in bnd_j)
-    shared  = Vector{Tuple{Float64,Float64}}()
-    for v in bnd_i
-        k = (round(v[1], digits=9), round(v[2], digits=9))
-        if k in verts_j
-            push!(shared, (v[1], v[2]))
-            length(shared) == 2 && break
+    shared = Vector{Tuple{Float64,Float64}}()
+    for vi in bnd_i
+        ri = (round(vi[1], digits=9), round(vi[2], digits=9))
+        for vj in bnd_j
+            rj = (round(vj[1], digits=9), round(vj[2], digits=9))
+            if ri == rj
+                push!(shared, (vi[1], vi[2]))
+                length(shared) == 2 && @goto done
+                break   # each vertex in bnd_i matches at most one in bnd_j
+            end
         end
     end
+    @label done
     length(shared) < 2 && return nothing
     return shared[1][1], shared[1][2], shared[2][1], shared[2][2]
 end

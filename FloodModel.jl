@@ -70,10 +70,13 @@ const VIS_INTERVAL = 1
 const VIS_MODES = (:cesium, :makie)
 
 # Number of sides (neighbours) of an A5 pentagon interior cell.
-# Used by the per-edge donor limiter: each edge is allowed to transfer at most
-# volume[donor] / N_SIDES, so that across all edges a cell cannot lose more
-# than ~50% of its volume in one timestep, and mass is conserved exactly.
-const N_SIDES = 5
+# The per-edge donor limiter caps each edge transfer at volume[donor] / DONOR_EDGE_DIVISOR.
+# Divisor = 2*N_SIDES = 10: even if all 5 edges of a cell fire simultaneously,
+# the maximum total outflow is 5 * V/10 = V/2 = 50%, preserving the intended
+# half-step stability criterion.  (Divisor = N_SIDES = 5 allowed 100% drainage
+# when all edges fired together, driving oscillations — Bug 49 Fix A.)
+const N_SIDES           = 5
+const DONOR_EDGE_DIVISOR = 2 * N_SIDES   # = 10
 
 # ---------------------------------------------------------------------------
 # Flow model types
@@ -1170,12 +1173,14 @@ function step_standard!(state::FlowState, dt::Float64)
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
-        # Per-edge donor limiter (Bug 46): cap at volume[donor]/N_SIDES so
-        # the same clipped value goes to both sides — mass-exact.
+        # Per-edge donor limiter (Bug 46, Fix A Bug 49):
+        # Cap at volume[donor]/DONOR_EDGE_DIVISOR (= V/10) so that even if all
+        # N_SIDES edges fire simultaneously, total outflow ≤ 50%.
+        # The same clipped value goes to both sides — mass-exact.
         if ev > 0.0
-            ev = min(ev,  state.volume[cj] / N_SIDES)   # cj is donor
+            ev = min(ev,  state.volume[cj] / DONOR_EDGE_DIVISOR)   # cj is donor
         else
-            ev = max(ev, -state.volume[ci] / N_SIDES)   # ci is donor
+            ev = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)   # ci is donor
         end
 
         dV[ci] += ev   # ci gains when ev > 0
@@ -1251,10 +1256,19 @@ function step_sgs!(state::FlowState, dt::Float64)
             continue
         end
 
-        # Use z_sill as the effective WSE for dry cells so they contribute no
-        # driving head above the sill.  Wet cells use their true hypsometric WSE.
-        wse_ci_eff = state.volume[ci] > 0.0 ? wse[ci] : z_sill
-        wse_cj_eff = state.volume[cj] > 0.0 ? wse[cj] : z_sill
+        # Bug 48 / Bug 49 refinement: effective WSE for dry cells.
+        # A dry cell (volume=0) contributes zero pooling head.  Its effective WSE
+        # must clear TWO physical barriers before it can receive water:
+        #   1. z_sill   — the channel bed (lowest DEM along the shared edge arc)
+        #   2. tbl.z_min — the basin floor (lowest terrain in the receiving cell)
+        # Using only z_sill (original Bug 48 fix) allowed water to flow through a
+        # low channel into a receiving cell whose basin floor is ABOVE the source WSE,
+        # which immediately drove backflow (ping-pong oscillation with nbr1 [91]).
+        # Using max(z_sill, tbl.z_min) correctly requires source WSE to exceed both.
+        wse_ci_eff = state.volume[ci] > 0.0 ? wse[ci] :
+                     max(z_sill, state.sgs_tables[ci].z_min)
+        wse_cj_eff = state.volume[cj] > 0.0 ? wse[cj] :
+                     max(z_sill, state.sgs_tables[cj].z_min)
 
         # If both cells are dry, skip (h_flow = 0 regardless)
         if state.volume[ci] <= 0.0 && state.volume[cj] <= 0.0
@@ -1263,7 +1277,26 @@ function step_sgs!(state::FlowState, dt::Float64)
             continue
         end
 
-        Q = _bates_flux(edges.flux[e], wse_ci_eff, wse_cj_eff, z_sill,
+        # Fix B (Bug 49): cap h_flow at the effective water depth of the wetter cell.
+        # For SGS, z_sill is the minimum DEM along the edge and can be well below
+        # z_min of either cell.  This makes h_flow = max(wse_i,wse_j) - z_sill much
+        # larger than the actual water depth, driving unrealistically large flux and
+        # oscillations.  We cap h_flow at max(depth_ci, depth_cj) where depth is
+        # measured above the cell thalweg (z_min), which is the actual water column
+        # available to drive flow.  This preserves the sub-cell channel benefit
+        # (z_sill < z_min is still used as the reference datum) while bounding the
+        # flux to what the water column can physically sustain.
+        depth_ci = max(0.0, wse_ci_eff - state.sgs_tables[ci].z_min)
+        depth_cj = max(0.0, wse_cj_eff - state.sgs_tables[cj].z_min)
+        h_flow_raw = max(0.0, max(wse_ci_eff, wse_cj_eff) - z_sill)
+        h_flow_cap = max(depth_ci, depth_cj)
+        # Build a modified sill that gives _bates_flux the capped h_flow:
+        #   h_flow_eff = max(wse_i_eff, wse_j_eff) - z_sill_eff  ≤  h_flow_cap
+        #   z_sill_eff = max(wse_i_eff, wse_j_eff) - h_flow_cap
+        z_sill_eff = h_flow_raw > h_flow_cap ?
+            max(wse_ci_eff, wse_cj_eff) - h_flow_cap : z_sill
+
+        Q = _bates_flux(edges.flux[e], wse_ci_eff, wse_cj_eff, z_sill_eff,
                         edges.width[e], edges.L[e], edges.cos_theta[e],
                         min(state.manning_n[ci], state.manning_n[cj]), dt)
 
@@ -1280,10 +1313,11 @@ function step_sgs!(state::FlowState, dt::Float64)
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
+        # Per-edge donor limiter (Bug 46, Fix A Bug 49): V/DONOR_EDGE_DIVISOR = V/10
         if ev > 0.0
-            ev = min(ev,  state.volume[cj] / N_SIDES)
+            ev = min(ev,  state.volume[cj] / DONOR_EDGE_DIVISOR)
         else
-            ev = max(ev, -state.volume[ci] / N_SIDES)
+            ev = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)
         end
 
         dV[ci] += ev
@@ -1418,7 +1452,8 @@ function run_simulation!(state            :: FlowState,
                          method           :: FlowMethod = StandardFlow(),
                          rainfall_rate    :: Float64   = 0.0,
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
-                         rain_points      :: Vector{RainPoint}      = RainPoint[])
+                         rain_points      :: Vector{RainPoint}      = RainPoint[],
+                         sgs_diag                                   = nothing)
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
@@ -1546,6 +1581,11 @@ function run_simulation!(state            :: FlowState,
                     n_wet       = _vis_n_wet,
                     sim_step    = step,
                     sim_dt      = dt)
+                # Update SGS diagnostic window if open
+                if sgs_diag !== nothing
+                    _update_sgs_diagnostic!(sgs_diag, state, t)
+                    yield()   # let GLMakie render thread redraw the diagnostic window
+                end
             end
         end
 
@@ -1637,12 +1677,13 @@ function run_flood_model(;
     end
 
     # 1. Start Cesium server early
-    vis = if vis_mode === :cesium
+    vis      = if vis_mode === :cesium
         VisualisationServer.start(port = vis_port,
                                   viz_dir = joinpath(@__DIR__, "viz"))
     else
         nothing
     end
+    sgs_diag = nothing   # SGS hypsometric diagnostic window; assigned later if applicable
     vis_mode === :cesium &&
         @info "Cesium viewer: open http://localhost:$vis_port in your browser"
 
@@ -1857,6 +1898,11 @@ function run_flood_model(;
                   source_indices = source_indices,
                   adjacency      = flow_state.adjacency,
                   title          = "FloodA5  res=$(mesh.resolution)  $src_label")
+
+        # SGS diagnostic window — opened below if applicable
+        if flow_method === :sgs && !isempty(source_indices)
+            sgs_diag = _open_sgs_diagnostic(flow_state, source_indices[1])
+        end
     end
 
     # 8. Prepare HDF5 output
@@ -1875,7 +1921,8 @@ function run_flood_model(;
                     method           = method_obj,
                     rainfall_rate    = rainfall_rate,
                     injection_points = injection_points,
-                    rain_points      = rain_points)
+                    rain_points      = rain_points,
+                    sgs_diag         = sgs_diag)
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -2038,6 +2085,166 @@ function _pop_bool(args::Vector{String}, flag::String)
     idx = findfirst(==(flag), args)
     idx === nothing && return (false, args)
     return (true, deleteat!(copy(args), idx))
+end
+
+
+# ---------------------------------------------------------------------------
+# SGS hypsometric diagnostic window
+# ---------------------------------------------------------------------------
+# Opens a second GLMakie figure showing depth/area curves for the source cell
+# and its immediate neighbours.  Updates every visualisation interval so you
+# can watch the water surface rise and fall within each cell's storage curve.
+# ---------------------------------------------------------------------------
+
+"""
+    SGSDiagnostic
+
+Holds the Observables and axis references for the SGS diagnostic figure so
+that `_update_sgs_diagnostic!` can update them without recreating the figure.
+"""
+struct SGSDiagnostic
+    fig          :: Any
+    cell_indices :: Vector{Int}
+    cell_labels  :: Vector{String}
+    wse_obs      :: Vector{Any}    # Observable{Vector{Float64}} — current WSE per cell
+    axes         :: Vector{Any}
+    time_obs     :: Any            # Observable{String} — sim time label
+    label_obs    :: Vector{Any}    # Observable{String} — stats text per cell
+end
+
+"""
+    _open_sgs_diagnostic(state, source_idx) → SGSDiagnostic | nothing
+
+Open a GLMakie figure showing the hypsometric storage curve (bed area vs
+elevation) for the source cell and each of its neighbours.  A horizontal
+line on each subplot shows the current water surface elevation.
+
+Returns `nothing` if GLMakie is not loaded or SGS tables are absent.
+"""
+function _open_sgs_diagnostic(state::FlowState, source_idx::Int)
+    isempty(state.sgs_tables) && return nothing
+    isdefined(MakieVisualiser, :GLMakie) || return nothing
+    GM = MakieVisualiser.GLMakie
+
+    # Collect source + up to 5 neighbours from adj_matrix
+    nbr_indices = Int[]
+    for slot in 1:5
+        j = state.adj_matrix[slot, source_idx]
+        j > 0 && push!(nbr_indices, j)
+    end
+    cell_indices = vcat([source_idx], nbr_indices)
+    n_panels     = length(cell_indices)
+
+    # Find the edge sill between source and each neighbour from the EdgeList.
+    # edge_sill[k] = sill elevation for the edge between source and cell_indices[k]
+    #              = NaN for the source cell itself (k=1) or if edge not found.
+    edge_sills = fill(NaN, n_panels)
+    for e in 1:state.edges.n_edges
+        ci = state.edges.cell_i[e]
+        cj = state.edges.cell_j[e]
+        for (k, idx) in enumerate(cell_indices)
+            k == 1 && continue   # skip source-vs-source
+            if (ci == source_idx && cj == idx) || (cj == source_idx && ci == idx)
+                edge_sills[k] = state.edges.sill[e]
+            end
+        end
+    end
+
+    cell_labels = String[]
+    for (k, ci) in enumerate(cell_indices)
+        push!(cell_labels, k == 1 ? "source [$(ci)]" : "nbr$(k-1) [$(ci)]")
+    end
+
+    ncols = max(2, ceil(Int, n_panels / 2))
+    nrows = ceil(Int, n_panels / ncols)
+    fig   = GM.Figure(size=(320*ncols, 300*nrows + 30),
+                      title="SGS Hypsometric Diagnostic")
+
+    time_obs = GM.Observable("t = 0.00 h")
+    GM.Label(fig[0, 1:ncols], time_obs;
+             fontsize=13, halign=:center, tellwidth=false)
+
+    axes      = Any[]
+    wse_obs   = Any[]    # Observable{Vector{Float64}} — current WSE per cell
+    label_obs = Any[]    # Observable{String} — stats text per cell
+
+    for (k, ci) in enumerate(cell_indices)
+        tbl  = state.sgs_tables[ci]
+        row  = ceil(Int, k / ncols)
+        col  = ((k-1) % ncols) + 1
+        ax   = GM.Axis(fig[row, col];
+                   title     = cell_labels[k],
+                   xlabel    = "Wetted area (m²)",
+                   ylabel    = "Elevation (m)",
+                   titlesize = 11, xlabelsize = 9, ylabelsize = 9)
+
+        # Static hypsometric curve
+        GM.lines!(ax, tbl.area_curve, tbl.elev_bins; color=:steelblue, linewidth=2)
+        GM.band!(ax, tbl.area_curve,
+                 fill(tbl.z_min, length(tbl.elev_bins)),
+                 tbl.elev_bins; color=(:steelblue, 0.15))
+
+        # z_min / z_max reference lines (dashed grey)
+        GM.hlines!(ax, [tbl.z_min, tbl.z_max]; color=:gray60, linewidth=1, linestyle=:dash)
+
+        # Edge sill line (dotted green) — shows whether terrain blocks flow from source
+        if k > 1 && isfinite(edge_sills[k])
+            GM.hlines!(ax, [edge_sills[k]]; color=:forestgreen, linewidth=1.5, linestyle=:dot)
+        end
+
+        # Live WSE line (red)
+        wse_init = A5Grid.wse_from_volume(tbl, state.volume[ci])
+        obs_wse  = GM.Observable([wse_init])
+        push!(wse_obs, obs_wse)
+        GM.hlines!(ax, obs_wse; color=:tomato, linewidth=2)
+
+        # Text overlay: WSE, volume, depth above z_min, and (for nbrs) edge sill
+        depth_init = wse_init - tbl.z_min
+        sill_str   = (k > 1 && isfinite(edge_sills[k])) ?
+                     "\nsill=$(round(edge_sills[k], digits=1))m" : ""
+        obs_txt = GM.Observable(
+            "WSE=$(round(wse_init,digits=2))m  d=$(round(depth_init,digits=3))m$(sill_str)")
+        push!(label_obs, obs_txt)
+        GM.text!(ax, 0.02, 0.97; text=obs_txt, space=:relative,
+                 align=(:left, :top), fontsize=8, color=:black)
+
+        push!(axes, ax)
+    end
+
+    GM.display(GM.Screen(), fig)
+    @info "SGS diagnostic window opened: $(n_panels) cells (source + neighbours)"
+    for (k, ci) in enumerate(cell_indices)
+        k == 1 && continue
+        sill_info = isfinite(edge_sills[k]) ?
+            "sill=$(round(edge_sills[k],digits=2))m" : "sill=NaN (edge not in EdgeList!)"
+        tbl = state.sgs_tables[ci]
+        @info "  $(cell_labels[k]): z_min=$(round(tbl.z_min,digits=2))m  $sill_info"
+    end
+
+    return SGSDiagnostic(fig, cell_indices, cell_labels, wse_obs, axes, time_obs, label_obs)
+end
+
+"""
+    _update_sgs_diagnostic!(diag, state, t)
+
+Update the WSE horizontal lines and time label on the SGS diagnostic figure.
+Called every visualisation frame alongside `push_frame!`.
+`t` is the current simulation time in seconds.
+"""
+function _update_sgs_diagnostic!(diag::SGSDiagnostic, state::FlowState, t::Float64)
+    diag === nothing && return
+    isempty(state.sgs_tables) && return
+    for (k, ci) in enumerate(diag.cell_indices)
+        ci > length(state.sgs_tables) && continue
+        tbl   = state.sgs_tables[ci]
+        wse   = A5Grid.wse_from_volume(tbl, state.volume[ci])
+        depth = wse - tbl.z_min
+        diag.wse_obs[k][] = [wse]
+        if k <= length(diag.label_obs)
+            diag.label_obs[k][] = "WSE=$(round(wse,digits=2))m  d=$(round(depth,digits=3))m"
+        end
+    end
+    diag.time_obs[] = "t = $(round(t / 3600.0, digits=2)) h"
 end
 
 function main(args=String[])
