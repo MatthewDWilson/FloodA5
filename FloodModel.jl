@@ -987,18 +987,34 @@ form would require a thread reduction and is not significantly tighter in
 practice because the deepest cell almost always dominates.
 """
 function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Float64
-    h_max = 0.0
     dx_min = Inf
     for i in eachindex(state.cell_ids)
-        h = state.water_depth[i]
-        h > h_max && (h_max = h)
         dx = sqrt(state.cell_area[i])
         dx < dx_min && (dx_min = dx)
     end
 
-    h_max < 1e-6 && return 60.0   # all cells dry — return safe default
+    # Collect wet-cell depths.  For SGS, water_depth is already capped at the terrain
+    # range (z_max - z_min) in _apply_dV_sgs!, so it reflects physical depth rather
+    # than the virtual extrapolated head above z_max.  Use the 99th-percentile depth
+    # rather than the absolute maximum so that a single extreme channel cell (e.g. a
+    # narrow depression that fills well above its neighbours) does not force the entire
+    # domain to take unnecessarily small timesteps.
+    wet_depths = Float64[]
+    for i in eachindex(state.cell_ids)
+        h = state.water_depth[i]
+        h > 1e-4 && push!(wet_depths, h)
+    end
 
-    return courant * dx_min / sqrt(_G * h_max)
+    isempty(wet_depths) && return 60.0   # all cells dry — return safe default
+
+    sort!(wet_depths)
+    # 99th percentile: ignore the top 1% of cells when computing CFL depth
+    pct99_idx = max(1, round(Int, 0.99 * length(wet_depths)))
+    h_cfl = wet_depths[pct99_idx]
+
+    h_cfl < 1e-6 && return 60.0
+
+    return courant * dx_min / sqrt(_G * h_cfl)
 end
 
 """
@@ -1062,7 +1078,14 @@ function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
             continue
         end
         new_wse = wse_from_volume(tbl, state.volume[i])
-        state.water_depth[i] = max(0.0, new_wse - tbl.z_min)
+        # For the CFL timestep, water_depth should reflect the physical water column
+        # within the terrain, not the virtual extrapolated head above z_max (Bug 52 fix).
+        # Cap at (z_max - z_min): once a cell is fully inundated, additional volume
+        # raises WSE linearly but the *hydraulic depth* driving CFL is bounded by the
+        # terrain range.  The WSE gradient (and therefore flux) still uses the full
+        # extrapolated wse_from_volume value — only the CFL depth is capped here.
+        terrain_depth = max(0.0, tbl.z_max - tbl.z_min)
+        state.water_depth[i] = min(max(0.0, new_wse - tbl.z_min), terrain_depth)
     end
 end
 

@@ -2027,8 +2027,14 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     @info "  Building exact adjacency via grid_disk..."
     adj = grid_disk_neighbours_batch([c.id for c in mesh.cells])
 
-    # For each cell, sample the DEM along each shared edge
-    Threads.@threads for ci in 1:n
+    # For each cell, sample the DEM along each shared edge.
+    # NOTE: must be serial (not Threads.@threads). The ArchGDAL coordinate transform
+    # inside this loop uses PyCall, whose GC finaliser (pydecref) is not thread-safe
+    # with Python 3.13 on Windows — a GC cycle on a non-main thread triggers
+    # EXCEPTION_ACCESS_VIOLATION in PyObject_ClearWeakRefs (Bug 57, same root cause
+    # as Bug 50 in _shared_edge).  The hypsometric curve build (Step 1) dominates
+    # wall time; the edge sill loop is fast even serially at res 18 (29,902 cells).
+    for ci in 1:n
         cell_i = mesh.cells[ci]
         nbrs   = get(adj, cell_i.id, String[])
         slot   = 0
