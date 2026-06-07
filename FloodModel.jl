@@ -850,6 +850,18 @@ normal.  cos θ is stored in EdgeList.cos_theta (1.0 = orthogonal).
 For a future Riemann solver: replace with full over-relaxed decomposition
 (Weller 2014).  See PROJECT_STATE.md Phase 5.
 """
+# Minimum h_flow (m) below which an edge is treated as dry and flux set to zero.
+# Matches the CAESAR-Lisflood default hflow_threshold = 0.001 m.  Skipping
+# near-dry edges avoids carrying stale q_prev momentum on thin films and gives
+# a meaningful computational saving on large meshes (most boundary edges are dry).
+const HFLOW_THRESHOLD = 0.001
+
+# Froude number limit for subcritical flow.  Matches CAESAR-Lisflood froude_limit = 0.8.
+# Unit discharge is capped at q_max = h_flow × √(g × h_flow) × FROUDE_LIMIT.
+# This suppresses the supercritical oscillation mode that drives checkerboarding
+# in inertial models on irregular meshes.
+const FROUDE_LIMIT = 0.8
+
 @inline function _bates_flux(q_prev     :: Float64,
                               wse_i      :: Float64,
                               wse_j      :: Float64,
@@ -859,9 +871,10 @@ For a future Riemann solver: replace with full over-relaxed decomposition
                               cos_theta  :: Float64,
                               n_mann     :: Float64,
                               dt         :: Float64)::Float64
-    # Flow depth at the edge: depth above sill on the higher side
+    # Flow depth at the edge: depth above sill on the higher side.
+    # Uses HFLOW_THRESHOLD for consistency with _bates_flux_limited.
     h_flow = max(wse_i, wse_j) - z_sill
-    h_flow <= 0.0 && return 0.0
+    h_flow <= HFLOW_THRESHOLD && return 0.0
     h_flow  = max(h_flow, 1e-6)   # floor to avoid h^(10/3) underflow → NaN denominator
 
     # WSE gradient (positive = flow i→j).
@@ -882,41 +895,110 @@ For a future Riemann solver: replace with full over-relaxed decomposition
     return q_new * width
 end
 
+"""
+    _bates_flux_limited(q_prev, wse_i, wse_j, z_sill, width, L, cos_theta,
+                        n_mann, dt, depth_donor) → (Q, q_stored)
+
+Variant of `_bates_flux` used exclusively by `step_standard!`.  Applies three
+stability fixes that match the CAESAR-Lisflood qroute() implementation:
+
+**Fix A — Froude limiter** (CAESAR froude_limit = 0.8)
+  Caps |q| at `h_flow × √(g × h_flow) × FROUDE_LIMIT` after Bates eq. 9.
+  Prevents supercritical discharge and suppresses the checkerboard instability
+  on irregular/pentagonal meshes where each edge has an independent q_prev.
+
+**Fix B — Volume limiter** (CAESAR: depth/4 threshold → depth/5 cap per edge)
+  Caps |Q × dt| at `depth_donor × width / 5.0`, so no more than ~20% of the
+  donor cell’s water can leave via one edge per step.  On A5 cells `width` is
+  the natural spatial scale (shared edge length).
+
+**Fix C — Consistent q_stored**
+  Returns the *post-limiting* unit discharge as `q_stored` for writing back to
+  `edges.flux[e]`.  This ensures the momentum state carried into the next step
+  reflects what was actually transferred.  The previous approach stored the
+  unlimited Bates q while only capping the volume in the scatter phase, causing
+  divergence between stored momentum and actual hydraulic state — the root
+  driver of step-to-step overshoot and checkerboarding.
+
+Returns `(Q, q_stored)` where Q is the (limited) volumetric flux (m³/s) and
+q_stored is the unit discharge (m²/s) to persist as q_prev next step.
+"""
+@inline function _bates_flux_limited(q_prev       :: Float64,
+                                      wse_i        :: Float64,
+                                      wse_j        :: Float64,
+                                      z_sill       :: Float64,
+                                      width        :: Float64,
+                                      L            :: Float64,
+                                      cos_theta    :: Float64,
+                                      n_mann       :: Float64,
+                                      dt           :: Float64,
+                                      depth_donor  :: Float64)::Tuple{Float64,Float64}
+    # Dry-edge threshold: zero flux and zero stored q (clears stale momentum)
+    h_flow = max(wse_i, wse_j) - z_sill
+    if h_flow <= HFLOW_THRESHOLD
+        return (0.0, 0.0)
+    end
+    h_flow = max(h_flow, 1e-6)
+
+    dWSE  = wse_i - wse_j
+    ct    = max(cos_theta, 0.1)
+    L_eff = max(L * ct, 1.0)
+
+    # Bates et al. (2010) eq. 9
+    numerator   = q_prev - _G * h_flow * dt * dWSE / L_eff
+    denominator = 1.0 + _G * h_flow * dt * n_mann^2 * abs(q_prev) /
+                  h_flow^(10.0/3.0)
+    q_new = numerator / denominator
+
+    # Fix A: Froude limiter — cap at subcritical limit (Fr ≤ FROUDE_LIMIT)
+    q_max = h_flow * sqrt(_G * h_flow) * FROUDE_LIMIT
+    q_new = clamp(q_new, -q_max, q_max)
+
+    # Fix B: Volume limiter — no more than 1/5 of donor depth per edge per step
+    if depth_donor > 0.0
+        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_new = clamp(q_new, -q_vol_max, q_vol_max)
+    end
+
+    # Fix C: return the post-limiting q so the caller stores a consistent q_prev
+    Q = q_new * width
+    return (Q, q_new)
+end
+
 
 """
     _cfl_dt(state, method) → Float64
 
-Compute the maximum stable timestep from the CFL condition for the
-diffusive wave equation.  The diffusive stability criterion is:
+Compute the maximum stable timestep from the CFL (Courant–Friedrichs–Lewy)
+condition for the inertial shallow-water equations:
 
-    dt ≤ CFL × dx² / (2D)
+    dt ≤ courant × dx / √(g × h)
 
-where D = Q/A is the diffusivity, dx is the cell length scale,
-and CFL = 0.5 is a safety factor.
+where `dx` is the cell length scale (√area), `h` is the local water depth,
+and `courant = 0.7` matches the CAESAR-Lisflood default.  This is the
+wave-speed stability criterion appropriate for the inertial (momentum-
+retaining) formulation of Bates et al. (2010) — replacing the earlier
+diffusive-wave form which was too conservative at shallow depths and not
+conservative enough at larger depths.
 
-We approximate D conservatively as g × h_max × dx / n_min for each
-active cell, then take the minimum over all cells.
+The per-cell `dx = √(cell_area)` accounts for the varying sizes of A5
+pentagonal cells.  The global maximum depth is used for speed; the per-cell
+form would require a thread reduction and is not significantly tighter in
+practice because the deepest cell almost always dominates.
 """
-function _cfl_dt(state::FlowState, method::FlowMethod; cfl::Float64=0.5)::Float64
-    n        = length(state.cell_ids)
-    dt_min   = Inf
-    h_thresh = 1e-4   # ignore nearly-dry cells
-
-    for i in 1:n
+function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Float64
+    h_max = 0.0
+    dx_min = Inf
+    for i in eachindex(state.cell_ids)
         h = state.water_depth[i]
-        h < h_thresh && continue
-        # Length scale: sqrt of cell area
-        dx  = sqrt(state.cell_area[i])
-        n_i = state.manning_n[i]
-        # Diffusivity: D ≈ (1/n) × h^(5/3) / S^(1/2)
-        # Bound S away from zero for stability; use a representative 0.001 if flat
-        D   = (1.0 / n_i) * h^(5.0/3.0) * 0.032   # √0.001 ≈ 0.032 typical slope
-        D   = max(D, 0.001)
-        dt  = cfl * dx^2 / (2.0 * D)
-        dt < dt_min && (dt_min = dt)
+        h > h_max && (h_max = h)
+        dx = sqrt(state.cell_area[i])
+        dx < dx_min && (dx_min = dx)
     end
 
-    return isfinite(dt_min) ? dt_min : 60.0   # default 60s if all cells dry
+    h_max < 1e-6 && return 60.0   # all cells dry — return safe default
+
+    return courant * dx_min / sqrt(_G * h_max)
 end
 
 """
@@ -1133,10 +1215,16 @@ function step_standard!(state::FlowState, dt::Float64)
         end
     end
 
-    # ── Phase A: parallel edge flux computation ────────────────────────────
+    # ── Phase A: parallel edge flux computation ─────────────────────────────────────
     # Each iteration reads cell state (read-only) and writes to unique edge
     # slots edge_vol[e] and edges.flux[e].  No two threads share a write
     # target — this is provably race-free.
+    #
+    # _bates_flux_limited applies three stability fixes vs the earlier call:
+    #   • Froude limiter      (CAESAR froude_limit=0.8: caps supercritical q)
+    #   • Volume limiter      (CAESAR depth/5 cap: ≤ 1/5 donor depth per edge)
+    #   • Consistent q_prev  (stores post-limiting q, not raw Bates q)
+    # See _bates_flux_limited docstring for full rationale.
     edge_vol = Vector{Float64}(undef, ne)
 
     Threads.@threads for e in 1:ne
@@ -1147,36 +1235,41 @@ function step_standard!(state::FlowState, dt::Float64)
         if (isnan(edges.width[e])      || isnan(edges.L[e])          ||
             isnan(edges.cos_theta[e])  || isnan(edges.sill[e])       ||
             isnan(state.elevation[ci]) || isnan(state.elevation[cj]))
-            edge_vol[e] = 0.0   # mark no-flux; edges.flux[e] left unchanged
+            edge_vol[e] = 0.0
+            edges.flux[e] = 0.0   # clear stale momentum on degenerate edges
             continue
         end
 
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
 
-        Q = _bates_flux(edges.flux[e], wse_ci, wse_cj, edges.sill[e],
-                        edges.width[e], edges.L[e], edges.cos_theta[e],
-                        min(state.manning_n[ci], state.manning_n[cj]), dt)
+        # Identify donor depth for the volume limiter (higher-WSE side donates).
+        depth_donor = wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
 
-        edges.flux[e] = Q / max(edges.width[e], 1e-6)   # q (m²/s) for next step
-        edge_vol[e]   = Q * dt                           # signed volume (m³)
+        Q, q_stored = _bates_flux_limited(
+            edges.flux[e], wse_ci, wse_cj, edges.sill[e],
+            edges.width[e], edges.L[e], edges.cos_theta[e],
+            min(state.manning_n[ci], state.manning_n[cj]), dt,
+            depth_donor)
+
+        edges.flux[e] = q_stored   # Fix C: post-limiting q → consistent q_prev
+        edge_vol[e]   = Q * dt     # signed volume (m³)
     end
 
-    # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
-    # state.volume[] is still the start-of-step snapshot here (Phase A did
-    # not modify it), so the donor-limit comparison is consistent.
+    # ── Phase B: serial dV scatter ─────────────────────────────────────────────
+    # _bates_flux_limited already bounds the transfer via the Froude and volume
+    # limiters.  The DONOR_EDGE_DIVISOR cap is retained as a last-resort
+    # mass-conservation guard (should rarely trigger).
+    # state.volume[] is still the start-of-step snapshot (Phase A did not
+    # modify it), so the donor-limit comparison is consistent.
     dV = zeros(Float64, n)
     @inbounds for e in 1:ne
         ev = edge_vol[e]
-        iszero(ev) && continue   # NaN-guarded edges written 0.0 in Phase A
+        iszero(ev) && continue
 
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
-        # Per-edge donor limiter (Bug 46, Fix A Bug 49):
-        # Cap at volume[donor]/DONOR_EDGE_DIVISOR (= V/10) so that even if all
-        # N_SIDES edges fire simultaneously, total outflow ≤ 50%.
-        # The same clipped value goes to both sides — mass-exact.
         if ev > 0.0
             ev = min(ev,  state.volume[cj] / DONOR_EDGE_DIVISOR)   # cj is donor
         else

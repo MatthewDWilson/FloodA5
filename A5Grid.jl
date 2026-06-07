@@ -1596,19 +1596,11 @@ end
     wse_from_volume(table, V) → Float64
 
 Given a stored volume V (m³), return the water surface elevation (m) by
-inverse-interpolating the SGS volume curve.
-
-For V between 0 and vol_curve[end] the hypsometric curve is used.
-For V > vol_curve[end] (cell overfull — water above the terrain ceiling) the WSE
-is extrapolated linearly above z_max using the full cell_area as the wet area:
-    WSE = z_max + (V - vol_curve[end]) / cell_area
-This preserves a positive driving head between neighbouring overfull cells and
-allows the SGS solver to propagate volume across a flat upstream basin even when
-individual cells have filled their hypsometric range.
+inverse-interpolating the SGS volume curve.  Clamps to [z_min, z_max].
 """
 @inline function wse_from_volume(t::SGSTable, V::Float64)::Float64
     V <= 0.0 && return t.z_min
-    V >= t.vol_curve[end] && return t.z_max + (V - t.vol_curve[end]) / t.cell_area
+    V >= t.vol_curve[end] && return t.z_max
     # Binary search for bracketing interval
     lo, hi = 1, length(t.vol_curve)
     while hi - lo > 1
