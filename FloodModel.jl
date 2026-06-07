@@ -1293,12 +1293,33 @@ end
 Advance the SGS diffusive-wave model by one timestep `dt`.
 
 Uses the same parallel A/B/C/D phase structure as `step_standard!` — see
-that function's docstring for the thread-safety rationale.  The only
+that function's docstring for the thread-safety rationale.  The SGS-specific
 differences are:
   - WSE is derived from the hypsometric lookup (not elevation + depth).
   - The edge sill is the pre-computed SGS minimum along the shared boundary.
   - Phase A reads the pre-computed `wse[]` array (computed serially in
     the SGS-specific Step 0) rather than computing WSE inline.
+
+Stability fixes applied in this function (branch: sgs_flow_fixes):
+
+**Fix A — Froude limiter**
+  After the Bates eq. 9 call, |q| is capped at h_flow_eff × √(g × h_flow_eff) × FROUDE_LIMIT.
+  h_flow_eff is the flow depth that _bates_flux saw (= max(wse_i_eff, wse_j_eff) - z_sill_eff),
+  which is already bounded by max(depth_ci, depth_cj) via the Bug 49 z_sill_eff correction.
+  LISFLOOD-FP SGC achieves equivalent stability through its R-A formulation; the explicit
+  Froude cap is the appropriate mechanism given FloodA5's Bates-based SGS kernel.
+
+**Fix C — Consistent q_stored (primary + full)**
+  Primary: edges.flux[e] is set to the post-Froude q_stored (not the raw Bates q).
+  Full: if the Phase B DONOR_EDGE_DIVISOR cap further clips the volume, edges.flux[e]
+  is updated again to match, so q_prev next step always reflects what was transferred.
+  This eliminates the divergence between stored momentum and actual hydraulic state
+  that drove SGS oscillations analogously to the standard-flow checkerboard instability.
+
+**Manning's n — arithmetic mean**
+  Changed from min(n_ci, n_cj) to 0.5*(n_ci + n_cj) per edge, matching LISFLOOD-FP
+  and the standard shallow-water literature.  The minimum is marginally non-standard
+  and slightly over-conductive.
 """
 function step_sgs!(state::FlowState, dt::Float64)
     n     = length(state.cell_ids)
@@ -1389,12 +1410,30 @@ function step_sgs!(state::FlowState, dt::Float64)
         z_sill_eff = h_flow_raw > h_flow_cap ?
             max(wse_ci_eff, wse_cj_eff) - h_flow_cap : z_sill
 
-        Q = _bates_flux(edges.flux[e], wse_ci_eff, wse_cj_eff, z_sill_eff,
-                        edges.width[e], edges.L[e], edges.cos_theta[e],
-                        min(state.manning_n[ci], state.manning_n[cj]), dt)
+        Q_raw = _bates_flux(edges.flux[e], wse_ci_eff, wse_cj_eff, z_sill_eff,
+                            edges.width[e], edges.L[e], edges.cos_theta[e],
+                            0.5 * (state.manning_n[ci] + state.manning_n[cj]), dt)
 
-        edges.flux[e] = Q / max(edges.width[e], 1e-6)
-        edge_vol[e]   = Q * dt
+        # Fix A: Froude limiter.
+        # h_flow_eff is the flow depth that _bates_flux saw internally:
+        #   h_flow_eff = max(wse_i_eff, wse_j_eff) - z_sill_eff
+        # z_sill_eff was chosen above so that h_flow_eff ≤ h_flow_cap = max(depth_ci, depth_cj),
+        # so the Froude cap is physically bounded by the actual water column.
+        # This matches the rationale in LISFLOOD-FP SGS_Guidance §5.1.
+        # Floor at zero: floating-point rounding can make z_sill_eff marginally exceed
+        # max(wse_ci_eff, wse_cj_eff), giving a tiny negative h_flow_eff.  In that case
+        # _bates_flux already returned 0.0, so q_raw = 0 and q_max = 0 is correct.
+        h_flow_eff = max(0.0, max(wse_ci_eff, wse_cj_eff) - z_sill_eff)
+        q_raw      = Q_raw / max(edges.width[e], 1e-6)
+        q_max      = h_flow_eff * sqrt(_G * h_flow_eff) * FROUDE_LIMIT
+        q_stored   = clamp(q_raw, -q_max, q_max)
+
+        # Fix C (primary): store the post-Froude-limited q as q_prev for the next step.
+        # Previously, the raw Bates q was stored while Phase B independently capped the
+        # transferred volume — causing divergence between stored momentum and actual
+        # hydraulic state, the SGS analogue of the standard-flow checkerboard driver.
+        edges.flux[e] = q_stored
+        edge_vol[e]   = q_stored * edges.width[e] * dt
     end
 
     # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
@@ -1407,10 +1446,22 @@ function step_sgs!(state::FlowState, dt::Float64)
         cj = edges.cell_j[e]
 
         # Per-edge donor limiter (Bug 46, Fix A Bug 49): V/DONOR_EDGE_DIVISOR = V/10
+        # Fix C (full): if the donor cap further clips ev beyond the Froude-limited value,
+        # back-propagate the clipped q to edges.flux[e] so q_prev next step reflects
+        # what was actually transferred.  This mirrors LISFLOOD-FP SGC behaviour where
+        # QxSGold is written within the flux kernel with no separate limiting divergence.
         if ev > 0.0
-            ev = min(ev,  state.volume[cj] / DONOR_EDGE_DIVISOR)
+            ev_capped = min(ev, state.volume[cj] / DONOR_EDGE_DIVISOR)
+            if ev_capped < ev
+                edges.flux[e] = ev_capped / (max(edges.width[e], 1e-6) * dt)
+            end
+            ev = ev_capped
         else
-            ev = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)
+            ev_capped = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)
+            if ev_capped > ev
+                edges.flux[e] = ev_capped / (max(edges.width[e], 1e-6) * dt)
+            end
+            ev = ev_capped
         end
 
         dV[ci] += ev

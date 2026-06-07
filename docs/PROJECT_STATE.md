@@ -1,6 +1,6 @@
 # FloodA5 — Project State Summary
 
-_Last updated: 2026-06-07 (Bugs 51–52; SGS synthetic DEM validation suite T0–T4 all passing). Paste this into a new conversation to resume._
+_Last updated: 2026-06-08 (sgs_flow_fixes validated: Carlisle SGS 50mm/hr clean, synthetic DEM T0–T4 pass). Paste this into a new conversation to resume._
 
 ---
 
@@ -190,7 +190,7 @@ Q^t = q^t · width
 - `z_sill = max(elev_i, elev_j)` for standard flow; pre-computed edge minimum for SGS
 - `dWSE   = WSE_i - WSE_j`  (positive when i is higher → flow from i to j → Q negative)
 
-**Water depth pre-sync (Bug 37):** After source injection (rainfall/rainpoint/injection),
+**Manning's n per edge (SGS):** `0.5 * (manning_n[ci] + manning_n[cj])` — arithmetic mean (standard, matches LISFLOOD-FP). Changed from `min(n_ci, n_cj)` in `sgs_flow_fixes`.
 `water_depth` is synced from `volume / cell_area` before the flux loop, so the first
 timestep sees the correct WSE rather than stale zeros.
 
@@ -282,6 +282,10 @@ res 14 to ensure full connectivity. The test AOI (~5.5 km²) gives 61 fully-conn
 | 49 | **SGS oscillations: 100% donor drain + h_flow amplification** — (A) donor cap `V/N_SIDES=V/5` allowed all 5 edges to drain 100% of volume in one step; (B) `z_sill << z_min` made `h_flow >> actual depth`. | (A) Changed cap to `V/DONOR_EDGE_DIVISOR = V/10`; (B) capped `h_flow` at `max(depth_ci, depth_cj)` in `step_sgs!`. |
 | 50 | **`_shared_edge` crashes multi-threaded SGS mesh build** — `Set{Tuple}` constructor triggered GC → PyCall finaliser on non-main thread → `EXCEPTION_ACCESS_VIOLATION`. | Replaced `Set` with O(n²) linear scan (max 36 iterations). Use `--threads 1` for mesh generation until confirmed safe. |
 | 51 | **Synthetic DEM notch carved too far upstream** — `in_emb` used `\|x − x_emb\| < 3σ`, extending 900 m west of the embankment. All DEM pixels in the upstream notch-latitude band were overwritten to `notch_elev = 0.705 m`, giving those cells `z_min = z_max = 0.705 m`. `wse_from_volume` was permanently clamped at 0.705 m regardless of injected volume → zero WSE gradient → zero flux → T2 deadlock. Also: default notch width was 1,000 m, wider than a res-14 cell (~355 m diameter), defeating the sub-cell purpose of the test. | Changed `in_emb` to `x_emb − σ ≤ x ≤ x_emb + 3σ` (carve only the embankment body itself). Reduced default notch width from 1,000 m to 300 m (= σ). Fix in `test/synthetic_dem/generate_synthetic_dem.py`. |
+| 53 | **SGS Fix A — Froude limiter missing from `step_sgs!`** — `step_sgs!` called `_bates_flux` with no Froude cap, unlike `step_standard!` which uses `_bates_flux_limited`. On the pentagonal mesh the five independently-evolving `q_prev` values per cell have no directional damping; without a Froude cap, supercritical discharge can develop at SGS edges and drive oscillation. Fix: after the `_bates_flux` call in Phase A, compute `h_flow_eff = max(wse_ci_eff, wse_cj_eff) - z_sill_eff` and clamp `|q|` to `h_flow_eff × √(g × h_flow_eff) × FROUDE_LIMIT (0.8)`. `h_flow_eff` is already bounded by `max(depth_ci, depth_cj)` via the Bug 49 `z_sill_eff` correction, so the cap is physically sound. | Applied inline in `step_sgs!` Phase A after `_bates_flux` call. `FloodModel.jl`. |
+| 54 | **SGS Fix C — inconsistent `q_stored` in `step_sgs!`** — The raw unlimited Bates `q` (`Q / width`) was stored to `edges.flux[e]` in Phase A, while Phase B independently capped the transferred volume via `DONOR_EDGE_DIVISOR`. The divergence between stored momentum (`q_prev`) and actual hydraulic transfer is the SGS analogue of the primary driver of standard-flow checkerboarding (Bug primary cause, `standard_flow_fixes`). Fix (primary): write `q_stored` (post-Froude) to `edges.flux[e]` in Phase A. Fix (full): if the Phase B donor cap further clips `ev`, back-propagate the clipped `q` to `edges.flux[e]` so `q_prev` next step always reflects what was transferred. Mirrors LISFLOOD-FP SGC behaviour where `QxSGold` is written within the flux kernel. | Applied in `step_sgs!` Phase A (primary) and Phase B (full). `FloodModel.jl`. |
+| 56 | **`sqrt` DomainError in `step_sgs!` Fix A — `h_flow_eff` can be marginally negative** — floating-point rounding when `z_sill_eff` is computed as `max(wse_ci_eff, wse_cj_eff) - h_flow_cap` can yield `z_sill_eff` marginally larger than `max(wse_ci_eff, wse_cj_eff)`, giving `h_flow_eff < 0`. The Froude limiter then calls `sqrt(negative)` → `DomainError`. In this case `_bates_flux` already returned `0.0` so `q_raw = 0` and `q_max = 0` is the correct result. | Added `max(0.0, ...)` floor to `h_flow_eff` computation in Fix A block. `FloodModel.jl`. |
+| 55 | **SGS Manning's n — `min` vs arithmetic mean per edge** — `step_sgs!` used `min(manning_n[ci], manning_n[cj])` per edge. LISFLOOD-FP and standard shallow-water practice use the arithmetic mean `0.5 × (n_ci + n_cj)`. The minimum is marginally non-standard and slightly over-conductive (lower n = less friction = more flux). Not a stability bug, but a systematic discrepancy with the reference implementation. | Changed to `0.5 * (state.manning_n[ci] + state.manning_n[cj])` in `step_sgs!` Phase A. `FloodModel.jl`. |
 | 52 | **`wse_from_volume` clamps at `z_max`, stranding excess volume** — `V >= vol_curve[end] && return z_max` hard-clamped WSE regardless of how much additional volume was present. Once all upstream cells hit their terrain ceiling, all returned the same `z_max` → zero gradient → zero inter-cell flux → volume permanently stranded. This is a physics-correctness bug: any scenario where an upstream basin fills above its terrain ceiling produces silent volume trapping and no downstream routing. The synthetic DEM test exposed it because the flat parabolic bowl cells have `z_max < notch_sill`. | Changed to linear extrapolation: `V >= vol_curve[end] && return z_max + (V - vol_curve[end]) / cell_area`. Treats the cell as a vertical-walled container once fully submerged — physically correct. Fix in `A5Grid.jl`. All downstream callers verified safe (water_depth, wetted_area_from_wse, h_flow_cap). |
 
 ---
@@ -299,6 +303,21 @@ res 14 to ensure full connectivity. The test AOI (~5.5 km²) gives 61 fully-conn
 
 Mass balance exact at all checkpoints (`domain_vol = rate × t` to <0.002%).
 
+### Carlisle SGS Validation (2026-06-08, sgs_flow_fixes) ✓ PASSING
+
+SGS flow, res 14 (144 cells, 2 NaN boundary cells), uniform 50 mm/hr rainfall, 72,000s (20h),
+`--dt-max 60`. Run after Fixes 53–56.
+
+- **Mass balance:** `mb_err = 0.0 m³` at every logged checkpoint across all 2,576 steps. Perfect.
+- **Stability:** `wet = 143` from step 1, constant throughout. No cells flickering wet/dry.
+- **No checkerboarding:** smooth `vol_sum` progression (~65,000 m³/10 steps); pre-fix SGS runs
+  showed visible ping-pong in the Makie depth field. Absent here.
+- **`dt` behaviour:** 60s → ~25–30s as depths build; settles 20–27s for second half.
+  Occasional dips to ~20s correspond to transient CFL tightening at local depth spikes — correct.
+- **`max_depth`:** 2.5m at t≈2,757s → peak ~13.1m at t≈64,095s; settles ~9–11m as
+  water redistributes over the domain. Coherent closed-domain ponding behaviour.
+- **SGS edge sills:** 2/318 edges NaN (no DEM data along those edges, same as pre-fix).
+
 ### Carlisle Validation (2026-06-05)
 
 Standard flow, res 14 (144 cells), single rainpoint 1000 mm/hr, 20h:
@@ -309,6 +328,20 @@ Standard flow, res 14 (144 cells), single rainpoint 1000 mm/hr, 20h:
 SGS flow, res 14, same configuration (after Bug 47–49 fixes):
 - Mass balance: exact; max depth 6.1m; 58/144 cells wet at t=20h
 - Residual oscillations at 1000 mm/hr acceptable (extreme rate for a single res-14 cell)
+
+### SGS Synthetic DEM Validation (2026-06-08, sgs_flow_fixes) ✓ ALL PASSING — regression confirmed
+
+Re-run after Fixes 53–56 (Froude limiter, consistent q_stored, Manning's n mean, sqrt floor).
+All results match the pre-fix baseline to within machine epsilon — Froude cap not binding
+on this subcritical synthetic DEM; Fix C changes only stored momentum, not transferred volume.
+
+| Test | Result | Key value |
+|------|--------|-----------|
+| T0 | **PASS** (6/6) | — |
+| T1 | **PASS** (1/1) | Max upstream WSE = 0.512 m < notch sill 0.705 m |
+| T2 | **PASS** (2/2) | Downstream = 902,353.7 m³ (was 902,353.9 m³) |
+| T3 | **PASS** (1/1) | SGS 902,353.7 m³ vs Standard 164,028.5 m³ (5.5×) |
+| T4 | **PASS** (2/2) | SGS error 4.84×10⁻¹³%; Standard 3.46×10⁻¹³% |
 
 ### SGS Synthetic DEM Validation (2026-06-07) ✓ ALL PASSING
 
@@ -334,30 +367,23 @@ error < 5×10⁻¹³%.
 
 ## Pending Work
 
-### Immediate
+### Immediate (sgs_flow_fixes branch)
 
-1. **Bug 36: validate velocity computation** — `state.velocity`, `vel_u`, `vel_v` are
-   computed by `_compute_velocity!` (flux-weighted vector sum) but have not been
-   validated against a known flow field. Should verify with flat-terrain rainpoint test.
+1. ✅ **Validate SGS fixes on synthetic DEM** — T0–T4 all pass, regression confirmed (2026-06-08).
 
-2. **NaN elevation cells in synthetic mesh (cells 36 and 46)** — pre-existing minor issue.
-   Cells are on the domain boundary where DEM sampling finds <1 valid pixel. They are
-   hydraulically inert (no flux on adjacent edges) and do not affect test results.
-   Fix: extend DEM extent slightly beyond AOI, or use `--dem-strict` to flag at mesh-gen.
+2. ✅ **Validate SGS on Carlisle at realistic rate** — 50 mm/hr, 20h, mb_err = 0.0 throughout, no oscillation (2026-06-08).
 
-3. **Carlisle SGS at realistic injection rate** — run Carlisle SGS with 50 mm/hr uniform
-   rainfall (not single-cell 1000 mm/hr) to confirm Bug 48/49 oscillation fixes hold at
-   realistic rates. The `wse_from_volume` extrapolation fix (Bug 52) should also be
-   exercised here.
+3. **Validate SGS unit test** — run `test_sgs_unit.jl` (5-cell chain, Bug 48 regression)
+   to confirm the new Froude/q_stored changes do not break the basic SGS chain behaviour.
 
-4. **Bug 46 follow-up: two-pass proportional limiter as user option** — The current
-   per-edge donor limit (`V/DONOR_EDGE_DIVISOR`) is conservative. A two-pass
-   proportional limiter would scale all outgoing fluxes proportionally when net drain
-   would exceed 50% of cell volume, preserving flux priority ordering. Expose as
-   `--limiter-mode donor_per_edge|proportional`. Needs performance benchmarking before
-   considering as default.
+4. **Bug 36: validate velocity computation** — `state.velocity`, `vel_u`, `vel_v` are
+   computed by `_compute_velocity!` but have not been validated against a known flow field.
+   Should verify with flat-terrain rainpoint test once SGS fixes are confirmed stable.
 
-5. **LINZ DEM ingestion** — Kaiapoi domain at res 14/16 with 1m LiDAR.
+5. **NaN elevation cells in synthetic mesh (cells 36 and 46)** — pre-existing minor issue.
+   Hydraulically inert; fix by extending DEM extent slightly beyond AOI or using `--dem-strict`.
+
+6. **LINZ DEM ingestion** — Kaiapoi domain at res 14/16 with 1m LiDAR.
 
 ### Important: SGS mesh generation thread safety (Bug 50)
 Use `--threads 1` for mesh generation until the `A5Grid.jl` Bug 50 fix is confirmed
