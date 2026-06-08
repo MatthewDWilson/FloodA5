@@ -1,9 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "Carlisle_domain",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"xy_coordinate_resolution": 1e-15,
-"features": [
-{ "type": "Feature", "properties": { "MINX": 338495.0, "MINY": 554700.0, "MAXX": 343250.0, "MAXY": 557760.0, "CNTX": 340872.5, "CNTY": 556230.0, "AREA": 14550300.0, "PERIM": 15630.0, "HEIGHT": 3060.0, "WIDTH": 4755.0 }, "geometry": { "type": "Polygon", "coordinates": [ [ [ -2.960224925399622, 54.883256785418276 ], [ -2.886118255940249, 54.883820259420744 ], [ -2.886722131007295, 54.911314796461518 ], [ -2.960879333544696, 54.910750756870996 ], [ -2.960224925399622, 54.883256785418276 ] ] ] } }
-]
-}
