@@ -1,0 +1,5 @@
+viz/config.json
+savedversions/
+test/**/*.h5
+test/**/*.parquet
+test/**/*.prj
