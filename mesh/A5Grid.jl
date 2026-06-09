@@ -1198,7 +1198,10 @@ are automatically restored from a previously saved mesh.
 """
 function _load_from_geoparquet(path::String, aoi_geojson::String, resolution::Int)::A5Mesh
     @ensure_python
-    path_fwd = replace(path, "\\" => "/")
+    # Resolve to absolute path before handing to the Python subprocess.
+    # The bridge runs with dir=BRIDGE_DIR (mesh/), so relative paths would be
+    # resolved from there rather than from the Julia working directory.
+    path_fwd = replace(abspath(path), "\\" => "/")
     py_code = """
 import geopandas as gpd, json, math
 import numpy as np

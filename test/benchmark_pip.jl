@@ -24,7 +24,7 @@ Requires
 --------
     - CUDA.jl  (optional; GPU benchmarks skipped if not available)
     - BenchmarkTools.jl  (Pkg.add("BenchmarkTools"))
-    - This file must live alongside A5Grid.jl and a5_bridge.py.
+    - A5Grid.jl and a5_bridge.py live in mesh/ relative to the project root.
 
 Notes
 -----
@@ -48,10 +48,11 @@ catch
     false
 end
 
-# ── Load A5Grid (same directory as this script) ───────────────────────────
-const SCRIPT_DIR = @__DIR__
-push!(LOAD_PATH, SCRIPT_DIR)
-include(joinpath(SCRIPT_DIR, "A5Grid.jl"))
+# ── Load A5Grid (mesh/ relative to project root) ─────────────────────────
+const SCRIPT_DIR  = @__DIR__
+const PROJECT_DIR = dirname(SCRIPT_DIR)
+push!(LOAD_PATH, joinpath(PROJECT_DIR, "mesh"))
+include(joinpath(PROJECT_DIR, "mesh", "A5Grid.jl"))
 using .A5Grid
 
 # ── Geometry helpers (duplicated here so benchmark is self-contained) ──────

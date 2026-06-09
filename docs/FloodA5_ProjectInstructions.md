@@ -27,21 +27,33 @@ FloodA5 is a 2D surface-water flood model implemented in Julia, built on the **A
 
 ```
 FloodA5/
-├── FloodModel.jl           # Entry point, CLI, flow model physics, simulation loop
-├── A5Grid.jl               # Julia module: mesh generation, cell query API, SGS tables
-├── VisualisationServer.jl  # Julia module: HTTP + WebSocket server (Oxygen.jl)
-├── MakieVisualiser.jl      # Julia module: GLMakie native desktop viewer
-├── FloodViewer.jl          # (auxiliary viewer utilities)
-├── a5_bridge.py            # Python bridge: pya5 calls, GeoParquet I/O
-├── a5_mesh_diagnostic.py   # Mesh diagnostic utilities
-├── setup.jl                # Package setup / environment bootstrap
-├── benchmark_pip.jl        # Point-in-polygon benchmark
-├── test_a5grid.jl          # A5Grid unit tests
-├── test_edge_geometry.jl   # Edge geometry unit tests
-├── viz/
-│   ├── index.html          # CesiumJS web viewer (single-file, self-contained)
-│   ├── config.json         # Runtime config — gitignored, create from example
-│   └── config.example.json # Committed template
+├── FloodModel.jl              # Entry point, CLI, simulation loop
+├── setup.jl                   # Package setup / environment bootstrap
+├── mesh/
+│   ├── A5Grid.jl              # Julia module: mesh generation, cell query API, SGS tables
+│   ├── a5_bridge.py           # Python bridge: pya5 calls, GeoParquet I/O
+│   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
+├── surfacewater/
+│   └── flow2d.jl              # Pure physics kernels (Bates, Manning R-A, CFL, constants)
+├── visualisation/
+│   ├── MakieVisualiser.jl     # Julia module: GLMakie native desktop viewer
+│   ├── VisualisationServer.jl # Julia module: HTTP + WebSocket server (Oxygen.jl)
+│   ├── FloodViewer.jl         # Standalone post-processing viewer
+│   └── cesium/
+│       ├── index.html         # CesiumJS web viewer (single-file, self-contained)
+│       ├── config.json        # Runtime config — gitignored, create from example
+│       └── config.example.json # Committed template
+├── test/
+│   ├── test_a5grid.jl         # A5Grid unit tests
+│   ├── test_edge_geometry.jl  # Edge geometry unit tests
+│   ├── test_sgs_unit.jl       # SGS unit tests
+│   ├── test_flat_rainpoint.jl # Flat-terrain validation
+│   ├── benchmark_sim.jl       # Simulation performance benchmark
+│   ├── run_benchmarks.ps1/.sh # Thread-sweep benchmark runners
+│   ├── carlisle/              # Carlisle test domain
+│   └── synthetic_dem/         # Synthetic DEM validation suite
+├── examples/
+│   └── example_aoi.geojson    # Example area of interest
 ├── PROJECT_STATE.md        # Cumulative bug log and pending work (kept updated)
 ├── README.md               # User-facing documentation
 └── abstract.md             # Academic abstract (conference/journal submission)
@@ -53,15 +65,15 @@ FloodA5/
 
 ```
 Julia (FloodModel.jl)
-  ├── A5Grid.jl
+  ├── mesh/A5Grid.jl
   │     ├── Phase 1 — PIP sampling  [GPU (CUDA) or CPU threads]
-  │     └── Phase 2 — subprocess → a5_bridge.py
+  │     └── Phase 2 — subprocess → mesh/a5_bridge.py
   │                     ├── pya5: fill_polygon + uncompact (both sublattices)
   │                     ├── grid_disk neighbours + uncompact at target resolution
   │                     ├── coordinate normalisation (NumPy)
   │                     └── geopandas → GeoParquet (EPSG:4326)
   │
-  ├── VisualisationServer.jl  (--vis cesium)
+  ├── visualisation/VisualisationServer.jl  (--vis cesium)
   │     Endpoints:
   │       GET /viz/{file}           static files
   │       GET /mesh                 GeoJSON + ordered cell_ids
@@ -71,7 +83,7 @@ Julia (FloodModel.jl)
   │       GET /status               diagnostics
   │       WS  /live                 JSON notifications
   │
-  └── MakieVisualiser.jl  (--vis makie)
+  └── visualisation/MakieVisualiser.jl  (--vis makie)
         GLMakie Figure: poly!, Colorbar, variable Menu, diagnostics sidebar
 ```
 
@@ -275,7 +287,7 @@ Native desktop window. 1200×760 figure; `poly!` with Observable depth, colorbar
 
 ---
 
-## 11. Python Bridge (`a5_bridge.py`)
+## 11. Python Bridge (`mesh/a5_bridge.py`)
 
 **Key pya5 patterns:**
 - `fill_polygon + uncompact` returns only one sublattice → must collect `grid_disk(cell, 1)` neighbours and add those within AOI to capture both sublattices

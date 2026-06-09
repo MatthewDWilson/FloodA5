@@ -92,7 +92,7 @@ end
 
 Start the HTTP + WebSocket server non-blocking. Returns a VisServer handle.
 """
-function start(; port::Int=8080, viz_dir::String=joinpath(@__DIR__, "viz"))
+function start(; port::Int=8080, viz_dir::String=joinpath(@__DIR__, "cesium"))
     server = VisServer(port, nothing, String[], Frame[],
                        HTTP.WebSockets.WebSocket[],
                        ReentrantLock(), ReentrantLock(), nothing, Base.Event())

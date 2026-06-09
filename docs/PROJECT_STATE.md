@@ -20,22 +20,27 @@ Two visualisation backends: **Cesium** (CesiumJS web viewer, binary wire protoco
 
 ```
 FloodA5/
-├── FloodModel.jl              # Entry point, flow model, CLI, simulation loop
-├── A5Grid.jl                  # Mesh generation, cell query API, SGS tables
-├── VisualisationServer.jl     # HTTP + WebSocket server (Oxygen.jl)
-├── MakieVisualiser.jl         # GLMakie native desktop viewer
-├── a5_bridge.py               # Python bridge: pya5, GeoParquet I/O
-├── a5_mesh_diagnostic.py      # Mesh diagnostic utilities
-├── test_flat_rainpoint.jl     # Flat-terrain point-source validation test
-├── test_sgs_unit.jl           # SGS 5-cell unit test (Bug 48 regression)
-├── benchmark_sim.jl           # Standalone simulation performance benchmark
-├── run_benchmarks.ps1         # PowerShell thread-sweep benchmark runner
-├── run_benchmarks.sh          # Bash equivalent
-├── viz/
-│   ├── index.html             # CesiumJS viewer
-│   ├── config.json            # Runtime config — gitignored
-│   └── config.example.json   # Committed template
+├── FloodModel.jl              # Entry point, CLI, simulation loop
+├── setup.jl
+├── mesh/
+│   ├── A5Grid.jl              # Mesh generation, cell query API, SGS tables
+│   ├── a5_bridge.py           # Python bridge: pya5, GeoParquet I/O
+│   └── a5_mesh_diagnostic.py
+├── surfacewater/
+│   └── flow2d.jl              # Pure physics kernels (Bates, Manning R-A, CFL)
+├── visualisation/
+│   ├── MakieVisualiser.jl     # GLMakie native desktop viewer
+│   ├── VisualisationServer.jl # HTTP + WebSocket server (Oxygen.jl)
+│   ├── FloodViewer.jl         # Standalone post-processing viewer
+│   └── cesium/
+│       ├── index.html         # CesiumJS viewer
+│       ├── config.json        # Runtime config — gitignored
+│       └── config.example.json
 ├── test/
+│   ├── test_flat_rainpoint.jl
+│   ├── test_sgs_unit.jl
+│   ├── benchmark_sim.jl
+│   ├── run_benchmarks.ps1/.sh
 │   ├── flat_test_aoi.geojson  # Small AOI for point-source tests (~5.5 km²)
 │   ├── flat_mesh_res14.parquet # 61-cell flat mesh (no DEM)
 │   ├── kaiapoi_aoi.geojson
@@ -59,18 +64,18 @@ FloodA5/
 
 ```
 Julia (FloodModel.jl)
-  ├── A5Grid.jl
+  ├── mesh/A5Grid.jl
   │     ├── Phase 1: PIP sampling [GPU (CUDA) or CPU threads]
-  │     └── Phase 2: subprocess → a5_bridge.py
+  │     └── Phase 2: subprocess → mesh/a5_bridge.py
   │                   ├── pya5: fill_polygon + uncompact (both sublattices)
   │                   ├── grid_disk neighbours + uncompact
   │                   └── GeoParquet output
   │
-  ├── VisualisationServer.jl  (--vis cesium)
+  ├── visualisation/VisualisationServer.jl  (--vis cesium)
   │     GET /viz/{file}, /mesh, /frames/count, /frames/{idx}, /frames/{idx}/{var}
   │     WS /live — mesh, framecount, newframe, simcomplete
   │
-  └── MakieVisualiser.jl  (--vis makie)
+  └── visualisation/MakieVisualiser.jl  (--vis makie)
         GLMakie Figure: poly!, Colorbar, Menu dropdown, diagnostics sidebar
 ```
 
@@ -123,7 +128,7 @@ julia [--threads auto] FloodModel.jl
 | [08b] | Flat rainpoint 2hr 50mm/hr | Longer run for spread validation |
 | [08c] | Flat rainpoint 1hr 200mm/hr | Accelerated spread test |
 | [08d] | Flat rainpoint 1hr 1000mm/hr | Full-domain stress test |
-| [10] | Validate HDF5 output | Runs `test_flat_rainpoint.jl --analyse [--file 2hr\|200\|1000]` |
+| [10] | Validate HDF5 output | Runs `test/test_flat_rainpoint.jl --analyse [--file 2hr\|200\|1000]` |
 | Python | Mesh diagnostic | `a5_mesh_diagnostic.py` on active file |
 
 **Important:** all Julia configs use `"program": "${workspaceFolder}/FloodModel.jl"` (hardcoded) or the specific script, NOT `"${file}"`. Using `${file}` caused silent failures when the wrong file was active.
@@ -539,11 +544,11 @@ julia --threads 1 --project=. FloodModel.jl `
 julia --threads 1 --project=. test/synthetic_dem/test_sgs_synthetic.jl
 
 # SGS unit test (5-cell chain)
-julia --threads auto --project=. test_sgs_unit.jl
+julia --threads auto --project=. test/test_sgs_unit.jl
 
 # Validate HDF5 output
-julia --project=. test_flat_rainpoint.jl --analyse --file 1000
+julia --project=. test/test_flat_rainpoint.jl --analyse --file 1000
 
 # Thread-sweep benchmark
-.\run_benchmarks.ps1 -Out test/benchmark_results.csv
+.\test\run_benchmarks.ps1 -Out test/benchmark_results.csv
 ```

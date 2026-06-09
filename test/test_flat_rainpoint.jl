@@ -45,7 +45,7 @@ using Printf
 # Configuration
 # ---------------------------------------------------------------------------
 
-const TEST_DIR    = joinpath(@__DIR__, "test")
+const TEST_DIR    = @__DIR__  # test data lives alongside this file in test/
 const AOI_FILE    = joinpath(TEST_DIR, "flat_test_aoi.geojson")
 const MESH_FILE   = joinpath(TEST_DIR, "flat_mesh_res14.parquet")
 const OUTPUT_FILE      = joinpath(TEST_DIR, "flat_rainpoint_out.h5")

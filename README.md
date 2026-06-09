@@ -15,16 +15,24 @@ minimal shape distortion. Two visualisation backends are available: a
 ```
 FloodA5/
 ├── FloodModel.jl          ← Entry point, flow model logic, CLI
-├── A5Grid.jl              ← Julia module: A5 mesh generation & cell query API
-├── VisualisationServer.jl ← Julia module: HTTP + WebSocket server (Oxygen.jl)
-├── MakieVisualiser.jl     ← Julia module: GLMakie native desktop viewer
-├── a5_bridge.py           ← Python bridge: pya5 calls, GeoParquet I/O
-├── viz/
+├── mesh/
+│   ├── A5Grid.jl              ← Julia module: mesh generation & cell query API
+│   ├── a5_bridge.py           ← Python bridge: pya5 calls, GeoParquet I/O
+│   └── a5_mesh_diagnostic.py
+├── surfacewater/
+│   └── flow2d.jl              ← Pure physics kernels (Bates, Manning R-A, CFL)
+├── visualisation/
+│   ├── MakieVisualiser.jl     ← Julia module: GLMakie native desktop viewer
+│   ├── VisualisationServer.jl ← Julia module: HTTP + WebSocket server (Oxygen.jl)
+│   ├── FloodViewer.jl         ← Standalone post-processing viewer
+│   └── cesium/                ← CesiumJS web viewer static files
+├── test/                      ← All tests and benchmarks
 │   ├── index.html         ← CesiumJS web viewer
 │   ├── config.json        ← Runtime config (gitignored — create from example)
 │   └── config.example.json ← Committed config template
 └── data/
     ├── christchurch_aoi.geojson
+examples/
     └── example_aoi.geojson
 ```
 
@@ -34,15 +42,15 @@ FloodA5/
 
 ```
 Julia (FloodModel.jl)
-  ├── A5Grid.jl
+  ├── mesh/A5Grid.jl
   │     ├── Phase 1 — PIP sampling  [Julia: GPU (CUDA) or CPU threads]
-  │     └── Phase 2 — subprocess → a5_bridge.py
+  │     └── Phase 2 — subprocess → mesh/a5_bridge.py
   │                     ├── pya5: fill_polygon + uncompact
   │                     ├── cell_to_boundary × N cells
   │                     ├── coordinate normalisation (NumPy)
   │                     └── geopandas → GeoParquet (EPSG:4326)
   │
-  ├── VisualisationServer.jl  (--vis cesium)
+  ├── visualisation/VisualisationServer.jl  (--vis cesium)
   │     ├── HTTP  GET  /viz/{file}           ← static files (index.html, config.json)
   │     ├── HTTP  GET  /mesh                 ← GeoJSON + ordered cell_ids
   │     ├── HTTP  GET  /frames/count         ← total frame count
@@ -51,7 +59,7 @@ Julia (FloodModel.jl)
   │     ├── HTTP  GET  /status               ← server diagnostics
   │     └── WS    /live                      ← live notifications
   │
-  └── MakieVisualiser.jl  (--vis makie)
+  └── visualisation/MakieVisualiser.jl  (--vis makie)
         └── GLMakie window: polygons, colorbar, variable selector, diagnostics sidebar
 ```
 
@@ -72,7 +80,7 @@ Julia (FloodModel.jl)
 pip install pya5 geopandas pyarrow shapely numpy
 ```
 
-Verify: `python a5_bridge.py check`
+Verify: `python mesh/a5_bridge.py check`
 
 ### Julia packages
 
@@ -87,11 +95,11 @@ Pkg.add(["PyCall", "JSON3", "DataFrames", "CUDA", "BenchmarkTools",
 ### Cesium Ion token (for `--vis cesium` with Google 3D tiles)
 
 ```bash
-cp viz/config.example.json viz/config.json
-# Edit viz/config.json and set your token from ion.cesium.com/tokens
+cp visualisation/cesium/config.example.json visualisation/cesium/config.json
+# Edit visualisation/cesium/config.json and set your token from ion.cesium.com/tokens
 ```
 
-Add `viz/config.json` to `.gitignore`. The viewer validates the token against
+Add `visualisation/cesium/config.json` to `.gitignore`. The viewer validates the token against
 the Ion API at startup and falls back gracefully if it is missing.
 
 ---
@@ -286,8 +294,8 @@ discharge from the previous timestep (stored in `FlowState.edge_flux`).
 ## Python Bridge
 
 ```bash
-python a5_bridge.py check                                    # verify environment
-python a5_bridge.py mesh_for_aoi aoi.geojson 14 out.parquet geoparquet
+python mesh/a5_bridge.py check                                    # verify environment
+python mesh/a5_bridge.py mesh_for_aoi aoi.geojson 14 out.parquet geoparquet
 ```
 
 **Key pya5 quirks:**

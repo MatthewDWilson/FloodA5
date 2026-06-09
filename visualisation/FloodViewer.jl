@@ -23,8 +23,8 @@ Dependencies
   Python env must have: geopandas, pyarrow (for parquet loading)
 """
 
-push!(LOAD_PATH, @__DIR__)
-include(joinpath(@__DIR__, "A5Grid.jl"))
+push!(LOAD_PATH, joinpath(dirname(@__DIR__), "mesh"))
+include(joinpath(dirname(@__DIR__), "mesh", "A5Grid.jl"))
 
 using .A5Grid
 using GLMakie

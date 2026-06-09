@@ -117,15 +117,15 @@ end
 
 println("\n[ 3/4 ] Verifying Python bridge (a5_bridge.py) …")
 
-bridge = joinpath(project_dir, "a5_bridge.py")
+bridge = joinpath(project_dir, "mesh", "a5_bridge.py")
 
 if !isfile(bridge)
-    @error "a5_bridge.py not found at $bridge — is this the project root?"
+    @error "a5_bridge.py not found at $bridge — expected at mesh/a5_bridge.py"
 else
     buf_out = IOBuffer()
     buf_err = IOBuffer()
     result  = run(ignorestatus(pipeline(
-        Cmd([python_exe, bridge, "check"]; dir=project_dir),
+        Cmd([python_exe, bridge, "check"]; dir=joinpath(project_dir, "mesh")),
         stdout=buf_out, stderr=buf_err
     )))
     out = String(take!(buf_out))
@@ -267,7 +267,7 @@ println("""
 
   Quick-start:
     julia --threads auto FloodModel.jl \\
-        --meshgen example_aoi.geojson --meshres 14 --vis
+        --meshgen examples/example_aoi.geojson --meshres 14 --vis
 
   GPU acceleration: $(cuda_ok ? "✓ enabled" : "✗ not available — CPU fallback active")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

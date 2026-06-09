@@ -92,7 +92,7 @@ for N in "${THREAD_COUNTS[@]}"; do
     RUN_INDEX=$((RUN_INDEX + 1))
     echo ""; echo "── Run $RUN_INDEX / $TOTAL  (--threads $N) ──"
     START=$(date +%s)
-    "$JULIA" --threads "$N" benchmark_sim.jl "${COMMON_ARGS[@]}"
+    "$JULIA" --threads "$N" "$(dirname "$0")/benchmark_sim.jl" "${COMMON_ARGS[@]}"
     EXIT_CODE=$?
     ELAPSED=$(( $(date +%s) - START ))
     if [[ $EXIT_CODE -ne 0 ]]; then

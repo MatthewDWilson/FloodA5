@@ -172,7 +172,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # ── Step 2: include FloodModel.jl at top level ────────────────────────
     # This defines A5Grid, SGSFlow, StandardFlow, initialise_flow_model,
     # step_standard!, step_sgs!, _find_nearest_cell, etc. in the current world.
-    project_dir      = dirname(abspath(@__FILE__))
+    project_dir      = dirname(dirname(abspath(@__FILE__)))  # test/ → project root
     flood_model_path = joinpath(project_dir, "FloodModel.jl")
     isfile(flood_model_path) ||
         error("FloodModel.jl not found at $flood_model_path")

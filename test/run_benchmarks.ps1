@@ -87,7 +87,7 @@ foreach ($N in $ThreadCounts) {
     Write-Host "── Run $RunIndex / $TotalRuns  (--threads $N) ──"
 
     $StartTime = Get-Date
-    & $Julia --threads $N benchmark_sim.jl @CommonArgs
+    & $Julia --threads $N "$PSScriptRoot\benchmark_sim.jl" @CommonArgs
     $ExitCode = $LASTEXITCODE
     $Elapsed  = ((Get-Date) - $StartTime).TotalSeconds
 

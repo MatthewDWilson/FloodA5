@@ -23,7 +23,7 @@ using Test, Printf
 
 if abspath(PROGRAM_FILE) == @__FILE__
 
-    project_dir      = dirname(abspath(@__FILE__))
+    project_dir      = dirname(dirname(abspath(@__FILE__)))  # test/ → project root
     flood_model_path = joinpath(project_dir, "FloodModel.jl")
     isfile(flood_model_path) || error("FloodModel.jl not found at $flood_model_path")
 

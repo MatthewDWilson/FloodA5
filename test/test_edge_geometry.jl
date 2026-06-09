@@ -47,8 +47,8 @@ Test structure
       4.6  step_sgs!: global volume conserved
 """
 
-push!(LOAD_PATH, @__DIR__)
-include(joinpath(@__DIR__, "A5Grid.jl"))
+push!(LOAD_PATH, joinpath(dirname(@__DIR__), "mesh"))
+include(joinpath(dirname(@__DIR__), "mesh", "A5Grid.jl"))
 
 # FloodModel.jl is a flat script (no module wrapper).  We include only the
 # parts needed for testing — the physics functions and types — without pulling
@@ -81,7 +81,7 @@ module MakieVisualiser
     push_frame!(args...)      = nothing
 end
 
-include(joinpath(@__DIR__, "FloodModel.jl"))
+include(joinpath(dirname(@__DIR__), "FloodModel.jl"))
 
 # ---------------------------------------------------------------------------
 # Helpers
