@@ -258,7 +258,7 @@ Read in Python with `xarray`, `h5py`, or `pandas`; in Julia with `HDF5.jl`.
 | 14 | ~0.13 km² | ~356 m | Medium catchment |
 | 16 | ~8,000 m² | ~89 m | Small catchment |
 | 18 | ~500 m² | ~22 m | Urban / detailed |
-| 20 | ~31 m² | ~5.6 | Very high-resolution |
+| 20 | ~31 m² | ~5.6 m | Very high-resolution |
 
 ---
 
