@@ -1,4 +1,4 @@
-![Static Badge](https://img.shields.io/badge/Status:-In_development-red)
+![Static Badge](https://img.shields.io/badge/Status:-In_development-green)
 
 
 # A5 Pentagon Flood Model
@@ -194,6 +194,8 @@ julia --threads auto FloodModel.jl --meshload mesh_sgs.parquet
 
 ### CesiumJS viewer (`--vis cesium`)
 
+![Static Badge](https://img.shields.io/badge/Status:-Failing-red)
+
 Open `http://localhost:8080` in a browser while the model runs.
 
 **Variable selector** — dropdown in the left panel switches between:
@@ -249,13 +251,14 @@ Read in Python with `xarray`, `h5py`, or `pandas`; in Julia with `HDF5.jl`.
 
 ## Resolution Guide
 
-| Level | Approx. cell area | Typical use case |
+| Level | Approx. cell area | Spacing | Typical use case |
 |-------|-------------------|------------------|
-| 8 | ~250 km² | Large catchment |
-| 10 | ~50 km² | Medium catchment |
-| 12 | ~10 km² | Small catchment |
-| 14 | ~2 km² | Urban / detailed |
-| 17 | ~0.1 km² | High-resolution |
+| 10 | ~32 km² | ~5.7 km | Very large catchment | 
+| 12 | ~2 km² | ~1.4 km | Large catchment |
+| 14 | ~0.13 km² | ~356 m | Medium catchment |
+| 16 | ~8,000 m² | ~89 m | Small catchment |
+| 18 | ~500 m² |~ ~22 m | Urban / detailed |
+| 20 | ~31 m² | ~5.6 | Very high-resolution |
 
 ---
 
@@ -285,10 +288,8 @@ discharge from the previous timestep (stored in `FlowState.edge_flux`).
 ### Flow model pending work
 
 1. Projection correction for non-orthogonal A5 edges (slope bias)
-2. DEM ingestion: LINZ 1m LiDAR for Christchurch
-3. Boundary conditions: point sources, upstream inflow
-4. Output: NetCDF in addition to HDF5
-
+2. Boundary conditions: point sources, upstream inflow
+3. Automated DEM ingestion
 ---
 
 ## Python Bridge
