@@ -1,6 +1,6 @@
 # FloodA5 — Project State Summary
 
-_Last updated: 2026-06-08 (sgs_ra_flux Stage 1: SGSTable extended with edge R-A hydraulic curves; A5Grid.jl updated; unit test written). Paste this into a new conversation to resume._
+_Last updated: 2026-06-09 (Stage 2 complete: _manning_flux_ra kernel, all unit tests pass, T3 ratio 14.3x). Paste this into a new conversation to resume._
 
 ---
 
@@ -414,7 +414,23 @@ See `FloodA5_SGS_RA_Flux_Implementation.md` for full implementation plan.
 - ✅ Synthetic mesh regenerated with new parquet columns (3.5s build)
 - ✅ T0–T4 regression: all pass, results identical to pre-Stage-1 baseline
 
-**Stage 2 — Flux kernel (⏳ in progress):**
+**Stage 2 — Flux kernel (✅ complete, 2026-06-09):**
+- ✅ `EdgeList.flux_Q` (m³/s, SGS R-A only) — new field, zeros for standard flow
+- ✅ `_adjacency_slot` helper
+- ✅ `_manning_flux_ra` kernel — LISFLOOD-FP SGC formulation with R^(4/3)·A denominator
+- ✅ `step_sgs!` Phase A: replaced Bates+limiters with `_manning_flux_ra`
+- ✅ Phase B: donor cap back-propagates to `flux_Q` (Fix C full)
+- ✅ `_write_frame!`: writes `flux_Q` dataset when non-zero
+- ✅ `test_sgs_unit.jl`: all 49 tests pass; water now reaches cell 5 (58m³ vs 0m³ with Bates+limiter)
+- ✅ T0–T4 all pass; T3: SGS 360,419 m³ vs standard 25,153 m³ (14.3× ratio, up from 5.5×)
+- ✅ T4 mass balance: 1.07×10⁻¹²% (machine epsilon)
+- ✅ Carlisle res 14 legacy mesh: backward-compat fallback confirmed (no crash, no routing)
+- ⏳ **Regenerate Carlisle res 14 SGS mesh** — must include new parquet columns
+- ⏳ **Regenerate Carlisle res 18 SGS mesh** — must include new parquet columns
+- ⏳ **Validate Carlisle res 14 50mm/hr** — confirm no oscillation, mb_err=0
+- ⏳ **Validate Carlisle res 18 1hr** — key test: dt stable, no period-2 oscillation
+
+**Stage 3 — Cleanup (⏳ after validation):**
 - New `EdgeList.flux_Q` array (m³/s, SGS R-A only)
 - New `_manning_flux_ra` function
 - `_adjacency_slot` helper
