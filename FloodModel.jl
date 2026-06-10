@@ -2029,13 +2029,14 @@ Examples:
   julia --threads auto FloodModel.jl \\
       --meshload mesh_sgs.parquet --flow-model standard --sim-duration 1800
 
-Resolution guide (approximate cell area):
-  Level  5  ~5 000 km²  Continental / regional
-  Level  8  ~250 km²    Large catchment
-  Level 10  ~50 km²     Medium catchment
-  Level 12  ~10 km²     Small catchment
-  Level 14  ~2 km²      Urban / detailed
-  Level 17  ~0.1 km²    High-resolution modelling
+Resolution guide (approximate cell area — equal-area globally):
+  Level  5  ~33,100 km²  Continental / regional
+  Level  8  ~518 km²     Large catchment
+  Level 10  ~32 km²      Medium catchment
+  Level 12  ~2.02 km²    Small catchment
+  Level 14  ~12.6 ha     Urban / detailed
+  Level 17  ~1,976 m²    High-resolution modelling
+  Level 18  ~494 m²      High-resolution channel
 """)
     exit(exit_code)
 end

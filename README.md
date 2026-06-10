@@ -257,7 +257,7 @@ Read in Python with `xarray`, `h5py`, or `pandas`; in Julia with `HDF5.jl`.
 | 12 | ~2 km² | ~1.4 km | Large catchment |
 | 14 | ~0.13 km² | ~356 m | Medium catchment |
 | 16 | ~8,000 m² | ~89 m | Small catchment |
-| 18 | ~500 m² | ~22 m | Urban / detailed |
+| 18 | ~494 m² | ~22 m | Urban / detailed |
 | 20 | ~31 m² | ~5.6 m | Very high-resolution |
 
 ---
@@ -309,7 +309,7 @@ python mesh/a5_bridge.py mesh_for_aoi aoi.geojson 14 out.parquet geoparquet
 
 ## Performance
 
-Resolution 14, Kaiapoi / Christchurch AOI (~200 cells in test runs):
+Resolution 14 (~200 cells in test runs):
 
 | Stage | Time |
 |-------|------|

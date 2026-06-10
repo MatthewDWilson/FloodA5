@@ -1750,7 +1750,7 @@ end
 
 Approximate planar area of a lon/lat polygon in m², using the shoelace
 formula on an equirectangular projection centred on the polygon centroid.
-Accurate to ~0.1% for A5 cells at resolution 14 (~km scale).
+Accurate to ~0.1% for A5 cells at resolution 14 (~356 m spacing, ~12.6 ha area).
 """
 function _polygon_area_m2(boundary::Vector{Vector{Float64}})::Float64
     n = length(boundary)
@@ -1826,7 +1826,7 @@ Returns NaN if no shared edge is found (non-adjacent cells).
 Implementation notes
 ---------------------
 All geometry is performed in a local equirectangular projection centred on
-the edge midpoint.  At A5 resolution 14 (~1.4 km cell spacing) the planar
+the edge midpoint.  At A5 resolution 14 (~356 m cell spacing) the planar
 approximation introduces < 0.05% error.  The same projection is used at finer
 resolutions (including multi-resolution meshes in Phase 3), where the error
 is even smaller.

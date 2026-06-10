@@ -20,7 +20,7 @@ The synthetic DEM is a 4 km × 2 km domain with:
 - A parabolic bowl upstream basin (injection point at x = 0.2·Lx, z ≈ 0.21 m)
 - A Gaussian embankment ridge at x = 0.45·Lx (crest ≈ 1.505 m, σ = 300 m)
 - A notch in the embankment centred at y = 0.5·Ly (width 300 m, sill ≈ 0.705 m)
-- 88 A5 pentagonal cells at resolution 14 (~126,200 m² each)
+- 88 A5 pentagonal cells at resolution 14 (~12.6 ha each)
 - 30 upstream cells, 58 downstream cells (partition boundary one cell-width west of embankment)
 
 The notch is a deliberate sub-cell feature: its 300 m width is narrower than a

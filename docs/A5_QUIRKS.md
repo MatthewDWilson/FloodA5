@@ -107,15 +107,24 @@ A5 resolution levels increase with finer cell size (higher number = smaller cell
 
 | Level | Approx. cell area | Cell spacing (≈√area) | Typical use |
 |-------|-------------------|----------------------|-------------|
-| 5 | ~5,000 km² | ~70 km | Continental |
-| 8 | ~250 km² | ~16 km | Large catchment |
-| 10 | ~50 km² | ~7 km | Medium catchment |
-| 12 | ~10 km² | ~3 km | Small catchment |
-| 14 | ~2 km² | ~1.4 km | Urban / detailed |
-| 16 | ~0.5 km² | ~700 m | High-res urban |
-| 17 | ~0.1 km² | ~320 m | LiDAR-scale |
+| 5  | ~33,100 km²  | ~182 km    | Continental |
+| 6  | ~8,295 km²   | ~91 km     | Sub-continental |
+| 7  | ~2,071 km²   | ~45.5 km   | Regional |
+| 8  | ~518 km²     | ~22.8 km   | Large catchment |
+| 9  | ~129 km²     | ~11.4 km   | Medium-large catchment |
+| 10 | ~32.4 km²    | ~5.7 km    | Medium catchment |
+| 11 | ~8.09 km²    | ~2.84 km   | Small-medium catchment |
+| 12 | ~2.02 km²    | ~1.42 km   | Small catchment |
+| 13 | ~50.6 ha     | ~711 m     | Sub-catchment |
+| 14 | ~12.6 ha     | ~356 m     | Urban / detailed |
+| 15 | ~3.16 ha     | ~178 m     | Fine urban |
+| 16 | ~7,902 m²    | ~89 m      | High-res urban |
+| 17 | ~1,976 m²    | ~44 m      | LiDAR-scale |
+| 18 | ~494 m²      | ~22 m      | High-res channel |
+| 19 | ~124 m²      | ~11 m      | Very high-res |
+| 20 | ~30.9 m²     | ~5.6 m     | Ultra high-res |
 
-Cell areas are not exactly constant across a mesh at a given resolution — there is ~5% variability due to the pentagonal geometry. Use `_polygon_area_m2(cell.boundary)` for the exact geodetic area of each cell.
+A5 cell areas are exactly equal for all cells at a given resolution — this equal-area property is a fundamental design characteristic of the A5 DGGS and holds globally regardless of latitude. The values above were measured at lon=172.636°, lat=−43.531° (Christchurch, NZ) but apply everywhere. Use `_polygon_area_m2(cell.boundary)` for the exact geodetic area of each cell as computed from its polygon boundary.
 
 ---
 
