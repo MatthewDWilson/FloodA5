@@ -2,42 +2,87 @@
 # =============================================================================
 #  visualise_mesh.jl
 #  -------------------------------------------------------------------
-#  Produces three publication-quality figures for a given A5 cell:
+#  Produces three publication-quality figures for a given A5 cell read
+#  directly from a FloodA5 GeoParquet mesh file.  Requires no running
+#  model instance — just the mesh file and a cell ID.
 #
 #  Fig 1 — Wire-frame mesh diagram
-#          Shows the target cell and its immediate neighbours with
-#          directional flow arrows from a representative FlowState
-#          (gravity-driven from each cell to its lowest neighbour).
+#           The target cell and its five immediate neighbours drawn as
+#           pentagons (actual boundary vertices from the parquet file).
+#           Green arrows indicate gravity-driven flow direction between
+#           adjacent cells based on bed elevation.
 #
 #  Fig 2 — SGS edge-sill cross-section
-#          Annotated terrain profile along the shared edge between the
-#          target cell and a chosen neighbour slot, showing z_sill, the
-#          water level at a representative stage, and A / P geometry.
+#           Annotated terrain profile along the shared edge of the target
+#           cell and a chosen neighbour slot, showing z_sill, a
+#           representative water surface, and the resulting flow area A,
+#           wetted perimeter P, and hydraulic radius R.
 #
 #  Fig 3 — SGS hypsometric curve
-#          Elevation vs. cumulative volume for the target cell, with
-#          z_min, z_max, z_sill annotated.
+#           Elevation vs. cumulative stored volume V(z) (primary x-axis)
+#           and wetted plan area Aw(z) (top x-axis) for the target cell.
+#           Annotates z_min, z_max, minimum z_sill, and a representative
+#           WSE cross-hair.
 #
-#  Usage:
-#    julia visualise_mesh.jl --mesh PATH.parquet --cell CELL_ID_HEX
-#                            [--outdir ./figures] [--slot 1]
-#                            [--wse WSE_M]
+#  ── Usage ────────────────────────────────────────────────────────────
 #
-#  Requirements: Pkg.add(["CairoMakie","Arrow","DataFrames","ArgParse"])
-#  The script does NOT call A5Grid.jl / FloodModel.jl — it reads the
-#  parquet directly so it can run standalone without the full model env.
+#  Interactive display (default — opens three GLMakie windows):
+#    julia --project=. visualisation/visualise_mesh.jl \
+#        --mesh test/carlisle/carlisle_mesh18_sgs.parquet \
+#        6345f2518e800000
+#
+#  Save SVG + PNG files only, no windows (headless/server):
+#    julia --project=. visualisation/visualise_mesh.jl \
+#        --mesh test/carlisle/carlisle_mesh18_sgs.parquet \
+#        6345f2518e800000 --outdir figures/ --headless
+#
+#  Display AND save:
+#    julia --project=. visualisation/visualise_mesh.jl \
+#        --mesh test/carlisle/carlisle_mesh18_sgs.parquet \
+#        6345f2518e800000 --outdir figures/
+#
+#  All options:
+#    --mesh     PATH     Path to .parquet mesh file  [required]
+#    CELL_ID            Target cell ID as 16-char hex (positional)  [required]
+#    --outdir   PATH     Directory for SVG + PNG output; created if absent.
+#                        If omitted, figures are displayed interactively only.
+#    --slot     1..5     Neighbour adjacency slot for the edge-sill plot  [default: 1]
+#    --wse      FLOAT    Water surface elevation (m) for SGS annotations.
+#                        Default: z_min + 0.5*(z_max - z_min)
+#    --dpi      INT      PNG resolution when saving files  [default: 150]
+#    --headless          Suppress interactive windows. Requires --outdir
+#                        or no output will be produced.
+#
+#  Note (PowerShell): use a backtick ` for line continuation, not \.
+#    Cell IDs must not have a trailing \ — use: ... 6345f2518e800000
+#
+#  ── Dependencies ─────────────────────────────────────────────────────
+#
+#  Loaded via include() from the FloodA5 project:
+#    A5Grid.jl  (mesh/A5Grid.jl relative to the project root)
+#
+#  Julia packages (add once with ] add if missing):
+#    DataFrames, CairoMakie, GLMakie, ArgParse
+#    (Statistics, Printf, LinearAlgebra are Julia standard library)
+#
+#  Makie backends:
+#    GLMakie   — interactive display (native windows; blocks until closed)
+#    CairoMakie — file output (SVG vector + PNG raster, no display needed)
+#    Both are activated as needed; they coexist in the same Julia session.
+#
 # =============================================================================
 
-using DataFrames, CairoMakie, ArgParse, Statistics, Printf, LinearAlgebra
+# Makie backends imported but not yet activated — activation happens in main()
+# based on --headless flag and whether --outdir is provided.
+using DataFrames, ArgParse, Statistics, Printf, LinearAlgebra
+using GLMakie        # interactive windows — exports Figure, Axis, lines!, etc.
+import CairoMakie    # file saving — called as CairoMakie.save(...)
 
-# Include A5Grid for load_mesh_geoparquet — adjust path if script is not in
-# a subdirectory of the FloodA5 root (e.g. use "../A5Grid.jl" from visualisation/)
+# A5Grid provides load_mesh_geoparquet, _to_hex, and cell boundary data.
+# Adjust _A5GRID_PATH if the directory layout changes.
 const _A5GRID_PATH = joinpath(@__DIR__, "..", "mesh", "A5Grid.jl")
 include(_A5GRID_PATH)
 using .A5Grid
-
-# ── Package bootstrap (run once if packages are missing) ─────────────────
-# import Pkg; Pkg.add(["DataFrames", "CairoMakie", "ArgParse"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,8 +102,13 @@ function parse_args_()
             help     = "Target cell ID (16-char hex), e.g. 6345f2518e800000"
         "--outdir"
             arg_type = String
-            default  = "."
-            help     = "Output directory for figures (created if absent)"
+            default  = nothing
+            help     = "Output directory: if given, saves SVG+PNG files there. " *
+                       "If omitted, figures are shown interactively (requires a display)."
+        "--headless"
+            action   = :store_true
+            help     = "Suppress interactive Makie windows (useful on servers). " *
+                       "Requires --outdir to produce any output."
         "--slot"
             arg_type = Int
             default  = 1
@@ -242,7 +292,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 #  Figure 1 — Wire-frame mesh diagram
 # ─────────────────────────────────────────────────────────────────────────────
-function fig_wireframe(df, idx, adj, target_id, outdir, dpi)
+function fig_wireframe(df, idx, adj, target_id, outdir, dpi, headless)
     @info "Drawing wire-frame mesh diagram..."
     row0 = idx[target_id]
 
@@ -345,14 +395,14 @@ function fig_wireframe(df, idx, adj, target_id, outdir, dpi)
         ["Target cell", "Neighbour cells", "Flow direction"],
         framevisible=false, labelsize=11)
 
-    save_figure(fig, outdir, "fig1_wireframe", dpi)
+    output_figure(fig, outdir, "fig1_wireframe", dpi, headless)
     return fig
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Figure 2 — Edge-sill cross-section
 # ─────────────────────────────────────────────────────────────────────────────
-function fig_edge_sill(df, idx, adj, target_id, slot, wse_arg, outdir, dpi)
+function fig_edge_sill(df, idx, adj, target_id, slot, wse_arg, outdir, dpi, headless)
     @info "Drawing edge-sill cross-section (slot $slot)..."
     row0 = idx[target_id]
 
@@ -509,14 +559,14 @@ function fig_edge_sill(df, idx, adj, target_id, slot, wse_arg, outdir, dpi)
         ["Terrain", "Water body", "z_sill", "WSE"],
         framevisible=false, labelsize=11)
 
-    save_figure(fig, outdir, "fig2_edge_sill", dpi)
+    output_figure(fig, outdir, "fig2_edge_sill", dpi, headless)
     return fig
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Figure 3 — Hypsometric curve
 # ─────────────────────────────────────────────────────────────────────────────
-function fig_hypsometric(df, idx, target_id, wse_arg, outdir, dpi)
+function fig_hypsometric(df, idx, target_id, wse_arg, outdir, dpi, headless)
     @info "Drawing hypsometric curve..."
     row0 = idx[target_id]
 
@@ -638,21 +688,27 @@ function fig_hypsometric(df, idx, target_id, wse_arg, outdir, dpi)
     Legend(fig[2,1], elems, labs, orientation=:horizontal,
            framevisible=false, labelsize=11)
 
-    save_figure(fig, outdir, "fig3_hypsometric", dpi)
+    output_figure(fig, outdir, "fig3_hypsometric", dpi, headless)
     return fig
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Save helper (SVG + PNG)
+#  Output helper — saves files and/or shows interactive window
 # ─────────────────────────────────────────────────────────────────────────────
-function save_figure(fig, outdir, name, dpi)
-    mkpath(outdir)
-    svg_path = joinpath(outdir, "$name.svg")
-    png_path = joinpath(outdir, "$name.png")
-    save(svg_path, fig)
-    save(png_path, fig, px_per_unit = dpi / 96.0)
-    @info "  Saved: $svg_path"
-    @info "  Saved: $png_path"
+function output_figure(fig, outdir, name, dpi, headless)
+    if !isnothing(outdir)
+        # Save using CairoMakie (vector SVG + raster PNG)
+        mkpath(outdir)
+        svg_path = joinpath(outdir, "$name.svg")
+        png_path = joinpath(outdir, "$name.png")
+        CairoMakie.save(svg_path, fig)
+        CairoMakie.save(png_path, fig, px_per_unit = dpi / 96.0)
+        @info "  Saved: $svg_path"
+        @info "  Saved: $png_path"
+    end
+    if !headless
+        display(GLMakie.Screen(), fig)
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -666,10 +722,21 @@ function main()
     # may append when using \ as a mistaken line continuation character
     raw_cell = strip(args["cell"], [' ', '\\', '/', '"', '\'', '\t', '\n', '\r'])
     cell_id  = lpad(string(parse(UInt64, raw_cell, base=16), base=16), 16, '0')
-    outdir    = args["outdir"]
+    outdir    = args["outdir"]   # String or nothing
+    headless  = args["headless"]  # Bool
     slot      = args["slot"]
     wse_arg   = args["wse"]
     dpi       = args["dpi"]
+
+    # Select Makie backend:
+    #   interactive display -> GLMakie (opens native windows)
+    #   headless / file-only -> CairoMakie (no display needed)
+    # GLMakie is the active backend (loaded via `using`), providing all
+    # Makie names (Figure, Axis, lines!, …) in scope.  File saving uses
+    # CairoMakie.save() explicitly — the two coexist without activate!().
+
+    isnothing(outdir) && headless &&
+        @warn "No --outdir given and --headless set: no output will be produced."
 
     @info "Loading parquet: $mesh_path"
     df, idx, adj, has_sgs = load_parquet(mesh_path)
@@ -682,11 +749,21 @@ function main()
     nbs = get(adj, cell_id, String[])
     @info "  Target cell: $cell_id  |  $(length(nbs)) neighbours: $(join([n[1:8]*"…" for n in nbs], ", "))"
 
-    fig_wireframe(df, idx, adj, cell_id, outdir, dpi)
-    fig_edge_sill(df, idx, adj, cell_id, slot, wse_arg, outdir, dpi)
-    fig_hypsometric(df, idx, cell_id, wse_arg, outdir, dpi)
+    figs = filter!(!isnothing, [
+        fig_wireframe(df, idx, adj, cell_id, outdir, dpi, headless),
+        fig_edge_sill(df, idx, adj, cell_id, slot, wse_arg, outdir, dpi, headless),
+        fig_hypsometric(df, idx, cell_id, wse_arg, outdir, dpi, headless),
+    ])
 
-    @info "Done.  Output directory: $(abspath(outdir))"
+    if !headless && !isempty(figs)
+        @info "Figures displayed — close all windows to exit."
+        # Base.wait(screen) blocks until the render task finishes (i.e. window closed).
+        # GLMakie.ALL_SCREENS tracks every Screen created in this session.
+        for scr in copy(GLMakie.ALL_SCREENS)
+            scr.window_open[] && wait(scr)
+        end
+    end
+    !isnothing(outdir) && @info "Done.  Output directory: $(abspath(outdir))"
+
 end
-
 main()
