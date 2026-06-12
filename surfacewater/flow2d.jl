@@ -41,7 +41,7 @@ const HFLOW_THRESHOLD = 0.001
 # Unit discharge is capped at q_max = h_flow × √(g × h_flow) × FROUDE_LIMIT.
 # This suppresses the supercritical oscillation mode that drives checkerboarding
 # in inertial models on irregular meshes.
-const FROUDE_LIMIT = 0.8
+const FROUDE_LIMIT = 0.5
 
 # ---------------------------------------------------------------------------
 # Bates et al. (2010) inertial formulation

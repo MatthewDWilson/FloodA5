@@ -3,3 +3,4 @@ savedversions/
 test/**/*.h5
 test/**/*.parquet
 test/**/*.prj
+zipfiles/

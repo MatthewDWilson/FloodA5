@@ -59,6 +59,7 @@ using JSON3
 using Dates
 using Statistics: mean
 using HDF5
+using ArchGDAL
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1037,7 +1038,14 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
         ci  = ge.cell_index
         state.cell_area[ci] < 1.0 && continue
 
+        # Guard: NaN elevation cells are hydraulically inert (outside DEM extent).
+        # Without this check, wse_ci = NaN + volume/area = NaN, which propagates
+        # through _bates_ghost_flux → dV=NaN → volume[ci]=NaN, and from there
+        # the donor cap spreads NaN to all neighbouring cells within a few steps.
+        isnan(state.elevation[ci]) && continue
+
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
+        isnan(wse_ci) && continue   # defensive: volume itself NaN — skip rather than propagate
 
         # Fetch interior neighbour WSE for gradient extrapolation
         nb_idx = ge.interior_nb_idx
@@ -1090,6 +1098,7 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         isnan(tbl.z_min) && continue
 
         wse_ci = wse_from_volume(tbl, state.volume[ci])
+        isnan(wse_ci) && continue   # defensive: SGS table or volume degenerate — skip
 
         # Fetch interior neighbour WSE for gradient extrapolation
         nb_idx = ge.interior_nb_idx
@@ -1695,12 +1704,20 @@ function run_simulation!(state            :: FlowState,
 
         # ── Debug: post-source volume check (first 5 steps + every 10th) ───
         if step <= 5 || step % 10 == 0
-            rp_srcs  = filter(s -> s isa RainPoint, merged_sources)
-            src_vols = [state.volume[s.cell_index] for s in rp_srcs]
-            wet_now  = count(>(1e-4), state.water_depth)
+            # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
+            # so src_vol is non-empty when only InflowPoints are active.
+            all_pt_srcs = filter(s -> hasproperty(s, :cell_index), merged_sources)
+            src_vols    = [state.volume[s.cell_index] for s in all_pt_srcs]
+            src_labels  = [source_label(s) for s in all_pt_srcs]
+            wet_now     = count(>(1e-4), state.water_depth)
             non_src_wet = count(i -> state.water_depth[i] > 1e-4 &&
-                all(s.cell_index != i for s in rp_srcs), eachindex(state.volume))
-            @info "  Step $step: vol_sum=$(round(sum(state.volume),sigdigits=5))  " *
+                all(s.cell_index != i for s in all_pt_srcs), eachindex(state.volume))
+            vol_sum_now = sum(v for v in state.volume if isfinite(v); init=0.0)
+            nan_count   = count(isnan, state.volume)
+            nan_str     = nan_count > 0 ? "  NaN_cells=$nan_count ⚠" : ""
+            src_str     = join(src_labels, ", ")
+            @info "  Step $step: vol_sum=$(round(vol_sum_now,sigdigits=5))$nan_str  " *
+                  "src=$src_str  " *
                   "src_vol=$(round.(src_vols,sigdigits=5))  " *
                   "wet=$wet_now (non-src=$non_src_wet)  dt=$dt"
         end
@@ -1774,9 +1791,11 @@ function run_simulation!(state            :: FlowState,
             # For closed-boundary runs vol_removed stays 0 and mb_err ≈ 0.
             input_vol  = total_cumulative_input(merged_sources, rainfall_rate,
                                                  state.cell_area, t)
-            domain_vol = sum(state.volume)
+            domain_vol = sum(v for v in state.volume if isfinite(v); init=0.0)
+            nan_vols   = count(isnan, state.volume)
             mb_err     = input_vol - domain_vol - state.vol_removed
-            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  vol_removed=$(round(state.vol_removed,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³"
+            nan_warn   = nan_vols > 0 ? "  ⚠ NaN_cells=$nan_vols" : ""
+            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  vol_removed=$(round(state.vol_removed,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³$nan_warn"
         end
     end
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
@@ -1836,6 +1855,7 @@ function run_flood_model(;
     # ── Dynamic inflow / boundary conditions (Feature 1 & 2) ───────────────
     inflow_specs      :: Vector = [],          # (lat, lon, path[, label]) tuples
     inflow_bci_path   :: Union{String,Nothing} = nothing,
+    inflow_bdy_path   :: Union{String,Nothing} = nothing,  # explicit .bdy override
     bc_file_path      :: Union{String,Nothing} = nothing,
     closed_boundaries :: Bool   = false,
     bc_epsg           :: Union{Int,Nothing} = nothing,
@@ -2096,7 +2116,8 @@ function run_flood_model(;
     # Resolve --inflow-bci file
     if inflow_bci_path !== nothing
         @info "Loading BCI file: $inflow_bci_path"
-        bci_entries, bci_series = parse_bci_file(inflow_bci_path)
+        bci_entries, bci_series = parse_bci_file(inflow_bci_path;
+                                                   bdy_path = inflow_bdy_path)
         for entry in bci_entries
             entry.boundary_type != 'P' && continue   # N/E/S/W handled below
             lon_e = entry.x1
@@ -2155,19 +2176,22 @@ function run_flood_model(;
     end
 
     # For Makie source_indices include inflow points
-    inflow_points_resolved = filter(s -> s isa InflowPoint, all_sources)
+    inflow_points_resolved  = filter(s -> s isa InflowPoint,    all_sources)
     injection_points_compat = filter(s -> s isa InjectionPoint, all_sources)
     rain_points_compat      = filter(s -> s isa RainPoint,      all_sources)
 
     # 7b. Open Makie viewer now that source indices and the flow adjacency dict
     # are both known.
     if vis_mode === :makie
-        src_label      = basename(mesh_source[2])
-        source_indices = vcat(
-            [s.cell_index for s in injection_points_compat],
-            [s.cell_index for s in rain_points_compat],
-            [s.cell_index for s in inflow_points_resolved],
-        )
+        src_label = basename(mesh_source[2])
+        # Explicitly typed Int[] comprehensions prevent vcat from inferring
+        # Vector{Any} when any of the filtered lists happens to be empty
+        # (which triggers TypeError in MakieVisualiser.start).
+        source_indices = Int[
+            (Int[s.cell_index for s in injection_points_compat])...,
+            (Int[s.cell_index for s in rain_points_compat])...,
+            (Int[s.cell_index for s in inflow_points_resolved])...,
+        ]
         @info "Opening Makie viewer ($(length(mesh)) cells, " *
               "$(length(source_indices)) source cell(s), ring mode active)..."
         vis = MakieVisualiser.start(mesh;
@@ -2324,6 +2348,13 @@ Flow model options:
                      FREE entries set open outflow at that boundary cell.
                      N/E/S/W and F entries are not currently supported (logged).
                      Example: --inflow-bci carlisle_inflows.bci
+
+  --inflow-bdy FILE  Explicit path to the LISFLOOD-FP .bdy time-series file used
+                     by QVAR entries in --inflow-bci. By default, FloodA5 looks
+                     for a .bdy file with the same stem as the .bci file in the
+                     same directory. Use this flag when the two files have
+                     different names or are in different directories.
+                     Example: --inflow-bdy test/carlisle/carlisle_wgs84.bdy
 
 Boundary condition options:
   --bc-file FILE     GeoJSON file specifying boundary condition types per segment.
@@ -2558,14 +2589,42 @@ end
 Convert projected coordinates (x=easting, y=northing) in the given EPSG CRS
 to WGS 84 decimal degrees using ArchGDAL coordinate transform.
 Used when --bc-epsg is specified for .bci files with projected coordinates.
+
+Mirrors the `_crs_gis` / `_reproject_to_dem` pattern used in A5Grid.jl:
+  • `ArchGDAL.GDAL.osrsetaxismappingstrategy(crs, OAMS_TRADITIONAL_GIS_ORDER)`
+    forces x=easting/longitude, y=northing/latitude on both CRS objects,
+    overriding GDAL ≥ 3 behaviour that otherwise honours the official
+    EPSG:4326 (lat, lon) axis order.
+  • `ArchGDAL.createcoordtrans` is called with a do-block; it does not return
+    a usable object when called without one (MethodError in ArchGDAL 0.10.x).
 """
 function _convert_coords_to_lonlat(x::Float64, y::Float64, epsg::Int)
     try
-        src_crs  = ArchGDAL.importEPSG(epsg)
-        dst_crs  = ArchGDAL.importEPSG(4326)
-        transform = ArchGDAL.createcoordtrans(src_crs, dst_crs)
-        result   = ArchGDAL.transform!([x], [y], [0.0], transform)
-        return (result[1][1], result[2][1])
+        # Build CRS objects with traditional (x=lon/easting, y=lat/northing)
+        # axis order — identical to A5Grid._crs_gis().
+        src_crs = ArchGDAL.importEPSG(epsg)
+        ArchGDAL.GDAL.osrsetaxismappingstrategy(
+            src_crs, ArchGDAL.GDAL.OAMS_TRADITIONAL_GIS_ORDER)
+
+        dst_crs = ArchGDAL.importEPSG(4326)
+        ArchGDAL.GDAL.osrsetaxismappingstrategy(
+            dst_crs, ArchGDAL.GDAL.OAMS_TRADITIONAL_GIS_ORDER)
+
+        xs = [x];  ys = [y];  zs = [0.0]
+        ArchGDAL.createcoordtrans(src_crs, dst_crs) do xform
+            ArchGDAL.transform!(xs, ys, zs, xform)
+        end
+        lon_out, lat_out = xs[1], ys[1]
+
+        # Sanity check — if still out of WGS84 range something is wrong.
+        if abs(lon_out) > 180.0 || abs(lat_out) > 90.0
+            @warn "_convert_coords_to_lonlat: output " *
+                  "(lon=$(round(lon_out,digits=3)), lat=$(round(lat_out,digits=3))) " *
+                  "is outside WGS84 range after transform from EPSG:$epsg. " *
+                  "Check that the input coordinates are in the stated CRS."
+        end
+
+        return (lon_out, lat_out)
     catch e
         @warn "_convert_coords_to_lonlat: failed to convert ($x, $y) from EPSG:$epsg to WGS84: $e. Using coordinates as-is."
         return (x, y)
@@ -2718,6 +2777,14 @@ function main(args=String[])
     length(inflow_bci_paths) > 1 &&
         @warn "Multiple --inflow-bci files specified; only the last is used: $inflow_bci_path"
 
+    # --inflow-bdy file  (explicit .bdy override; optional)
+    inflow_bdy_val, args = _pop_flag(args, "--inflow-bdy")
+    inflow_bdy_path = inflow_bdy_val !== nothing ? inflow_bdy_val : nothing
+    if inflow_bdy_path !== nothing && !isfile(inflow_bdy_path)
+        @warn "--inflow-bdy: file not found: $inflow_bdy_path"
+        inflow_bdy_path = nothing
+    end
+
     # --bc-file file  (GeoJSON boundary condition override)
     bc_file_val, args = _pop_flag(args, "--bc-file")
 
@@ -2772,6 +2839,7 @@ function main(args=String[])
         rainpoint_specs  = rainpoint_specs,
         inflow_specs     = inflow_specs,
         inflow_bci_path  = inflow_bci_path,
+        inflow_bdy_path  = inflow_bdy_path,
         bc_file_path     = bc_file_val,
         closed_boundaries = closed_boundaries,
         bc_epsg          = bc_epsg,
