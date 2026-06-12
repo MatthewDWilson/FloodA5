@@ -59,6 +59,7 @@ using JSON3
 using Dates
 using Statistics: mean
 using HDF5
+using ArchGDAL
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -144,6 +145,82 @@ struct EdgeList
                                     #   used by SGS R-A kernel only; zero otherwise
 end
 
+# BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
+# They are defined here rather than in boundary_conditions.jl so that FlowState can
+# reference them directly.  The full boundary_conditions.jl (which builds on these types)
+# is included later after InjectionPoint and RainPoint are defined.
+
+"""
+    BCType
+
+Boundary condition type for domain-edge (ghost) edges.
+See `boundaryinputs/boundary_conditions.jl` for full documentation.
+"""
+@enum BCType begin
+    Closed
+    ZeroGradient
+    Critical
+    FixedWSE
+    FixedQ
+end
+
+"""
+    GhostEdge
+
+Pre-computed geometry and momentum state for a virtual edge at the domain boundary.
+See `boundaryinputs/boundary_conditions.jl` for full documentation.
+"""
+mutable struct GhostEdge
+    cell_index       :: Int      # boundary cell index
+    width            :: Float64  # actual missing-edge haversine length (m)
+    L                :: Float64  # cell-centre to ghost-centre distance (m)
+    sill             :: Float64  # bed elevation at this edge (m)
+    flux_prev        :: Float64  # momentum state (q m²/s or Q m³/s)
+    is_Q_flux        :: Bool     # true = SGS R-A Q (m³/s); false = standard q (m²/s)
+    interior_nb_idx  :: Int      # index of the interior neighbour most aligned with
+                                 # the outward normal; used for gradient extrapolation.
+                                 # 0 if no interior neighbour found (isolated boundary).
+    interior_nb_L    :: Float64  # haversine distance ci → interior_nb (m)
+end
+
+# InjectionPoint and RainPoint are defined here (before FlowState and before the
+# boundaryinputs includes) because sources.jl dispatches apply_source! on these
+# types using concrete type annotations, which Julia resolves at include time.
+
+"""
+    InjectionPoint
+
+A fixed-rate point source: water added to the nearest mesh cell at a
+constant volumetric flow rate (m³/s) for the duration of the simulation.
+"""
+struct InjectionPoint
+    cell_index :: Int       # index into state.cell_ids
+    cell_id    :: String    # hex cell ID (for logging)
+    rate_m3s   :: Float64   # volumetric flow rate (m³/s)
+    lon        :: Float64   # source longitude (degrees)
+    lat        :: Float64   # source latitude (degrees)
+end
+
+"""
+    RainPoint
+
+A localised rainfall source: water added to the nearest mesh cell at a
+rate equivalent to a given rainfall intensity (mm/hr) applied over that
+cell's plan area.  Unlike `--rainfall` (which applies to every cell),
+`--rainpoint` applies only to the single nearest cell.
+
+`rate_m3s` is pre-computed as `rainfall_mm_hr / 3_600_000 × cell_area_m2`
+and stored so the simulation loop is identical to the InjectionPoint path.
+"""
+struct RainPoint
+    cell_index     :: Int       # index into state.cell_ids
+    cell_id        :: String    # hex cell ID (for logging)
+    rate_m3s       :: Float64   # volumetric flow rate (m³/s) = mm_hr/3.6e6 × area
+    lon            :: Float64   # requested longitude (degrees)
+    lat            :: Float64   # requested latitude (degrees)
+    rainfall_mm_hr :: Float64   # original user input (mm/hr) — for logging
+end
+
 """
 Hydrodynamic state of the flood model at a single timestep.
 
@@ -171,6 +248,14 @@ mutable struct FlowState
     adj_matrix  :: Matrix{Int}       # (max_nb × n_cells) index matrix, 0=none
     edges       :: EdgeList          # all undirected edges, computed once
     sgs_tables  :: Vector{Any}       # Vector{SGSTable} (SGSFlow) or empty
+    # ── Open boundary / ghost-edge fields (Feature 2) ────────────────────
+    # These are populated by _build_ghost_edges() in initialise_flow_model.
+    # If _build_ghost_edges has not been called (legacy construction), these
+    # have safe empty/zero defaults so existing code is unaffected.
+    boundary_mask  :: BitVector       # true = domain-edge cell (< N_SIDES neighbours)
+    ghost_edges    :: Vector{Any}     # Vector{GhostEdge} — one per missing edge slot
+    ghost_cell_bc  :: Vector{Any}     # Vector{BCType}    — BC type per ghost edge
+    vol_removed    :: Float64         # cumulative outflow through ghost edges (m³)
 end
 
 # ---------------------------------------------------------------------------
@@ -783,6 +868,19 @@ function initialise_flow_model(mesh::A5Mesh,
     # Check graph connectivity -- warn if mesh has isolated components
     _check_mesh_connectivity(edges, n)
 
+    # ── Ghost edges for open/closed boundary conditions ─────────────────────
+    # Boundary cells are those with fewer than N_SIDES neighbours.  Ghost edges
+    # are pre-computed once here so the per-step Phase E boundary flux loop
+    # has all geometry ready without recomputation.
+    # default_bc is ZeroGradient (open outflow) unless overridden by the caller
+    # (e.g. via --closed-boundaries or a --bc-file).
+    # The boundary inputs includes are loaded after InjectionPoint/RainPoint
+    # are defined; _build_ghost_edges is defined in boundary_conditions.jl.
+    @info "Building ghost edges (boundary BCs)..."
+    boundary_mask, ghost_edges, ghost_cell_bc =
+        _build_ghost_edges(mesh.cells, adj, id_idx, edges,
+                           elevations, sgs_tables, N_SIDES, ZeroGradient)
+
     volumes = zeros(Float64, n)
 
     lons = [c.center_lon for c in mesh.cells]
@@ -804,6 +902,10 @@ function initialise_flow_model(mesh::A5Mesh,
         adj_matrix,
         edges,
         sgs_tables,
+        boundary_mask,
+        ghost_edges,
+        ghost_cell_bc,
+        0.0,       # vol_removed
     )
 end
 
@@ -825,6 +927,7 @@ initialise_flow_model(mesh::A5Mesh) = initialise_flow_model(mesh, StandardFlow()
 # ENV note: this include contains only definitions — no top-level execution.
 
 include(joinpath(@__DIR__, "surfacewater", "flow2d.jl"))
+
 
 """
     step_standard!(state, dt)
@@ -899,7 +1002,146 @@ function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
 end
 
 # ---------------------------------------------------------------------------
-# Velocity computation — called at end of every step_standard! / step_sgs!
+# Boundary inputs — deferred includes
+# ---------------------------------------------------------------------------
+# These files depend on FlowState, InjectionPoint, RainPoint, BCType (via
+# boundary_conditions.jl) and the ghost flux kernels in flow2d.jl.  They must
+# be included after all of the above are defined.
+
+include(joinpath(@__DIR__, "boundaryinputs", "boundary_conditions.jl"))
+include(joinpath(@__DIR__, "boundaryinputs", "sources.jl"))
+include(joinpath(@__DIR__, "boundaryinputs", "timeseries_io.jl"))
+
+# ---------------------------------------------------------------------------
+# Ghost-edge flux application (Phase D of step_standard! / step_sgs!)
+# ---------------------------------------------------------------------------
+
+"""
+    _apply_ghost_fluxes_standard!(state, dt)
+
+Apply open-boundary outflow fluxes for the standard (non-SGS) solver.
+Called as Phase D of `step_standard!` after the interior edge scatter.
+
+For each ghost edge whose BC type is not Closed:
+  1. Compute ghost-cell WSE via `_ghost_wse`.
+  2. Call `_bates_ghost_flux` to get Q_out and updated q_stored.
+  3. Apply donor cap (same DONOR_EDGE_DIVISOR as interior edges).
+  4. Subtract volume from the boundary cell; accumulate in `state.vol_removed`.
+  5. Update `ghost_edge.flux_prev` (Fix C write-back for ghost edges).
+"""
+function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
+    for (idx, ge_any) in enumerate(state.ghost_edges)
+        bc = state.ghost_cell_bc[idx]
+        bc === Closed && continue
+
+        ge  = ge_any :: GhostEdge
+        ci  = ge.cell_index
+        state.cell_area[ci] < 1.0 && continue
+
+        # Guard: NaN elevation cells are hydraulically inert (outside DEM extent).
+        # Without this check, wse_ci = NaN + volume/area = NaN, which propagates
+        # through _bates_ghost_flux → dV=NaN → volume[ci]=NaN, and from there
+        # the donor cap spreads NaN to all neighbouring cells within a few steps.
+        isnan(state.elevation[ci]) && continue
+
+        wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
+        isnan(wse_ci) && continue   # defensive: volume itself NaN — skip rather than propagate
+
+        # Fetch interior neighbour WSE for gradient extrapolation
+        nb_idx = ge.interior_nb_idx
+        wse_nb = nb_idx > 0 ?
+                 state.elevation[nb_idx] + state.volume[nb_idx] / max(state.cell_area[nb_idx], 1.0) :
+                 NaN
+
+        wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, ge.interior_nb_L, ge.L)
+        wse_ghost == -Inf && continue
+
+        Q_out, q_stored = _bates_ghost_flux(
+            ge.flux_prev, wse_ci, wse_ghost, ge.sill,
+            ge.width, ge.L, state.manning_n[ci], dt,
+            state.water_depth[ci])
+
+        dV = Q_out * dt
+        dV = min(dV, state.volume[ci] / DONOR_EDGE_DIVISOR)
+        dV = max(dV, 0.0)
+
+        state.volume[ci]      = max(0.0, state.volume[ci] - dV)
+        state.water_depth[ci] = state.volume[ci] / max(state.cell_area[ci], 1.0)
+        state.vol_removed    += dV
+
+        # Fix C: update ghost edge momentum state (preserve interior_nb fields)
+        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
+                                            ge.sill, q_stored, false,
+                                            ge.interior_nb_idx, ge.interior_nb_L)
+    end
+end
+
+"""
+    _apply_ghost_fluxes_sgs!(state, dt)
+
+Apply open-boundary outflow fluxes for the SGS (R-A) solver.
+Mirrors `_apply_ghost_fluxes_standard!` but uses `_manning_ghost_flux` with
+cross-sectional area and hydraulic radius from the boundary cell's SGS table.
+
+The ghost edge's adjacency slot for the SGS table lookup is stored in
+`ge.is_Q_flux`; when true we use `_manning_ghost_flux`, otherwise fall
+back to `_bates_ghost_flux` (legacy mesh without edge R-A curves).
+"""
+function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
+    for (idx, ge_any) in enumerate(state.ghost_edges)
+        bc = state.ghost_cell_bc[idx]
+        bc === Closed && continue
+
+        ge  = ge_any :: GhostEdge
+        ci  = ge.cell_index
+        tbl = state.sgs_tables[ci]
+        isnan(tbl.z_min) && continue
+
+        wse_ci = wse_from_volume(tbl, state.volume[ci])
+        isnan(wse_ci) && continue   # defensive: SGS table or volume degenerate — skip
+
+        # Fetch interior neighbour WSE for gradient extrapolation
+        nb_idx = ge.interior_nb_idx
+        wse_nb = if nb_idx > 0 && nb_idx <= length(state.sgs_tables) &&
+                    state.sgs_tables[nb_idx] !== nothing
+            wse_from_volume(state.sgs_tables[nb_idx], state.volume[nb_idx])
+        else
+            NaN
+        end
+
+        wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, ge.interior_nb_L, ge.L)
+        wse_ghost == -Inf && continue
+
+        Q_out    = 0.0
+        q_stored = 0.0
+
+        if ge.is_Q_flux
+            A = A5Grid.flow_area_from_wse(tbl, 1, wse_ci)
+            R = A5Grid.hydraulic_radius_from_wse(tbl, 1, wse_ci)
+            Q_out, q_stored = _manning_ghost_flux(
+                ge.flux_prev, wse_ci, wse_ghost, ge.sill,
+                A, R, ge.L, state.manning_n[ci], dt)
+        else
+            Q_out, q_stored = _bates_ghost_flux(
+                ge.flux_prev, wse_ci, wse_ghost, ge.sill,
+                ge.width, ge.L, state.manning_n[ci], dt,
+                state.water_depth[ci])
+        end
+
+        dV = Q_out * dt
+        dV = min(dV, state.volume[ci] / DONOR_EDGE_DIVISOR)
+        dV = max(dV, 0.0)
+
+        state.volume[ci]   = max(0.0, state.volume[ci] - dV)
+        new_wse = wse_from_volume(tbl, state.volume[ci])
+        state.water_depth[ci] = max(0.0, new_wse - tbl.z_min)
+        state.vol_removed += dV
+
+        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
+                                            ge.sill, q_stored, ge.is_Q_flux,
+                                            ge.interior_nb_idx, ge.interior_nb_L)
+    end
+end
 # ---------------------------------------------------------------------------
 
 """
@@ -1118,7 +1360,15 @@ function step_standard!(state::FlowState, dt::Float64)
     # ── Phase C: parallel cell volume update ──────────────────────────────
     _apply_dV_standard!(state, dV)
 
-    # ── Phase D: velocity ─────────────────────────────────────────────────
+    # ── Phase D: open boundary outflow ────────────────────────────────────
+    # Apply ghost-edge flux for each non-Closed boundary edge.
+    # Serial: ghost edges are per-cell; no write hazard.
+    # vol_removed accumulates for mass balance accounting.
+    if !isempty(state.ghost_edges)
+        _apply_ghost_fluxes_standard!(state, dt)
+    end
+
+    # ── Phase E: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
 end
 
@@ -1294,7 +1544,12 @@ function step_sgs!(state::FlowState, dt::Float64)
     # ── Phase C: parallel cell volume update ──────────────────────────────
     _apply_dV_sgs!(state, dV)
 
-    # ── Phase D: velocity ─────────────────────────────────────────────────
+    # ── Phase D: open boundary outflow ────────────────────────────────────
+    if !isempty(state.ghost_edges)
+        _apply_ghost_fluxes_sgs!(state, dt)
+    end
+
+    # ── Phase E: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
 end
 
@@ -1330,41 +1585,6 @@ end
 # ---------------------------------------------------------------------------
 # Simulation loop
 # ---------------------------------------------------------------------------
-
-"""
-    InjectionPoint
-
-A fixed-rate point source: water added to the nearest mesh cell at a
-constant volumetric flow rate (m³/s) for the duration of the simulation.
-"""
-struct InjectionPoint
-    cell_index :: Int       # index into state.cell_ids
-    cell_id    :: String    # hex cell ID (for logging)
-    rate_m3s   :: Float64   # volumetric flow rate (m³/s)
-    lon        :: Float64   # source longitude (degrees)
-    lat        :: Float64   # source latitude (degrees)
-end
-
-"""
-    RainPoint
-
-A localised rainfall source: water added to the nearest mesh cell at a
-rate equivalent to a given rainfall intensity (mm/hr) applied over that
-cell's plan area.  Unlike `--rainfall` (which applies to every cell),
-`--rainpoint` applies only to the single nearest cell.
-
-`rate_m3s` is pre-computed as `rainfall_mm_hr / 3_600_000 × cell_area_m2`
-and stored so the simulation loop is identical to the InjectionPoint path.
-"""
-struct RainPoint
-    cell_index     :: Int       # index into state.cell_ids
-    cell_id        :: String    # hex cell ID (for logging)
-    rate_m3s       :: Float64   # volumetric flow rate (m³/s) = mm_hr/3.6e6 × area
-    lon            :: Float64   # requested longitude (degrees)
-    lat            :: Float64   # requested latitude (degrees)
-    rainfall_mm_hr :: Float64   # original user input (mm/hr) — for logging
-end
-
 """
     _find_nearest_cell(mesh, lon, lat) → (index, cell_id, dist_m)
 
@@ -1394,20 +1614,28 @@ end
 
 """
     run_simulation!(state, mesh, sim_duration, dt_max, vis, vis_mode, output,
-                    method, rainfall_rate)
+                    method, rainfall_rate, all_sources, default_bc_type)
 
 Time-stepping loop.  Advances the model for `sim_duration` seconds using
 adaptive dt (CFL-limited, capped at `dt_max`).
 
-Dispatches `push_frame!` to the active visualiser every `VIS_INTERVAL` steps.
-Writes HDF5 snapshots according to `output.output_interval`.
+Water sources (`all_sources`) are applied before each flux step so injected
+volume participates in that timestep's routing.  Open boundary outflow (Phase D)
+is applied after routing.
 
 Arguments
 ---------
   method           — `StandardFlow()` or `SGSFlow()`
   rainfall_rate    — uniform rainfall in m/s applied to every cell (default 0)
-  injection_points — fixed volumetric point sources (m³/s)
-  rain_points      — localised rainfall sources (single nearest cell, mm/hr × area)
+  all_sources      — `Vector{AbstractSource}`: InflowPoint, InjectionPoint,
+                     RainPoint instances; all applied before flux routing
+  default_bc_type  — `BCType` applied to boundary cells not covered by a
+                     --bc-file segment (default: ZeroGradient)
+
+Backward compatibility
+----------------------
+`injection_points` and `rain_points` keyword arguments are still accepted
+and appended to `all_sources` for callers that haven't been updated.
 """
 function run_simulation!(state            :: FlowState,
                          mesh             :: A5Mesh,
@@ -1418,6 +1646,7 @@ function run_simulation!(state            :: FlowState,
                          output           :: SimOutput = SimOutput();
                          method           :: FlowMethod = StandardFlow(),
                          rainfall_rate    :: Float64   = 0.0,
+                         all_sources      :: Vector{<:AbstractSource} = AbstractSource[],
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
                          rain_points      :: Vector{RainPoint}      = RainPoint[],
                          sgs_diag                                   = nothing)
@@ -1425,23 +1654,32 @@ function run_simulation!(state            :: FlowState,
     step = 0
     use_sgs = method isa SGSFlow
 
+    # Merge legacy injection_points / rain_points into all_sources.
+    # Callers that still pass the old keyword args continue to work unchanged.
+    merged_sources = AbstractSource[all_sources..., injection_points..., rain_points...]
+
     # ── Debug: pre-simulation state check ──────────────────────────────────
+    n_inflow = count(s -> s isa InflowPoint,      merged_sources)
+    n_inj    = count(s -> s isa InjectionPoint,   merged_sources)
+    n_rp     = count(s -> s isa RainPoint,        merged_sources)
+    n_ghost  = length(state.ghost_edges)
+    n_open   = count(bc -> bc !== Closed, state.ghost_cell_bc)
     @info "Pre-sim check: n_cells=$(length(state.volume))  " *
           "initial_vol_sum=$(sum(state.volume))  " *
           "rainfall_rate=$rainfall_rate  " *
-          "n_injection=$(length(injection_points))  n_rainpoints=$(length(rain_points))"
-    if !isempty(rain_points)
-        for (k, rp) in enumerate(rain_points)
-            @info "  rain_point[$k]: idx=$(rp.cell_index)  id=$(rp.cell_id)  " *
-                  "rate=$(rp.rate_m3s) m3/s  " *
-                  "valid_idx=$(1 <= rp.cell_index <= length(state.volume))"
-        end
+          "n_inflow=$n_inflow  n_injection=$n_inj  n_rainpoints=$n_rp  " *
+          "ghost_edges=$n_ghost  open_bc=$n_open"
+    for src in merged_sources
+        src isa RainPoint &&
+            @info "  rain_point: idx=$(src.cell_index)  id=$(src.cell_id)  " *
+                  "rate=$(src.rate_m3s) m3/s  " *
+                  "valid_idx=$(1 <= src.cell_index <= length(state.volume))"
+        src isa InflowPoint &&
+            @info "  inflow: '$(src.label)'  idx=$(src.cell_index)  id=$(src.cell_id)"
     end
 
     while t < sim_duration
-        # ── Pause polling: if Makie pause button pressed, sleep until resumed ──
-        # Checks vis.paused (Threads.Atomic{Bool}) between steps — safe with GPU
-        # because CUDA kernels complete synchronously before this point.
+        # ── Pause polling ───────────────────────────────────────────────────
         if vis_mode === :makie && vis !== nothing
             while vis.paused[]
                 sleep(0.05)
@@ -1450,59 +1688,49 @@ function run_simulation!(state            :: FlowState,
 
         # Adaptive dt
         dt = min(_cfl_dt(state, method), dt_max, sim_duration - t)
-        dt = max(dt, 0.1)   # floor: 0.1s to prevent infinite loops on dry mesh
+        dt = max(dt, 0.1)
 
-        # Apply rainfall source (uniform, before routing).
-        # Volume is primary state for both standard and SGS.
-        # dV = rate (m/s) × dt (s) × cell_area (m²)
+        # ── Apply all water sources (before routing) ────────────────────────
+        # Uniform rainfall
         if rainfall_rate > 0.0
             for i in eachindex(state.cell_ids)
                 state.volume[i] += rainfall_rate * dt * state.cell_area[i]
             end
         end
-
-        # Apply injection point sources (fixed volumetric rate m³/s).
-        # Volume is primary state for both methods.
-        for inj in injection_points
-            state.volume[inj.cell_index] += inj.rate_m3s * dt
+        # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
+        for src in merged_sources
+            apply_source!(state, src, t, dt)
         end
 
-        # Apply localised rainfall point sources.
-        # Each RainPoint pre-stores the effective m³/s for its cell
-        # (mm/hr converted to m/s × cell area), so the loop is identical
-        # to the injection-point path.
-        for rp in rain_points
-            state.volume[rp.cell_index] += rp.rate_m3s * dt
-        end
-
-        # ── Debug: post-source volume check (first 5 steps + every 10th) ──
+        # ── Debug: post-source volume check (first 5 steps + every 10th) ───
         if step <= 5 || step % 10 == 0
-            src_vols = isempty(rain_points) ? Float64[] :
-                       [state.volume[rp.cell_index] for rp in rain_points]
-            wet_now  = count(>(1e-4), state.water_depth)
+            # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
+            # so src_vol is non-empty when only InflowPoints are active.
+            all_pt_srcs = filter(s -> hasproperty(s, :cell_index), merged_sources)
+            src_vols    = [state.volume[s.cell_index] for s in all_pt_srcs]
+            src_labels  = [source_label(s) for s in all_pt_srcs]
+            wet_now     = count(>(1e-4), state.water_depth)
             non_src_wet = count(i -> state.water_depth[i] > 1e-4 &&
-                all(rp.cell_index != i for rp in rain_points), eachindex(state.volume))
-            @info "  Step $step: vol_sum=$(round(sum(state.volume),sigdigits=5))  " *
+                all(s.cell_index != i for s in all_pt_srcs), eachindex(state.volume))
+            vol_sum_now = sum(v for v in state.volume if isfinite(v); init=0.0)
+            nan_count   = count(isnan, state.volume)
+            nan_str     = nan_count > 0 ? "  NaN_cells=$nan_count ⚠" : ""
+            src_str     = join(src_labels, ", ")
+            @info "  Step $step: vol_sum=$(round(vol_sum_now,sigdigits=5))$nan_str  " *
+                  "src=$src_str  " *
                   "src_vol=$(round.(src_vols,sigdigits=5))  " *
                   "wet=$wet_now (non-src=$non_src_wet)  dt=$dt"
         end
 
-        # Sync water_depth from volume after all sources have been applied.
-        # Sources (rainfall, injection, rainpoint) write directly to state.volume
-        # but state.water_depth is only updated inside _apply_dV_standard!/sgs!.
-        # Without this sync, the first-step flux loop and the progress log both
-        # read stale water_depth = 0, giving wet=0 and wrong CFL even though
-        # volume is non-zero.
+        # Sync water_depth from volume (standard solver only; SGS syncs inside step_sgs!)
         if !use_sgs
             for i in eachindex(state.cell_ids)
                 state.cell_area[i] >= 1.0 &&
                     (state.water_depth[i] = state.volume[i] / state.cell_area[i])
             end
         end
-        # SGS: water_depth is derived from the hypsometric curve, which is
-        # evaluated inside step_sgs! — no pre-sync needed for SGS.
 
-        # Physics step
+        # Physics step (includes Phase D ghost-edge outflow)
         if use_sgs
             step_sgs!(state, dt)
         else
@@ -1523,14 +1751,9 @@ function run_simulation!(state            :: FlowState,
                     "velocity"   => Float32.(state.velocity),
                 ))
             elseif vis_mode === :makie
-                # Compute cumulative volume budget for the mass-balance plots.
-                # vol_added  = all water injected since t=0 (rainfall + point sources).
-                # vol_domain = water currently in the domain (primary state sum).
-                # vol_removed is 0 until Phase 2 adds open outflow BCs.
-                _vis_vol_added = rainfall_rate * t *
-                    sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
-                    sum(inj.rate_m3s * t for inj in injection_points; init=0.0) +
-                    sum(rp.rate_m3s  * t for rp  in rain_points;      init=0.0)
+                _vis_vol_added = total_cumulative_input(merged_sources,
+                                                         rainfall_rate,
+                                                         state.cell_area, t)
                 _vis_vol_domain = sum(state.volume)
                 _vis_n_wet      = count(>(1e-4), state.water_depth)
                 MakieVisualiser.push_frame!(
@@ -1544,14 +1767,13 @@ function run_simulation!(state            :: FlowState,
                     t;
                     vol_added   = _vis_vol_added,
                     vol_domain  = _vis_vol_domain,
-                    vol_removed = 0.0,
+                    vol_removed = state.vol_removed,
                     n_wet       = _vis_n_wet,
                     sim_step    = step,
                     sim_dt      = dt)
-                # Update SGS diagnostic window if open
                 if sgs_diag !== nothing
                     _update_sgs_diagnostic!(sgs_diag, state, t)
-                    yield()   # let GLMakie render thread redraw the diagnostic window
+                    yield()
                 end
             end
         end
@@ -1565,19 +1787,15 @@ function run_simulation!(state            :: FlowState,
             n_wet     = count(>(1e-4), state.water_depth)
             max_depth = isempty(state.water_depth) ? 0.0 :
                         something(maximum(v for v in state.water_depth if isfinite(v); init=0.0), 0.0)
-            # Mass balance: cumulative rainfall input vs total domain volume.
-            # With the per-edge donor limiter (Bug 46 fix), flux is mass-conserving,
-            # so mb_err should be ~0 for a closed domain with no outflow BCs.
-            # Small residuals (<< 1 m³) from the max(0,…) floor are acceptable.
-            # mb_err < 0 means domain_vol > input_vol (mass creation — should not occur).
-            # mb_err > 0 means volume has left the domain (open boundaries or floor clips).
-            input_vol  = rainfall_rate * t *
-                sum(a for a in state.cell_area if a >= 1.0; init=0.0) +
-                sum(inj.rate_m3s * t for inj in injection_points; init=0.0) +
-                sum(rp.rate_m3s  * t for rp  in rain_points;      init=0.0)
-            domain_vol = sum(state.volume)
-            mb_err     = input_vol - domain_vol
-            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³"
+            # Mass balance: input_vol = domain_vol + vol_removed (open BCs)
+            # For closed-boundary runs vol_removed stays 0 and mb_err ≈ 0.
+            input_vol  = total_cumulative_input(merged_sources, rainfall_rate,
+                                                 state.cell_area, t)
+            domain_vol = sum(v for v in state.volume if isfinite(v); init=0.0)
+            nan_vols   = count(isnan, state.volume)
+            mb_err     = input_vol - domain_vol - state.vol_removed
+            nan_warn   = nan_vols > 0 ? "  ⚠ NaN_cells=$nan_vols" : ""
+            @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  vol_removed=$(round(state.vol_removed,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³$nan_warn"
         end
     end
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
@@ -1634,6 +1852,14 @@ function run_flood_model(;
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
+    # ── Dynamic inflow / boundary conditions (Feature 1 & 2) ───────────────
+    inflow_specs      :: Vector = [],          # (lat, lon, path[, label]) tuples
+    inflow_bci_path   :: Union{String,Nothing} = nothing,
+    inflow_bdy_path   :: Union{String,Nothing} = nothing,  # explicit .bdy override
+    bc_file_path      :: Union{String,Nothing} = nothing,
+    closed_boundaries :: Bool   = false,
+    bc_epsg           :: Union{Int,Nothing} = nothing,
+    # ── Legacy output params ─────────────────────────────────────────────
     output_path       :: Union{String,Nothing} = nothing,
     output_interval   :: Float64 = 60.0)
 
@@ -1756,7 +1982,10 @@ function run_flood_model(;
     # then exit after saving. If no water source and not mesh_only, also exit.
     has_water = rainfall_rate > 0.0 ||
                 !isempty(injection_specs) ||
-                !isempty(rainpoint_specs)   # extend here for inflow/BC in Phase 2
+                !isempty(rainpoint_specs) ||
+                !isempty(inflow_specs)    ||
+                inflow_bci_path !== nothing ||
+                !closed_boundaries         # open BCs allow outflow without inflow
     if !mesh_only && !has_water
         @info "No water source provided (rainfall=0, no inflow). " *
               "Mesh saved and ready. Re-run with --rainfall <mm/hr> to simulate."
@@ -1825,22 +2054,19 @@ function run_flood_model(;
           "Manning n = $(manning_n))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
-    injection_points = InjectionPoint[]
+    all_sources = AbstractSource[]
     for (lon, lat, rate) in injection_specs
         idx, cid, dist_m = _find_nearest_cell(mesh, lon, lat)
-        push!(injection_points, InjectionPoint(idx, cid, rate, lon, lat))
+        push!(all_sources, InjectionPoint(idx, cid, rate, lon, lat))
         @info "Injection point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  (dist=$(round(dist_m,digits=0))m)  rate=$(round(rate,digits=4)) m³/s"
     end
 
     # Resolve rainpoint specs (lon, lat, mm_hr) → RainPoint structs.
-    # Rate is converted from mm/hr to m/s, then multiplied by the cell area
-    # so the simulation loop treats it identically to an InjectionPoint.
-    rain_points = RainPoint[]
     for (lon, lat, mm_hr) in rainpoint_specs
         idx, cid, dist_m = _find_nearest_cell(mesh, lon, lat)
         area_m2  = flow_state.cell_area[idx]
         rate_m3s = (mm_hr / 3_600_000.0) * area_m2
-        push!(rain_points, RainPoint(idx, cid, rate_m3s, lon, lat, mm_hr))
+        push!(all_sources, RainPoint(idx, cid, rate_m3s, lon, lat, mm_hr))
         @info "Rain point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  " *
               "(dist=$(round(dist_m,digits=0))m)  $(round(mm_hr,digits=2)) mm/hr  " *
               "= $(round(rate_m3s, sigdigits=4)) m³/s  (cell area $(round(area_m2,digits=0)) m²)"
@@ -1849,16 +2075,123 @@ function run_flood_model(;
               "isnan(area)=$(isnan(area_m2))  isnan(rate)=$(isnan(rate_m3s))"
     end
 
+    # Resolve inflow point specs (lat, lon, path[, label]) → InflowPoint structs
+    for spec in inflow_specs
+        length(spec) < 3 &&
+            error("--inflow-point requires at least 3 arguments: lat,lon,file")
+        lat_ip  = Float64(spec[1])
+        lon_ip  = Float64(spec[2])
+        fpath   = string(spec[3])
+        label   = length(spec) >= 4 ? string(spec[4]) : splitext(basename(fpath))[1]
+
+        reader  = auto_timeseries_reader(fpath)
+        series  = read_timeseries(reader)
+        # If multi-series .bdy file, use label as key if it matches a series name;
+        # otherwise use the first series and warn.
+        local ts_key
+        if haskey(series, label)
+            ts_key = label
+        else
+            ts_key = first(keys(series))
+            length(series) > 1 &&
+                @warn "inflow-point '$label': label not found in '$fpath'. " *
+                      "Using series '$ts_key'. Available: $(collect(keys(series)))"
+        end
+        t_s, Q_m3s = series[ts_key]
+
+        # Optionally convert projected coordinates to lon/lat
+        if bc_epsg !== nothing
+            lon_ip, lat_ip = _convert_coords_to_lonlat(lon_ip, lat_ip, bc_epsg)
+        end
+
+        idx, cid, dist_m = _find_nearest_cell(mesh, lon_ip, lat_ip)
+        push!(all_sources,
+              InflowPoint(idx, cid, lon_ip, lat_ip, t_s, Q_m3s, label))
+        @info "Inflow point '$label': " *
+              "($(round(lon_ip,digits=5)), $(round(lat_ip,digits=5))) → cell $cid  " *
+              "(dist=$(round(dist_m,digits=0))m)  $(length(t_s))-knot hydrograph  " *
+              "peak=$(round(maximum(Q_m3s),sigdigits=3)) m³/s"
+    end
+
+    # Resolve --inflow-bci file
+    if inflow_bci_path !== nothing
+        @info "Loading BCI file: $inflow_bci_path"
+        bci_entries, bci_series = parse_bci_file(inflow_bci_path;
+                                                   bdy_path = inflow_bdy_path)
+        for entry in bci_entries
+            entry.boundary_type != 'P' && continue   # N/E/S/W handled below
+            lon_e = entry.x1
+            lat_e = entry.y1
+            if bc_epsg !== nothing
+                lon_e, lat_e = _convert_coords_to_lonlat(lon_e, lat_e, bc_epsg)
+            end
+            idx, cid, dist_m = _find_nearest_cell(mesh, lon_e, lat_e)
+
+            if entry.bc_code == "QVAR"
+                haskey(bci_series, entry.bc_value) ||
+                    (@warn "BCI QVAR: series '$(entry.bc_value)' not found. Skipping."; continue)
+                t_s, Q_m3s = bci_series[entry.bc_value]
+                push!(all_sources,
+                      InflowPoint(idx, cid, lon_e, lat_e, t_s, Q_m3s, entry.bc_value))
+                @info "BCI QVAR '$(entry.bc_value)' → cell $cid (dist=$(round(dist_m,digits=0))m)"
+
+            elseif entry.bc_code == "QFIX"
+                rate = tryparse(Float64, entry.bc_value)
+                rate === nothing &&
+                    (@warn "BCI QFIX: cannot parse rate '$(entry.bc_value)'. Skipping."; continue)
+                push!(all_sources, InjectionPoint(idx, cid, rate, lon_e, lat_e))
+                @info "BCI QFIX $(rate) m³/s → cell $cid"
+
+            elseif entry.bc_code == "FREE"
+                # FREE on a P entry means open outflow at that boundary cell;
+                # handled via apply_bci_free_entries! below.
+                nothing
+
+            elseif entry.bc_code in ("HFIX", "HVAR")
+                @warn "BCI entry '$(entry.bc_code)' at ($(entry.x1), $(entry.y1)) " *
+                      "is not yet implemented (fixed WSE / tide BC). Skipping. " *
+                      "This will be available in a future session."
+            end
+        end
+        # Apply FREE and N/E/S/W handling (logs unsupported warnings)
+        apply_bci_free_entries!(flow_state.ghost_edges, flow_state.ghost_cell_bc,
+                                 mesh.cells, bci_entries)
+    end
+
+    # Apply --bc-file GeoJSON overrides
+    if bc_file_path !== nothing
+        @info "Loading boundary condition file: $bc_file_path"
+        flow_state.ghost_cell_bc .= load_bc_file(
+            bc_file_path, mesh.cells, flow_state.boundary_mask,
+            flow_state.ghost_edges, flow_state.ghost_cell_bc,
+            closed_boundaries ? Closed : ZeroGradient)
+    end
+
+    # Apply --closed-boundaries flag (overrides default ZeroGradient)
+    if closed_boundaries
+        for i in eachindex(flow_state.ghost_cell_bc)
+            flow_state.ghost_cell_bc[i] = Closed
+        end
+        @info "Closed boundaries: all ghost edges set to Closed (no outflow)"
+    end
+
+    # For Makie source_indices include inflow points
+    inflow_points_resolved  = filter(s -> s isa InflowPoint,    all_sources)
+    injection_points_compat = filter(s -> s isa InjectionPoint, all_sources)
+    rain_points_compat      = filter(s -> s isa RainPoint,      all_sources)
+
     # 7b. Open Makie viewer now that source indices and the flow adjacency dict
-    # are both known.  Passing adjacency activates ring mode: a BFS from the
-    # source cells assigns each cell a ring index, enabling the "Ring index"
-    # map overlay and the per-ring volume bar chart in the bottom strip.
+    # are both known.
     if vis_mode === :makie
-        src_label      = basename(mesh_source[2])
-        source_indices = vcat(
-            [inj.cell_index for inj in injection_points],
-            [rp.cell_index  for rp  in rain_points],
-        )
+        src_label = basename(mesh_source[2])
+        # Explicitly typed Int[] comprehensions prevent vcat from inferring
+        # Vector{Any} when any of the filtered lists happens to be empty
+        # (which triggers TypeError in MakieVisualiser.start).
+        source_indices = Int[
+            (Int[s.cell_index for s in injection_points_compat])...,
+            (Int[s.cell_index for s in rain_points_compat])...,
+            (Int[s.cell_index for s in inflow_points_resolved])...,
+        ]
         @info "Opening Makie viewer ($(length(mesh)) cells, " *
               "$(length(source_indices)) source cell(s), ring mode active)..."
         vis = MakieVisualiser.start(mesh;
@@ -1866,7 +2199,6 @@ function run_flood_model(;
                   adjacency      = flow_state.adjacency,
                   title          = "FloodA5  res=$(mesh.resolution)  $src_label")
 
-        # SGS diagnostic window — opened below if applicable
         if flow_method === :sgs && !isempty(source_indices)
             sgs_diag = _open_sgs_diagnostic(flow_state, source_indices[1])
         end
@@ -1882,14 +2214,14 @@ function run_flood_model(;
 
     # 9. Simulation loop
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  " *
-          "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr"
+          "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
+          "sources=$(length(all_sources))  open_bc=$(count(bc -> bc !== Closed, flow_state.ghost_cell_bc))"
     run_simulation!(flow_state, mesh, sim_duration, dt_max,
                     vis, vis_mode, sim_output;
-                    method           = method_obj,
-                    rainfall_rate    = rainfall_rate,
-                    injection_points = injection_points,
-                    rain_points      = rain_points,
-                    sgs_diag         = sgs_diag)
+                    method        = method_obj,
+                    rainfall_rate = rainfall_rate,
+                    all_sources   = all_sources,
+                    sgs_diag      = sgs_diag)
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -2003,6 +2335,43 @@ Flow model options:
                      testing and validation on flat meshes. Repeatable.
                      Example: --rainpoint -43.531,172.636,50.0
 
+  --inflow-point LAT,LON,FILE[,LABEL]
+                     Add a time-varying fluvial inflow at (lat, lon) driven by FILE.
+                     FILE is a two-column CSV (t_s, Q_m3s), a LISFLOOD-FP .bdy file,
+                     or a .bdy file with multiple series (use LABEL to select one).
+                     LABEL defaults to the filename stem. Repeatable.
+                     Example: --inflow-point -43.386,172.648,waimakariri.csv,Waimakariri
+
+  --inflow-bci FILE  Load inflow configuration from a LISFLOOD-FP .bci file.
+                     QVAR entries reference a companion .bdy time-series file.
+                     QFIX entries create constant-rate injection points.
+                     FREE entries set open outflow at that boundary cell.
+                     N/E/S/W and F entries are not currently supported (logged).
+                     Example: --inflow-bci carlisle_inflows.bci
+
+  --inflow-bdy FILE  Explicit path to the LISFLOOD-FP .bdy time-series file used
+                     by QVAR entries in --inflow-bci. By default, FloodA5 looks
+                     for a .bdy file with the same stem as the .bci file in the
+                     same directory. Use this flag when the two files have
+                     different names or are in different directories.
+                     Example: --inflow-bdy test/carlisle/carlisle_wgs84.bdy
+
+Boundary condition options:
+  --bc-file FILE     GeoJSON file specifying boundary condition types per segment.
+                     Each feature must have a "bc_type" property: Closed,
+                     ZeroGradient, or Critical.  Boundary cells within 1.5× the
+                     cell diameter of each feature are assigned the specified type.
+                     Default if omitted: ZeroGradient (open outflow) for all
+                     boundary cells.
+  --closed-boundaries
+                     Treat all domain-edge cells as closed walls (no outflow).
+                     Useful for mass-balance benchmarking and catchment studies.
+                     Overrides --bc-file.
+  --bc-epsg CODE     Treat coordinates in --inflow-bci files as projected
+                     (easting/northing) in the given EPSG code, converting to
+                     lon/lat internally. Default: decimal degrees WGS 84.
+                     Example: --bc-epsg 27700  (British National Grid)
+
 Visualisation options:
   --vis [MODE]       Enable visualisation (off by default).
                      Available modes: $modes_str
@@ -2029,14 +2398,13 @@ Examples:
   julia --threads auto FloodModel.jl \\
       --meshload mesh_sgs.parquet --flow-model standard --sim-duration 1800
 
-Resolution guide (approximate cell area — equal-area globally):
-  Level  5  ~33,100 km²  Continental / regional
-  Level  8  ~518 km²     Large catchment
-  Level 10  ~32 km²      Medium catchment
-  Level 12  ~2.02 km²    Small catchment
-  Level 14  ~12.6 ha     Urban / detailed
-  Level 17  ~1,976 m²    High-resolution modelling
-  Level 18  ~494 m²      High-resolution channel
+Resolution guide (approximate cell area):
+  Level  5  ~5 000 km²  Continental / regional
+  Level  8  ~250 km²    Large catchment
+  Level 10  ~50 km²     Medium catchment
+  Level 12  ~10 km²     Small catchment
+  Level 14  ~2 km²      Urban / detailed
+  Level 17  ~0.1 km²    High-resolution modelling
 """)
     exit(exit_code)
 end
@@ -2215,6 +2583,54 @@ function _update_sgs_diagnostic!(diag::SGSDiagnostic, state::FlowState, t::Float
     diag.time_obs[] = "t = $(round(t / 3600.0, digits=2)) h"
 end
 
+"""
+    _convert_coords_to_lonlat(x, y, epsg) → (lon, lat)
+
+Convert projected coordinates (x=easting, y=northing) in the given EPSG CRS
+to WGS 84 decimal degrees using ArchGDAL coordinate transform.
+Used when --bc-epsg is specified for .bci files with projected coordinates.
+
+Mirrors the `_crs_gis` / `_reproject_to_dem` pattern used in A5Grid.jl:
+  • `ArchGDAL.GDAL.osrsetaxismappingstrategy(crs, OAMS_TRADITIONAL_GIS_ORDER)`
+    forces x=easting/longitude, y=northing/latitude on both CRS objects,
+    overriding GDAL ≥ 3 behaviour that otherwise honours the official
+    EPSG:4326 (lat, lon) axis order.
+  • `ArchGDAL.createcoordtrans` is called with a do-block; it does not return
+    a usable object when called without one (MethodError in ArchGDAL 0.10.x).
+"""
+function _convert_coords_to_lonlat(x::Float64, y::Float64, epsg::Int)
+    try
+        # Build CRS objects with traditional (x=lon/easting, y=lat/northing)
+        # axis order — identical to A5Grid._crs_gis().
+        src_crs = ArchGDAL.importEPSG(epsg)
+        ArchGDAL.GDAL.osrsetaxismappingstrategy(
+            src_crs, ArchGDAL.GDAL.OAMS_TRADITIONAL_GIS_ORDER)
+
+        dst_crs = ArchGDAL.importEPSG(4326)
+        ArchGDAL.GDAL.osrsetaxismappingstrategy(
+            dst_crs, ArchGDAL.GDAL.OAMS_TRADITIONAL_GIS_ORDER)
+
+        xs = [x];  ys = [y];  zs = [0.0]
+        ArchGDAL.createcoordtrans(src_crs, dst_crs) do xform
+            ArchGDAL.transform!(xs, ys, zs, xform)
+        end
+        lon_out, lat_out = xs[1], ys[1]
+
+        # Sanity check — if still out of WGS84 range something is wrong.
+        if abs(lon_out) > 180.0 || abs(lat_out) > 90.0
+            @warn "_convert_coords_to_lonlat: output " *
+                  "(lon=$(round(lon_out,digits=3)), lat=$(round(lat_out,digits=3))) " *
+                  "is outside WGS84 range after transform from EPSG:$epsg. " *
+                  "Check that the input coordinates are in the stated CRS."
+        end
+
+        return (lon_out, lat_out)
+    catch e
+        @warn "_convert_coords_to_lonlat: failed to convert ($x, $y) from EPSG:$epsg to WGS84: $e. Using coordinates as-is."
+        return (x, y)
+    end
+end
+
 function main(args=String[])
     profile = get(ENV, "DEBUG_PROFILE_NAME", "Production/Shell")
     @debug "Model profile:" profile=profile args=args
@@ -2334,6 +2750,51 @@ function main(args=String[])
         push!(rainpoint_specs, (lon_rp, lat_rp, mm_hr))   # stored as (lon,lat,mm_hr)
     end
 
+    # --inflow-point lat,lon,file[,label]  (repeatable)
+    # Format: --inflow-point -43.386,172.648,waimakariri.csv[,Waimakariri]
+    inflow_specs = []
+    while true
+        ip_val, args = _pop_flag(args, "--inflow-point")
+        ip_val === nothing && break
+        parts = split(ip_val, ","; limit=4)
+        length(parts) < 3 &&
+            (println("ERROR: --inflow-point must be lat,lon,file[,label]\n"); print_help(1))
+        lat_ip = parse(Float64, strip(parts[1]))
+        lon_ip = parse(Float64, strip(parts[2]))
+        fpath  = strip(parts[3])
+        label  = length(parts) >= 4 ? strip(parts[4]) : splitext(basename(fpath))[1]
+        push!(inflow_specs, (lat_ip, lon_ip, fpath, label))
+    end
+
+    # --inflow-bci file  (repeatable; entries accumulate)
+    inflow_bci_paths = String[]
+    while true
+        bci_val, args = _pop_flag(args, "--inflow-bci")
+        bci_val === nothing && break
+        push!(inflow_bci_paths, bci_val)
+    end
+    inflow_bci_path = isempty(inflow_bci_paths) ? nothing : inflow_bci_paths[end]
+    length(inflow_bci_paths) > 1 &&
+        @warn "Multiple --inflow-bci files specified; only the last is used: $inflow_bci_path"
+
+    # --inflow-bdy file  (explicit .bdy override; optional)
+    inflow_bdy_val, args = _pop_flag(args, "--inflow-bdy")
+    inflow_bdy_path = inflow_bdy_val !== nothing ? inflow_bdy_val : nothing
+    if inflow_bdy_path !== nothing && !isfile(inflow_bdy_path)
+        @warn "--inflow-bdy: file not found: $inflow_bdy_path"
+        inflow_bdy_path = nothing
+    end
+
+    # --bc-file file  (GeoJSON boundary condition override)
+    bc_file_val, args = _pop_flag(args, "--bc-file")
+
+    # --bc-epsg code  (coordinate system for bci coordinates)
+    bc_epsg_val, args = _pop_flag(args, "--bc-epsg")
+    bc_epsg = bc_epsg_val !== nothing ? parse(Int, bc_epsg_val) : nothing
+
+    # --closed-boundaries  (treat all boundary cells as closed walls)
+    closed_boundaries, args = _pop_bool(args, "--closed-boundaries")
+
     # Validate mesh source
     has_gen  = meshgen_val !== nothing
     has_load = meshload_val !== nothing
@@ -2376,6 +2837,12 @@ function main(args=String[])
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
+        inflow_specs     = inflow_specs,
+        inflow_bci_path  = inflow_bci_path,
+        inflow_bdy_path  = inflow_bdy_path,
+        bc_file_path     = bc_file_val,
+        closed_boundaries = closed_boundaries,
+        bc_epsg          = bc_epsg,
         output_path      = output_val,
         output_interval  = output_interval,
     )

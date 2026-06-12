@@ -451,10 +451,67 @@ See `FloodA5_SGS_RA_Flux_Implementation.md` for full implementation plan.
 ### Important: mesh generation thread safety (Bugs 50, 57)
 Use `--threads 1` for ALL mesh generation. Simulation loop is safe with any thread count.
 
+### inflows_and_bcs branch — Dynamic inflows & open boundary conditions
+
+See `FloodA5_Inflows_BC_Implementation_Plan.md` for full design.
+
+**Feature 1 — Dynamic fluvial inflows (✅ complete, 2026-06-11):**
+- ✅ `AbstractSource` abstract type; `InjectionPoint` and `RainPoint` promoted to subtypes
+- ✅ `InflowPoint <: AbstractSource` — time-varying hydrograph, linear interpolation, flat extrapolation
+- ✅ `_interp_hydrograph` — O(log n) binary search
+- ✅ `cumulative_volume` — trapezoidal integration for mass balance logging
+- ✅ `LisfloodBDYReader` — LISFLOOD-FP .bdy format (multi-series, seconds/hours/days)
+- ✅ `TwoColumnCSVReader` — plain CSV with auto-detected header
+- ✅ `parse_bci_file` — LISFLOOD-FP .bci format; QVAR, QFIX, FREE P-type entries
+- ✅ `--inflow-point LAT,LON,FILE[,LABEL]` CLI flag
+- ✅ `--inflow-bci FILE` CLI flag (QVAR and QFIX only)
+- ✅ `--bc-epsg CODE` CLI flag for projected coordinate input
+- ✅ Unified `all_sources :: Vector{AbstractSource}` loop in `run_simulation!`
+- ✅ Mass balance logging updated: `mb_err = input_vol - domain_vol - vol_removed`
+- ✅ Unit tests T-IP1–T-IP12 (`test/test_inflow_point.jl`)
+- ⏳ **Validate with real hydrograph** — Carlisle upstream gauge data
+- ⏳ **Absolute-time hydrograph support** — ISO 8601 epoch, `t_offset` kwarg
+
+**⚠️ Unsupported BCI boundary types (flagged for future reconsideration):**
+- `N/E/S/W` (cardinal edge boundaries): not supported because FloodA5 domains can be any
+  polygon shape — cardinal directions have no natural mapping to an irregular A5 mesh.
+  If encountered in a .bci file, a helpful warning message directs the user to specify
+  boundaries using `--bc-file` (GeoJSON) instead. See `apply_bci_free_entries!` in
+  `boundaryinputs/boundary_conditions.jl`. **Review needed:** could potentially be
+  implemented by matching boundary cells in the relevant cardinal half-plane of the domain
+  bounding box, but this is geometrically fragile for non-rectangular domains.
+- `F` (sub-grid channel internal free boundary): LISFLOOD-FP uses this for internal
+  channel boundaries in the SGC solver. FloodA5 has no direct equivalent in the current
+  architecture. Parsed without error; logged as unsupported. **Review needed:** will
+  revisit when evaluating LISFLOOD-FP SGC vs FloodA5 SGS feature parity for the paper.
+
+**Feature 2 — Open outflow boundaries (✅ complete, 2026-06-11):**
+- ✅ `BCType` enum: `Closed`, `ZeroGradient`, `Critical`, `FixedWSE`, `FixedQ`
+- ✅ `GhostEdge` struct with actual polygon-side edge widths (not mean)
+- ✅ `BoundarySegment` struct for GeoJSON bc-file support
+- ✅ `_build_ghost_edges` — boundary cell detection, ghost edge geometry from polygon vertices
+- ✅ `_ghost_wse` — WSE by BC type (ZeroGradient, Critical; Closed sentinel -Inf)
+- ✅ `_bates_ghost_flux` — one-way outflow, Fix-C momentum write-back
+- ✅ `_manning_ghost_flux` — SGS R-A path
+- ✅ `_apply_ghost_fluxes_standard!` — Phase D of `step_standard!`
+- ✅ `_apply_ghost_fluxes_sgs!` — Phase D of `step_sgs!`
+- ✅ `load_bc_file` — GeoJSON --bc-file parsing with tolerance-based cell matching
+- ✅ `apply_bci_free_entries!` — FREE entries from .bci; N/E/S/W and F warnings
+- ✅ `FlowState` extended: `boundary_mask`, `ghost_edges`, `ghost_cell_bc`, `vol_removed`
+- ✅ `--bc-file FILE` and `--closed-boundaries` CLI flags
+- ✅ Default BC changed from implicit Closed to `ZeroGradient` (open outflow)
+  **Breaking change:** all existing validation runs will now show non-zero `vol_removed`.
+  T4 synthetic DEM mass balance criterion updated accordingly.
+- ✅ Makie `vol_removed` wired to `state.vol_removed` (was hardcoded 0.0)
+- ✅ Unit tests T-BC1–T-BC10 (`test/test_open_boundary.jl`)
+- ⏳ **Validate Carlisle res 14 open BCs** — confirm `vol_removed` grows monotonically, no reflections
+- ⏳ **Update T4 synthetic DEM test** — mass balance criterion to include `vol_removed`
+- ⏳ **Critical BC validation** — compare to analytical critical-depth outflow solution
+- ⏳ **FixedWSE BC** — tide/downstream stage (future tide session)
+
 ### Other pending
 - **Bug 36: velocity computation validation** — `_compute_velocity!` exists but untested.
 - **LINZ DEM ingestion** — Kaiapoi domain res 14/16.
-- **Open outflow BC** (Phase 2) — prevents dt declining on closed-domain rainfall tests.
 
 ### Phase 3 — Multi-resolution AMR
 - GPU data layout review — Strategy 1 preferred (solver on GPU, AMR bookkeeping on CPU)
