@@ -711,7 +711,7 @@
             },
             "juliaNumThreads": "auto"
         },
-                {
+        {
             "type": "julia",
             "request": "launch",
             "name": "[Carlise 09F] Run SGS simulation res 18 - uniform rainfall, 50 mm/h (mesh must exist)",
@@ -735,6 +735,53 @@
                 "JULIA_DEBUG": "Main"
             },
             "juliaNumThreads": "auto"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[C1] Carlisle standard res18 — full event (120h, inflows, Makie)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",       "test/carlisle/carlisle_mesh18_standard.parquet",
+                "--flow-model",     "standard",
+                "--inflow-bci",     "test/carlisle/carlisle_wgs84.bci",
+                "--manning-n",      "0.03",
+                "--sim-duration",   "432000",
+                "--dt-max",         "10",
+                "--output", "test/carlisle/carlisle_standard_res18.h5",
+                "--output-interval","3600",
+                "--vis",            "makie"
+            ],
+            "env": {
+                "DEBUG_PROFILE_NAME": "[C1] Carlisle standard res18 — full event (120h, inflows, Makie)",
+                "JULIA_DEBUG": "Main"
+            },
+            "juliaNumThreads": "auto"
+        },
+        {
+            "name": "[C2] Carlisle SGS res18 — full event (120h, inflows, Makie)",
+            "type": "julia",
+            "request": "launch",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload", "test/carlisle/carlisle_mesh18_sgs.parquet",
+                "--flow-model", "sgs",
+                "--inflow-bci", "test/carlisle/carlisle_wgs84.bci",
+                "--bc-epsg", "27700",
+                "--manning-n", "0.03",
+                "--sim-duration", "432000",
+                "--dt-max", "10",
+                "--output", "test/carlisle/carlisle_sgs_res18.h5",
+                "--output-interval", "3600",
+                "--vis", "makie"
+            ],
+            "stopOnEntry": false,
+            "juliaEnv": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "DEBUG_PROFILE_NAME": "[C2] Carlisle SGS res18 — full event (120h, inflows, Makie)",
+                "JULIA_DEBUG": "Main"
+            }
         },
         {
             "type": "julia",

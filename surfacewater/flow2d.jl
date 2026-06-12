@@ -333,3 +333,96 @@ function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Fl
 
     return courant * dx_min / sqrt(_G * h_cfl)
 end
+
+
+# ---------------------------------------------------------------------------
+# Open boundary / ghost-edge flux kernels
+# ---------------------------------------------------------------------------
+
+"""
+    _bates_ghost_flux(q_prev, wse_ci, wse_ghost, z_sill, width, L,
+                      n_mann, dt, depth_ci) → (Q_out, q_stored)
+
+Compute outflow flux across a virtual ghost-cell boundary edge using the
+Bates et al. (2010) inertial formulation with stability limiters.
+
+`wse_ghost` is computed by the caller via `_ghost_wse()` based on the BC type:
+  ZeroGradient: wse_ghost = wse_ci  (dWSE = 0; momentum carry-out only)
+  Critical:     wse_ghost = sill + (2/3)(wse_ci - sill)
+
+The function enforces one-way flow: Q_out is always ≥ 0. Ghost cells cannot
+inject water into the domain — any negative Q (which would represent inflow
+from outside) is clamped to zero and q_stored is reset.  This prevents
+numerical artefacts from the zero-gradient approximation at inflow edges
+(where the domain WSE may briefly dip below the ghost WSE due to routing).
+
+Returns `(Q_out, q_stored)` where:
+  Q_out    — volume flux leaving the domain through this edge (m³/s, ≥ 0)
+  q_stored — unit discharge (m²/s) to persist as flux_prev next step (Fix C)
+
+Sign convention: Q_out > 0 → water leaves cell ci.
+Caller applies: state.volume[ci] -= Q_out * dt
+"""
+@inline function _bates_ghost_flux(q_prev    :: Float64,
+                                    wse_ci    :: Float64,
+                                    wse_ghost :: Float64,
+                                    z_sill    :: Float64,
+                                    width     :: Float64,
+                                    L         :: Float64,
+                                    n_mann    :: Float64,
+                                    dt        :: Float64,
+                                    depth_ci  :: Float64)::Tuple{Float64,Float64}
+    # Closed BC sentinel
+    wse_ghost == -Inf && return (0.0, 0.0)
+
+    # One-way enforcement: only allow outflow.
+    # If the ghost WSE ≥ interior WSE, water would flow inward — block it.
+    # This also handles the ZeroGradient case (wse_ghost == wse_ci) where
+    # the momentum term q_prev carries any remaining outflow; if q_prev is
+    # also zero or negative the kernel correctly returns near-zero.
+    wse_ghost >= wse_ci + 1e-10 && return (0.0, 0.0)
+
+    # Call _bates_flux_limited with (wse_ghost, wse_ci) as the (i, j) pair.
+    # wse_i = wse_ghost < wse_ci = wse_j, so dWSE = wse_ghost - wse_ci < 0
+    # → flow from j to i (outward) → Q_raw > 0 in standard convention.
+    # We return Q_raw directly as Q_out (positive = water leaves domain).
+    Q_out, q_stored = _bates_flux_limited(q_prev, wse_ghost, wse_ci, z_sill,
+                                           width, L, 1.0, n_mann, dt, depth_ci)
+
+    # Defensive clamp: should be positive by construction above, but guard
+    # against floating-point edge cases.
+    Q_out < 0.0 && return (0.0, 0.0)
+
+    return (Q_out, q_stored)
+end
+
+
+"""
+    _manning_ghost_flux(Q_prev, wse_ci, wse_ghost, z_sill, A, R,
+                        width, L, n_mann, dt) → (Q_out, Q_stored)
+
+Ghost-edge outflow flux using the Manning R-A inertial kernel (SGS path).
+
+`A` and `R` are evaluated at `wse_ci` (using the boundary cell's SGS table
+at the ghost edge slot) since the ghost cell has no terrain data.
+
+Returns `(Q_out, Q_stored)` in m³/s; Q_out ≥ 0 (one-way enforcement).
+"""
+@inline function _manning_ghost_flux(Q_prev    :: Float64,
+                                      wse_ci    :: Float64,
+                                      wse_ghost :: Float64,
+                                      z_sill    :: Float64,
+                                      A         :: Float64,
+                                      R         :: Float64,
+                                      L         :: Float64,
+                                      n_mann    :: Float64,
+                                      dt        :: Float64)::Tuple{Float64,Float64}
+    wse_ghost == -Inf            && return (0.0, 0.0)
+    wse_ghost >= wse_ci + 1e-10  && return (0.0, 0.0)
+
+    # (wse_ghost, wse_ci) as (i, j): wse_ghost < wse_ci → flow outward → Q_out > 0
+    Q_out = _manning_flux_ra(Q_prev, wse_ghost, wse_ci, z_sill, A, R,
+                              L, 1.0, n_mann, dt)
+    Q_out < 0.0 && return (0.0, 0.0)
+    return (Q_out, Q_out)
+end
