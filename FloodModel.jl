@@ -1264,7 +1264,9 @@ Dry cells (depth < h_min) have velocity zeroed.
 function _compute_velocity!(state::FlowState)
     n      = length(state.cell_ids)
     edges  = state.edges
-    h_min  = 1e-4   # m — depth threshold below which velocity = 0
+    h_min  = max(HFLOW_THRESHOLD, 0.01)  # m — velocity zeroed below this depth;
+                                          # must be ≥ HFLOW_THRESHOLD so edges that
+                                          # return zero flux also produce zero velocity
 
     # Flux-weighted momentum scatter (serial — ci/cj not unique across edges)
     sum_u  = zeros(Float64, n)

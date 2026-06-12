@@ -1146,8 +1146,22 @@ function _pick_data(idx, d_depth, d_sat, d_vol, d_vel)
 end
 
 function _auto_range(data::Vector{Float64}, var_idx::Int)
-    var_idx == 2 && return (0.0, 1.0)
-    hi = maximum(data; init=0.0)
+    var_idx == 2 && return (0.0, 1.0)   # saturation: fixed 0–1
+
+    # For velocity (var_idx == 4) use the 99th percentile of positive values
+    # to prevent a handful of near-dry cells with stale flux from collapsing
+    # the colorscale. For all other variables use the true maximum.
+    hi = if var_idx == 4
+        pos = filter(v -> isfinite(v) && v > 1e-4, data)
+        if length(pos) >= 10
+            sort!(pos)
+            pos[clamp(round(Int, 0.99 * length(pos)), 1, length(pos))]
+        else
+            maximum(data; init=0.0)
+        end
+    else
+        maximum(data; init=0.0)
+    end
     hi = hi > 1e-6 ? hi : 1.0
     return (0.0, hi)
 end

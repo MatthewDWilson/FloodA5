@@ -37,11 +37,11 @@ const _G = 9.81   # m s⁻²
 # a meaningful computational saving on large meshes (most boundary edges are dry).
 const HFLOW_THRESHOLD = 0.001
 
-# Froude number limit for subcritical flow.  
+# Froude number limit for subcritical flow.  Matches CAESAR-Lisflood froude_limit = 0.8.
 # Unit discharge is capped at q_max = h_flow × √(g × h_flow) × FROUDE_LIMIT.
 # This suppresses the supercritical oscillation mode that drives checkerboarding
 # in inertial models on irregular meshes.
-const FROUDE_LIMIT = 0.5
+const FROUDE_LIMIT = 0.8
 
 # Q-centred (spatial momentum smoothing) parameter — θ in the expression:
 #   q_eff = θ × q_prev_e + (1−θ)/2 × (q_prev_collinear_i + q_prev_collinear_j)
@@ -193,6 +193,11 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
                                       depth_donor  :: Float64)::Tuple{Float64,Float64}
     h_flow = max(wse_i, wse_j) - z_sill
     if h_flow <= HFLOW_THRESHOLD
+        # Edge is dry — zero out stale momentum so adjacent cells don't
+        # carry phantom velocity in _compute_velocity!. Returning 0.0 for Q
+        # without clearing edges.flux[e] was the source of spurious high
+        # velocity on recently-dried cells. The caller stores q_stored in
+        # edges.flux[e] after this call, so returning 0.0 here is sufficient.
         return (0.0, 0.0)
     end
     h_flow = max(h_flow, 1e-6)
