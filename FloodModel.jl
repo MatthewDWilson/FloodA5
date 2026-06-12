@@ -314,6 +314,98 @@ SimOutput(; path="", interval=60.0, enabled=false) =
     SimOutput(path, interval, -Inf, 0, enabled)
 
 """
+    TimingLog
+
+Lightweight wall-clock timer for high-level pipeline phases.
+All fields are elapsed seconds (Float64). Zero allocation per recording —
+just two `time()` calls bracketing existing code. No per-step overhead.
+
+Phases recorded:
+  total        End-to-end from run_flood_model entry to return.
+  mesh         Mesh generation or parquet load.
+  dem_sample   DEM ingestion and cell elevation assignment.
+  sgs_tables   Hypsometric curve pre-processing (build_sgs_tables!).
+  flow_init    initialise_flow_model (EdgeList, ghost edges, Q-centred lookup).
+  source_setup Inflow point resolution, BCI/BDY parsing, BC file loading.
+  simulation   Entire run_simulation! wall time (coarse — not per-step).
+  hdf5_output  Cumulative time in _write_frame! across all output intervals.
+  visualiser   Post-simulation visualiser keep-alive loop (not simulation time).
+"""
+mutable struct TimingLog
+    total        :: Float64
+    mesh         :: Float64
+    dem_sample   :: Float64
+    sgs_tables   :: Float64
+    flow_init    :: Float64
+    source_setup :: Float64
+    simulation   :: Float64
+    hdf5_output  :: Float64
+    visualiser   :: Float64
+    n_steps      :: Int        # simulation step count (filled by run_simulation!)
+end
+TimingLog() = TimingLog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+
+function _fmt_elapsed(s::Float64)::String
+    s < 0.0005 && return "< 1 ms"
+    s < 1.0    && return "$(round(Int, s * 1000)) ms"
+    s < 60.0   && return "$(round(s, digits=2)) s"
+    m = floor(Int, s / 60);  r = s - 60.0 * m
+    m < 60     && return "$(m)m $(round(Int, r))s"
+    h = floor(Int, m / 60);  m2 = m - 60h
+    return "$(h)h $(m2)m $(round(Int, r))s"
+end
+
+"""
+    _print_timing_summary(tl, n_cells, sim_duration)
+
+Print a formatted timing summary table at Info level on model completion.
+"""
+function _print_timing_summary(tl      :: TimingLog,
+                                n_cells :: Int,
+                                sim_dur :: Float64)
+    phases = [
+        ("Mesh load / generate",  tl.mesh),
+        ("DEM sampling",          tl.dem_sample),
+        ("SGS table build",       tl.sgs_tables),
+        ("Flow model init",       tl.flow_init),
+        ("Source / BC setup",     tl.source_setup),
+        ("Simulation",            tl.simulation),
+        ("HDF5 output (cumul.)",  tl.hdf5_output),
+        ("Visualiser keepalive",  tl.visualiser),
+        ("Total wall time",       tl.total),
+    ]
+
+    w = 26   # phase column width
+    sep = "─" ^ (w + 30)
+
+    rows = String["", "FloodA5 — Timing Summary", sep,
+                  rpad("Phase", w) * "  " *
+                  lpad("Wall time", 12) * "   % of total", sep]
+
+    for (label, elapsed) in phases
+        pct = tl.total > 0.0 ?
+              string(round(100.0 * elapsed / tl.total, digits=1)) : "—"
+        label == "Total wall time" && push!(rows, sep)
+        push!(rows, rpad(label, w) * "  " *
+                    lpad(_fmt_elapsed(elapsed), 12) * "   " * lpad(pct, 5) * "%")
+    end
+    push!(rows, sep)
+
+    if tl.simulation > 0.0 && tl.n_steps > 0
+        sps  = round(tl.n_steps / tl.simulation, digits=1)
+        ratio = round((sim_dur / 3600.0) / (tl.simulation / 3600.0), digits=2)
+        push!(rows, "  Cells          : $n_cells")
+        push!(rows, "  Steps          : $(tl.n_steps)  " *
+                    "($(round(tl.n_steps / tl.simulation, digits=1)) steps/wall-s)")
+        push!(rows, "  Sim speed      : $(ratio) sim-hrs / wall-hr  " *
+                    "($(round(sim_dur/3600.0, digits=2)) sim-hrs in " *
+                    "$(_fmt_elapsed(tl.simulation)))")
+    end
+    push!(rows, sep); push!(rows, "")
+    @info join(rows, "\n")
+end
+
+"""
     _write_mesh_metadata!(output, mesh)
 
 Write the static mesh metadata to the HDF5 file's /mesh/ group.
@@ -1747,7 +1839,8 @@ function run_simulation!(state            :: FlowState,
                          all_sources      :: Vector{<:AbstractSource} = AbstractSource[],
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
                          rain_points      :: Vector{RainPoint}      = RainPoint[],
-                         sgs_diag                                   = nothing)
+                         sgs_diag                                   = nothing,
+                         timing           :: Union{TimingLog, Nothing} = nothing)
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
@@ -1876,9 +1969,11 @@ function run_simulation!(state            :: FlowState,
             end
         end
 
-        # HDF5 output
+        # HDF5 output — timed so cumulative I/O cost is visible in summary
         if _should_write_frame(output, t)
+            t_hdf5 = time()
             _write_frame!(output, state, t)
+            timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
         end
 
         if step % 50 == 0
@@ -1899,10 +1994,15 @@ function run_simulation!(state            :: FlowState,
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
 
     if output.enabled && t > output.last_write_t
+        t_hdf5 = time()
         _write_frame!(output, state, t)
+        timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
     end
     output.enabled &&
         @info "HDF5 output: $(output.frame_count) frames → $(output.path)"
+
+    # Record step count for the timing summary
+    timing !== nothing && (timing.n_steps = step)
 end
 
 # ---------------------------------------------------------------------------
@@ -1967,6 +2067,9 @@ function run_flood_model(;
         @info "Flow method : $flow_method"
     end
 
+    tl = TimingLog()
+    t_total = time()
+
     # 1. Start Cesium server early
     vis      = if vis_mode === :cesium
         VisualisationServer.start(port = vis_port,
@@ -1992,14 +2095,16 @@ function run_flood_model(;
         else
             mesh_for_aoi(aoi_path, resolution)
         end
-        @info "Mesh generated in $(round(time()-t0, digits=1))s — $(length(m)) cells"
+        tl.mesh = time() - t0
+        @info "Mesh generated in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
         m
     else
         _, parquet_path, mesh_out = mesh_source
         @info "Loading mesh from $parquet_path..."
         t0 = time()
         m = load_mesh_geoparquet(parquet_path)
-        @info "Mesh loaded in $(round(time()-t0, digits=1))s — $(length(m)) cells"
+        tl.mesh = time() - t0
+        @info "Mesh loaded in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
 
         # ── Compatibility check ──────────────────────────────────────────
         if flow_method === :sgs && !haskey(m.array_vars, "sgs_elev_bins")
@@ -2053,7 +2158,8 @@ function run_flood_model(;
         else
             error("Unknown dem_method :$dem_method")
         end
-        @info "DEM sampled in $(round(time()-t0, digits=1))s"
+        tl.dem_sample = time() - t0
+        @info "DEM sampled in $(_fmt_elapsed(tl.dem_sample))"
 
         mesh_save_path = if mesh_source[1] === :generate
             mesh_source[4]
@@ -2110,7 +2216,8 @@ function run_flood_model(;
             build_sgs_tables!(mesh, dem_source;
                               n_bins=sgs_bins, n_samples=sgs_samples,
                               halton_seed=halton_seed)
-            @info "SGS tables built in $(round(time()-t0, digits=1))s"
+            tl.sgs_tables = time() - t0
+            @info "SGS tables built in $(_fmt_elapsed(tl.sgs_tables))"
 
             mesh_save_path = mesh_source[1] === :generate ?
                 mesh_source[4] : something(mesh_source[3], mesh_source[2])
@@ -2147,11 +2254,13 @@ function run_flood_model(;
     flow_state = initialise_flow_model(mesh, method_obj;
                                         manning_n       = manning_n,
                                         friction_raster = friction_source)
-    @info "Flow model ready in $(round(time()-t0, digits=1))s  " *
+    tl.flow_init = time() - t0
+    @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
+    t0_src = time()
     all_sources = AbstractSource[]
     for (lon, lat, rate) in injection_specs
         idx, cid, dist_m = _find_nearest_cell(mesh, lon, lat)
@@ -2311,15 +2420,19 @@ function run_flood_model(;
     sim_output.enabled && _write_mesh_metadata!(sim_output, mesh)
 
     # 9. Simulation loop
+    tl.source_setup = time() - t0_src
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  " *
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
           "sources=$(length(all_sources))  open_bc=$(count(bc -> bc !== Closed, flow_state.ghost_cell_bc))"
+    t0 = time()
     run_simulation!(flow_state, mesh, sim_duration, dt_max,
                     vis, vis_mode, sim_output;
                     method        = method_obj,
                     rainfall_rate = rainfall_rate,
                     all_sources   = all_sources,
-                    sgs_diag      = sgs_diag)
+                    sgs_diag      = sgs_diag,
+                    timing        = tl)
+    tl.simulation = time() - t0
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -2327,6 +2440,7 @@ function run_flood_model(;
     end
 
     if vis !== nothing
+        t0_vis = time()
         try
             if vis_mode === :cesium
                 @info "Simulation complete. Cesium viewer at http://localhost:$vis_port"
@@ -2351,7 +2465,11 @@ function run_flood_model(;
                 MakieVisualiser.stop(vis)
             end
         end
+        tl.visualiser = time() - t0_vis
     end
+
+    tl.total = time() - t_total
+    _print_timing_summary(tl, length(mesh.cells), sim_duration)
 
     return mesh, flow_state
 end
