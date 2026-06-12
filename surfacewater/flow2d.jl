@@ -37,15 +37,47 @@ const _G = 9.81   # m s⁻²
 # a meaningful computational saving on large meshes (most boundary edges are dry).
 const HFLOW_THRESHOLD = 0.001
 
-# Froude number limit for subcritical flow.  Matches CAESAR-Lisflood froude_limit = 0.8.
+# Froude number limit for subcritical flow.  
 # Unit discharge is capped at q_max = h_flow × √(g × h_flow) × FROUDE_LIMIT.
 # This suppresses the supercritical oscillation mode that drives checkerboarding
 # in inertial models on irregular meshes.
 const FROUDE_LIMIT = 0.5
 
-# ---------------------------------------------------------------------------
-# Bates et al. (2010) inertial formulation
-# ---------------------------------------------------------------------------
+# Q-centred (spatial momentum smoothing) parameter — θ in the expression:
+#   q_eff = θ × q_prev_e + (1−θ)/2 × (q_prev_collinear_i + q_prev_collinear_j)
+# θ = 1.0 disables smoothing (pure Bates). θ = 0.9 is the LISFLOOD-FP default.
+# Lower values provide stronger damping of the checkerboard mode but reduce
+# the inertial accuracy of the momentum term. Applied in step_standard! and
+# step_sgs! Phase A via _q_centred(). Decoupled from FROUDE_LIMIT so both
+# fixes can be tuned independently.
+const Q_CENTRE_THETA = 0.9
+
+"""
+    _q_centred(flux, e, col_i, col_j) → Float64
+
+Return the Q-centred (spatially smoothed) unit discharge for edge `e`.
+
+  q_eff = θ × flux[e] + (1−θ)/2 × (flux[col_i] + flux[col_j])
+
+where `col_i` and `col_j` are the indices of the most-collinear edges on
+the ci and cj sides respectively (stored in EdgeList.collinear_i/j).
+0 = absent (boundary cell); handled by normalising over available neighbours.
+
+The checkerboard mode has opposite signs on alternating edges, so the average
+over collinear neighbours naturally cancels it. For a coherent flow field
+(all fluxes same sign and magnitude) the smoothing has negligible effect.
+"""
+@inline function _q_centred(flux :: Vector{Float64},
+                              e    :: Int,
+                              ci   :: Int,   # collinear_i[e]
+                              cj   :: Int    # collinear_j[e]
+                              )::Float64
+    q0   = flux[e]
+    n_nb = (ci > 0 ? 1 : 0) + (cj > 0 ? 1 : 0)
+    n_nb == 0 && return q0
+    q_nb = (ci > 0 ? flux[ci] : 0.0) + (cj > 0 ? flux[cj] : 0.0)
+    return Q_CENTRE_THETA * q0 + (1.0 - Q_CENTRE_THETA) * q_nb / n_nb
+end
 
 """
     _bates_flux(q_prev, wse_i, wse_j, z_sill, width, L, cos_theta, n_mann, dt) → Float64

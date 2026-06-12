@@ -132,17 +132,24 @@ Forward-compatibility for multi-resolution (Phase 3):
     current active count (for single-resolution, n_edges == max_edges).
 """
 struct EdgeList
-    n_edges   :: Int
-    cell_i    :: Vector{Int}        # lower cell index  (cell_i < cell_j always)
-    cell_j    :: Vector{Int}        # higher cell index
-    width     :: Vector{Float64}    # shared edge length (m)
-    L         :: Vector{Float64}    # centre-to-centre haversine distance (m)
-    cos_theta :: Vector{Float64}    # non-orthogonality correction (1.0 = orthogonal)
-    sill      :: Vector{Float64}    # sill elevation (m) — bed or SGS minimum
-    flux      :: Vector{Float64}    # q (m²/s) at t-dt, signed cell_i → cell_j
-                                    #   used by standard flow and SGS Bates kernel
-    flux_Q    :: Vector{Float64}    # Q (m³/s) at t-dt, signed cell_i → cell_j
-                                    #   used by SGS R-A kernel only; zero otherwise
+    n_edges      :: Int
+    cell_i       :: Vector{Int}        # lower cell index  (cell_i < cell_j always)
+    cell_j       :: Vector{Int}        # higher cell index
+    width        :: Vector{Float64}    # shared edge length (m)
+    L            :: Vector{Float64}    # centre-to-centre haversine distance (m)
+    cos_theta    :: Vector{Float64}    # non-orthogonality correction (1.0 = orthogonal)
+    sill         :: Vector{Float64}    # sill elevation (m) — bed or SGS minimum
+    flux         :: Vector{Float64}    # q (m²/s) at t-dt, signed cell_i → cell_j
+                                       #   used by standard flow and SGS Bates kernel
+    flux_Q       :: Vector{Float64}    # Q (m³/s) at t-dt, signed cell_i → cell_j
+                                       #   used by SGS R-A kernel only; zero otherwise
+    # Q-centred scheme (spatial momentum smoothing for checkerboard suppression).
+    # For edge e connecting ci→cj, collinear_i[e] is the index of the edge of ci
+    # most collinear with e (most opposite in direction — the "upstream" side).
+    # collinear_j[e] similarly for cj. 0 = no collinear edge found (boundary cell).
+    # Used by step_standard! and step_sgs! Phase A to compute smoothed q_prev.
+    collinear_i  :: Vector{Int}        # index of most-collinear edge on ci side
+    collinear_j  :: Vector{Int}        # index of most-collinear edge on cj side
 end
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
@@ -708,6 +715,88 @@ function _build_edge_list(cells       :: Vector{A5Cell},
         end
     end
 
+    # ── Q-centred collinear edge lookup ──────────────────────────────────────
+    # For each edge e = (ci, cj), find the edge of ci most collinear with e
+    # (i.e. whose direction from ci is most opposite to the ci→cj direction),
+    # and similarly the edge of cj most collinear with e from cj's perspective.
+    # These are stored as collinear_i[e] and collinear_j[e] (edge indices, 0=none).
+    #
+    # "Most collinear" = the other edge of that cell whose far endpoint is most
+    # directly opposite — i.e. the dot product of the two edge direction vectors
+    # from the shared cell centre is most negative (closest to -1.0).
+    #
+    # We work in a local equirectangular frame centred at each cell for efficiency.
+    # All geometry uses already-computed cell centres (lon/lat in degrees).
+
+    collinear_i_vec = zeros(Int, n_edges)
+    collinear_j_vec = zeros(Int, n_edges)
+
+    # Build a cell → list of (edge_index, far_cell_index) lookup
+    cell_edges = [Tuple{Int,Int}[] for _ in 1:n]
+    for e2 in 1:n_edges
+        push!(cell_edges[ci[e2]], (e2, cj[e2]))
+        push!(cell_edges[cj[e2]], (e2, ci[e2]))
+    end
+
+    cos_lat_deg = 111_320.0   # metres per degree latitude (approximate)
+
+    for e2 in 1:n_edges
+        c_i = ci[e2]
+        c_j = cj[e2]
+        lon_i = cells[c_i].center_lon;  lat_i = cells[c_i].center_lat
+        lon_j = cells[c_j].center_lon;  lat_j = cells[c_j].center_lat
+        clat  = cosd(0.5 * (lat_i + lat_j))
+
+        # Unit vector from ci to cj (equirectangular)
+        dx_ij = (lon_j - lon_i) * clat * cos_lat_deg
+        dy_ij = (lat_j - lat_i) * cos_lat_deg
+        len_ij = sqrt(dx_ij^2 + dy_ij^2)
+        len_ij < 1.0 && continue
+        ux = dx_ij / len_ij;  uy = dy_ij / len_ij
+
+        # For ci: find the other edge of ci whose direction (ci → far_cell)
+        # has the most negative dot with (ci → cj), i.e. most opposite.
+        best_dot_i = -0.5   # threshold: must be at least moderately opposite
+        best_e_i   = 0
+        for (e3, far) in cell_edges[c_i]
+            e3 == e2 && continue
+            lon_f = cells[far].center_lon;  lat_f = cells[far].center_lat
+            dx_f  = (lon_f - lon_i) * clat * cos_lat_deg
+            dy_f  = (lat_f - lat_i) * cos_lat_deg
+            len_f = sqrt(dx_f^2 + dy_f^2)
+            len_f < 1.0 && continue
+            dot = (dx_f * ux + dy_f * uy) / len_f   # negative = opposite direction
+            if dot < best_dot_i
+                best_dot_i = dot
+                best_e_i   = e3
+            end
+        end
+        collinear_i_vec[e2] = best_e_i
+
+        # For cj: find the other edge of cj most opposite to (cj → ci)
+        best_dot_j = -0.5
+        best_e_j   = 0
+        for (e3, far) in cell_edges[c_j]
+            e3 == e2 && continue
+            lon_f = cells[far].center_lon;  lat_f = cells[far].center_lat
+            dx_f  = (lon_f - lon_j) * clat * cos_lat_deg
+            dy_f  = (lat_f - lat_j) * cos_lat_deg
+            len_f = sqrt(dx_f^2 + dy_f^2)
+            len_f < 1.0 && continue
+            # Direction from cj perspective: opposite of ux,uy
+            dot = -(dx_f * ux + dy_f * uy) / len_f
+            if dot < best_dot_j
+                best_dot_j = dot
+                best_e_j   = e3
+            end
+        end
+        collinear_j_vec[e2] = best_e_j
+    end
+
+    n_col_i = count(>(0), collinear_i_vec)
+    n_col_j = count(>(0), collinear_j_vec)
+    @info "Q-centred collinear edges: ci=$(n_col_i)/$(n_edges)  cj=$(n_col_j)/$(n_edges) found"
+
     return EdgeList(
         n_edges,
         ci[1:n_edges],
@@ -718,6 +807,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
         sls[1:n_edges],
         zeros(Float64, n_edges),   # flux  (m²/s) — standard flow and SGS Bates
         zeros(Float64, n_edges),   # flux_Q (m³/s) — SGS R-A kernel only
+        collinear_i_vec,
+        collinear_j_vec,
     )
 end
 
@@ -1323,8 +1414,14 @@ function step_standard!(state::FlowState, dt::Float64)
         # Identify donor depth for the volume limiter (higher-WSE side donates).
         depth_donor = wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
 
+        # Q-centred: spatially smooth q_prev using the most-collinear neighbouring
+        # edge fluxes. This damps the checkerboard oscillation mode on the pentagonal
+        # mesh while preserving coherent flow signals. θ = Q_CENTRE_THETA (0.9).
+        q_prev_eff = _q_centred(edges.flux, e,
+                                 edges.collinear_i[e], edges.collinear_j[e])
+
         Q, q_stored = _bates_flux_limited(
-            edges.flux[e], wse_ci, wse_cj, edges.sill[e],
+            q_prev_eff, wse_ci, wse_cj, edges.sill[e],
             edges.width[e], edges.L[e], edges.cos_theta[e],
             min(state.manning_n[ci], state.manning_n[cj]), dt,
             depth_donor)
@@ -1481,11 +1578,6 @@ function step_sgs!(state::FlowState, dt::Float64)
         end
 
         # ── R-A flux kernel ──────────────────────────────────────────────────
-        # Look up cross-sectional flow area A and hydraulic radius R from the
-        # pre-computed edge hydraulic curves in each cell's SGSTable.
-        # Both perspectives (ci and cj) are averaged for a symmetric treatment.
-        # The adjacency slot is the position of cj in ci's neighbour list,
-        # looked up via adj_matrix (O(5) per edge, negligible).
         wse_flow = max(wse_ci_eff, wse_cj_eff)
 
         slot_i = _adjacency_slot(state.adj_matrix, ci, cj)
@@ -1497,15 +1589,19 @@ function step_sgs!(state::FlowState, dt::Float64)
         A_edge = 0.5 * (A_i + A_j)
         R_edge = 0.5 * (R_i + R_j)
 
-        Q_new = _manning_flux_ra(edges.flux_Q[e], wse_ci_eff, wse_cj_eff, z_sill,
+        # Q-centred smoothing on flux_Q (volumetric momentum for R-A kernel).
+        # Same collinear lookup as standard flow — the checkerboard mode exists
+        # on the pentagonal mesh regardless of the flux kernel used.
+        Q_prev_eff = _q_centred(edges.flux_Q, e,
+                                 edges.collinear_i[e], edges.collinear_j[e])
+
+        Q_new = _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
                                   A_edge, R_edge,
                                   edges.L[e], edges.cos_theta[e],
                                   0.5 * (state.manning_n[ci] + state.manning_n[cj]),
                                   dt)
 
         # Fix C: store Q (m³/s) as momentum state for next step.
-        # The R-A form is self-stabilising — no Froude or volume limiter needed here.
-        # Phase B DONOR_EDGE_DIVISOR cap is retained as a last-resort mass guard.
         edges.flux_Q[e] = Q_new
         edge_vol[e]     = Q_new * dt
     end
