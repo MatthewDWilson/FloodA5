@@ -34,17 +34,9 @@
 # Abstract type
 # ---------------------------------------------------------------------------
 
-"""
-    AbstractSource
-
-Supertype for all water-adding boundary inputs.
-
-Concrete subtypes must implement:
-  apply_source!(state, source, t, dt)  — add dV to state.volume
-  cumulative_volume(source, t)         — total volume injected up to time t (m³)
-  source_label(source)                 — short string for logging
-"""
-abstract type AbstractSource end
+# AbstractSource is declared in FloodModel.jl (before InjectionPoint and RainPoint)
+# so that those struct definitions can reference it as a supertype.
+# This file adds InflowPoint and the dispatch methods for all AbstractSource subtypes.
 
 # ---------------------------------------------------------------------------
 # InflowPoint — time-varying hydrograph at a point

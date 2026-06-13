@@ -166,21 +166,56 @@ const BRIDGE_SCRIPT = "a5_bridge.py"
 const PYTHON_CMD    = Ref{String}("python")   # safe fallback; overwritten by _find_python()
 
 function _find_python()::Bool
-    # Already resolved in this session
+    # Already resolved to a non-default path in this session
     !isempty(PYTHON_CMD[]) && PYTHON_CMD[] != "python" && return true
+
+    # Priority 1: use PyCall's configured Python — this is the same interpreter
+    # that setup.jl installed pya5 into, so it's guaranteed to have the right
+    # packages and avoids the Windows App Execution Alias problem entirely.
+    try
+        py = PyCall.python
+        if !isempty(py) && isfile(py)
+            PYTHON_CMD[] = py
+            return true
+        end
+    catch end
+
+    # Priority 2: search common fixed paths and PATH entries.
+    # On Windows, "python" and "python3" may be intercepted by App Execution
+    # Aliases which launch the Microsoft Store instead of a real interpreter.
+    # We detect this by checking that the output contains "Python X.Y.Z" and
+    # that the command is not the Windows stub (which prints a Store redirect
+    # message and exits with code 9009 or 0 depending on the system).
     candidates = if Sys.iswindows()
-        [raw"C:\Python311\python.exe", raw"C:\Python310\python.exe",
-         raw"C:\Python39\python.exe", "python", "python3"]
+        [raw"C:\Python312\python.exe", raw"C:\Python311\python.exe",
+         raw"C:\Python310\python.exe", raw"C:\Python39\python.exe",
+         "python", "python3"]
     else
         ["python3", "python"]
     end
+
     for py in candidates
         try
             buf = IOBuffer()
-            run(pipeline(Cmd([py, "--version"]), stdout=buf, stderr=buf))
-            occursin("Python", String(take!(buf))) && (PYTHON_CMD[] = py; return true)
+            # Capture both stdout and stderr: the real Python prints to stderr,
+            # the Windows Store alias prints to stdout.
+            result = run(pipeline(ignorestatus(Cmd([py, "--version"])),
+                                  stdout=buf, stderr=buf))
+            output = String(take!(buf))
+            # Require "Python X.Y" in the output AND a sane exit code.
+            # The Windows App Execution Alias exits 9009 or prints no version.
+            if result.exitcode == 0 && occursin(r"Python \d+\.\d+", output)
+                PYTHON_CMD[] = py
+                return true
+            end
         catch end
     end
+
+    # Last resort: warn with actionable advice
+    @warn "Python not found via PyCall or PATH. " *
+          "If you are on Windows, check Settings → Apps → Advanced app settings → " *
+          "App execution aliases and disable the Python alias. " *
+          "Then re-run setup.jl to verify the bridge."
     return false
 end
 
@@ -195,7 +230,7 @@ end
 Run a5_bridge.py with the given arguments and return the parsed JSON result.
 """
 function _run_bridge(args::String...)
-    _find_python()
+    _find_python() || error("Python not found — run setup.jl to configure the environment.")
     bridge_path = joinpath(BRIDGE_DIR, BRIDGE_SCRIPT)
     isfile(bridge_path) || error("Bridge script not found: $bridge_path")
 
@@ -207,8 +242,12 @@ function _run_bridge(args::String...)
     catch e
         py_err = String(take!(stderr_buf))
         py_out = String(take!(stdout_buf))
-        error("Python bridge failed.\nSTDERR:\n$(isempty(py_err) ? "(empty)" : py_err)\n" *
-              "STDOUT:\n$(isempty(py_out) ? "(empty)" : py_out)")
+        error("Python bridge failed.\n" *
+              "Python: $(PYTHON_CMD[])\n" *
+              "Bridge: $bridge_path\n" *
+              "STDERR:\n$(isempty(py_err) ? "(empty)" : py_err)\n" *
+              "STDOUT:\n$(isempty(py_out) ? "(empty)" : py_out)\n" *
+              "Hint: run setup.jl to verify the Python environment and bridge.")
     end
     out   = String(take!(stdout_buf))
     isempty(strip(out)) && error("Python bridge returned empty output")
@@ -1750,7 +1789,7 @@ end
 
 Approximate planar area of a lon/lat polygon in m², using the shoelace
 formula on an equirectangular projection centred on the polygon centroid.
-Accurate to ~0.1% for A5 cells at resolution 14 (~356 m spacing, ~12.6 ha area).
+Accurate to ~0.1% for A5 cells at resolution 14 (~km scale).
 """
 function _polygon_area_m2(boundary::Vector{Vector{Float64}})::Float64
     n = length(boundary)
@@ -1826,7 +1865,7 @@ Returns NaN if no shared edge is found (non-adjacent cells).
 Implementation notes
 ---------------------
 All geometry is performed in a local equirectangular projection centred on
-the edge midpoint.  At A5 resolution 14 (~356 m cell spacing) the planar
+the edge midpoint.  At A5 resolution 14 (~1.4 km cell spacing) the planar
 approximation introduces < 0.05% error.  The same projection is used at finer
 resolutions (including multi-resolution meshes in Phase 3), where the error
 is even smaller.

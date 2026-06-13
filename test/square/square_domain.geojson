@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-0.006745, -0.006745],
+            [0.006745, -0.006745],
+            [0.006745, 0.006745],
+            [-0.006745, 0.006745],
+            [-0.006745, -0.006745]
+          ]
+        ]
+      },
+      "properties": {
+        "name": "3x3 km Square Center",
+        "description": "Centered on 0 Lat, 0 Lon"
+      }
+    }
+  ]
+}

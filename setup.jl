@@ -124,10 +124,10 @@ if !isfile(bridge)
 else
     buf_out = IOBuffer()
     buf_err = IOBuffer()
-    result  = run(ignorestatus(pipeline(
-        Cmd([python_exe, bridge, "check"]; dir=joinpath(project_dir, "mesh")),
+    result  = run(pipeline(
+        ignorestatus(setenv(Cmd([python_exe, bridge, "check"]), dir=joinpath(project_dir, "mesh"))),
         stdout=buf_out, stderr=buf_err
-    )))
+    ))
     out = String(take!(buf_out))
     err = String(take!(buf_err))
 
@@ -153,14 +153,27 @@ end
 
 println("\n[ 4/4 ] Checking CUDA / GPU …")
 
-cuda_ok = false
+# Use `global` so assignments inside try/catch are visible outside the block.
+global cuda_ok = false
 try
     @eval using CUDA
-    cuda_ok = @eval CUDA.functional()
+    # Query functional() — may warn about toolkit/driver version mismatch but
+    # still return true when the GPU works despite the version difference.
+    global cuda_ok = try
+        @eval CUDA.functional()
+    catch cuda_err
+        @warn "  CUDA.jl initialisation error: $cuda_err"
+        false
+    end
     if cuda_ok
-        dev = @eval CUDA.device()
-        name = @eval CUDA.name(dev)
-        println("  ✓ CUDA functional — GPU: $name")
+        # Wrap device query — can fail if runtime/driver are slightly out of sync.
+        gpu_name = try
+            dev = @eval CUDA.device()
+            @eval CUDA.name($dev)
+        catch
+            "unknown GPU"
+        end
+        println("  ✓ CUDA functional — GPU: $gpu_name")
         println("    PIP sampling will run on GPU (fast path).")
     else
         @warn "  CUDA.jl loaded but no functional GPU detected."
@@ -192,24 +205,27 @@ else
     # The robust fix is to replace all @sprintf/@printf with Julia string
     # interpolation, and remove the now-unused `using Printf` import.
 
+    # Each new_pat is a raw string to be written into FloodModel.jl.
+    # Dollar signs must be escaped (\$) so Julia does not interpolate them
+    # here in setup.jl — they should only be evaluated inside FloodModel.jl.
     patches = [
         # (old_pattern, new_pattern, description)
         (
             """    @info @sprintf(\"Adjacency built: %d cells, %d undirected edges (shared-vertex method)\",
                    n, n_edges)""",
-            """    @info \"Adjacency built: $n cells, $n_edges undirected edges (shared-vertex method)\" """,
+            """    @info \"Adjacency built: \$(n) cells, \$(n_edges) undirected edges (shared-vertex method)\" """,
             "Adjacency built message"
         ),
         (
             """    @info @sprintf(\"Edge list built: %d edges for %d cells (%.2f edges/cell)\",
                    n_edges, n, n_edges / max(n, 1))""",
-            """    @info \"Edge list built: $n_edges edges for $n cells ($(round(n_edges/max(n,1),digits=2)) edges/cell)\" """,
+            """    @info \"Edge list built: \$(n_edges) edges for \$(n) cells (\$(round(n_edges/max(n,1),digits=2)) edges/cell)\" """,
             "Edge list built message"
         ),
         (
             """        @info @sprintf(\"Edge non-orthogonality (cos θ):  min=%.3f  mean=%.3f  max=%.3f\",
                        minimum(valid_ct), mean(valid_ct), maximum(valid_ct))""",
-            """        @info \"Edge non-orthogonality (cos θ):  min=$(round(minimum(valid_ct),digits=3))  mean=$(round(mean(valid_ct),digits=3))  max=$(round(maximum(valid_ct),digits=3))\" """,
+            """        @info \"Edge non-orthogonality (cos θ):  min=\$(round(minimum(valid_ct),digits=3))  mean=\$(round(mean(valid_ct),digits=3))  max=\$(round(maximum(valid_ct),digits=3))\" """,
             "Edge non-orthogonality message"
         ),
         (
@@ -217,20 +233,20 @@ else
                 \"  step=%5d  t=%.1fs  dt=%.2fs  wet=%d  max_depth=%.3fm  \" *
                 \"domain_vol=%.1fm³  mb_err=%.1fm³\",
                 step, t, dt, n_wet, max_depth, domain_vol, mb_err)""",
-            """            @info \"  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³\" """,
+            """            @info \"  step=\$(lpad(step,5))  t=\$(round(t,digits=1))s  dt=\$(round(dt,digits=2))s  wet=\$(n_wet)  max_depth=\$(round(max_depth,digits=3))m  domain_vol=\$(round(domain_vol,digits=1))m³  mb_err=\$(round(mb_err,digits=1))m³\" """,
             "Simulation step progress message"
         ),
         (
             """        @info @sprintf(\"Injection point: (%.5f, %.5f) → cell %s  \" *
                        \"(dist=%.0fm)  rate=%.4f m³/s\",
                        lon, lat, cid, dist_m, rate)""",
-            """        @info \"Injection point: ($(round(lon,digits=5)), $(round(lat,digits=5))) → cell $cid  (dist=$(round(dist_m,digits=0))m)  rate=$(round(rate,digits=4)) m³/s\" """,
+            """        @info \"Injection point: (\$(round(lon,digits=5)), \$(round(lat,digits=5))) → cell \$(cid)  (dist=\$(round(dist_m,digits=0))m)  rate=\$(round(rate,digits=4)) m³/s\" """,
             "Injection point message"
         ),
     ]
 
-    patched = src
-    n_fixes = 0
+    local patched = src
+    local n_fixes = 0
 
     for (old_pat, new_pat, desc) in patches
         if occursin(old_pat, patched)

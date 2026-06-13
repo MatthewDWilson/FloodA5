@@ -194,13 +194,19 @@ end
 # boundaryinputs includes) because sources.jl dispatches apply_source! on these
 # types using concrete type annotations, which Julia resolves at include time.
 
+# AbstractSource is declared here (before InjectionPoint and RainPoint which are
+# concrete subtypes) so that their struct definitions can reference the supertype.
+# The full AbstractSource documentation and dispatch methods live in
+# boundaryinputs/sources.jl which is included after these structs.
+abstract type AbstractSource end
+
 """
-    InjectionPoint
+    InjectionPoint <: AbstractSource
 
 A fixed-rate point source: water added to the nearest mesh cell at a
 constant volumetric flow rate (m³/s) for the duration of the simulation.
 """
-struct InjectionPoint
+struct InjectionPoint <: AbstractSource
     cell_index :: Int       # index into state.cell_ids
     cell_id    :: String    # hex cell ID (for logging)
     rate_m3s   :: Float64   # volumetric flow rate (m³/s)
@@ -219,7 +225,7 @@ cell's plan area.  Unlike `--rainfall` (which applies to every cell),
 `rate_m3s` is pre-computed as `rainfall_mm_hr / 3_600_000 × cell_area_m2`
 and stored so the simulation loop is identical to the InjectionPoint path.
 """
-struct RainPoint
+struct RainPoint <: AbstractSource
     cell_index     :: Int       # index into state.cell_ids
     cell_id        :: String    # hex cell ID (for logging)
     rate_m3s       :: Float64   # volumetric flow rate (m³/s) = mm_hr/3.6e6 × area
@@ -342,8 +348,14 @@ mutable struct TimingLog
     hdf5_output  :: Float64
     visualiser   :: Float64
     n_steps      :: Int        # simulation step count (filled by run_simulation!)
+    # Mass balance fields (filled by run_simulation! on completion)
+    vol_added    :: Float64    # cumulative volume injected (m³)
+    vol_removed  :: Float64    # cumulative outflow through ghost edges (m³)
+    vol_domain   :: Float64    # volume remaining in domain at end (m³)
+    mb_err       :: Float64    # vol_added - vol_domain - vol_removed (m³)
 end
-TimingLog() = TimingLog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+TimingLog() = TimingLog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                        0, 0.0, 0.0, 0.0, 0.0)
 
 function _fmt_elapsed(s::Float64)::String
     s < 0.0005 && return "< 1 ms"
@@ -375,34 +387,64 @@ function _print_timing_summary(tl      :: TimingLog,
         ("Total wall time",       tl.total),
     ]
 
-    w = 26   # phase column width
-    sep = "─" ^ (w + 30)
+    w   = 26
+    sep = "─" ^ (w + 32)
 
-    rows = String["", "FloodA5 — Timing Summary", sep,
-                  rpad("Phase", w) * "  " *
-                  lpad("Wall time", 12) * "   % of total", sep]
-
+    # Use println directly so the table is never interleaved with logger prefixes
+    # and is always printed even if the logger level is above Info.
+    println()
+    println("FloodA5 — Run Summary")
+    println(sep)
+    println(rpad("Phase", w) * "  " * lpad("Wall time", 12) * "  " * lpad("% total", 8))
+    println(sep)
     for (label, elapsed) in phases
-        pct = tl.total > 0.0 ?
-              string(round(100.0 * elapsed / tl.total, digits=1)) : "—"
-        label == "Total wall time" && push!(rows, sep)
-        push!(rows, rpad(label, w) * "  " *
-                    lpad(_fmt_elapsed(elapsed), 12) * "   " * lpad(pct, 5) * "%")
+        pct_str = tl.total > 0.0 ?
+                  lpad(string(round(100.0 * elapsed / tl.total, digits=1)) * "%", 8) :
+                  lpad("—", 8)
+        label == "Total wall time" && println(sep)
+        println(rpad(label, w) * "  " * lpad(_fmt_elapsed(elapsed), 12) * "  " * pct_str)
     end
-    push!(rows, sep)
+    println(sep)
 
     if tl.simulation > 0.0 && tl.n_steps > 0
-        sps  = round(tl.n_steps / tl.simulation, digits=1)
+        println("  Cells          : $(n_cells)")
+        println("  Steps          : $(tl.n_steps)  " *
+                "($(round(tl.n_steps / tl.simulation, digits=1)) steps/wall-s)")
         ratio = round((sim_dur / 3600.0) / (tl.simulation / 3600.0), digits=2)
-        push!(rows, "  Cells          : $n_cells")
-        push!(rows, "  Steps          : $(tl.n_steps)  " *
-                    "($(round(tl.n_steps / tl.simulation, digits=1)) steps/wall-s)")
-        push!(rows, "  Sim speed      : $(ratio) sim-hrs / wall-hr  " *
-                    "($(round(sim_dur/3600.0, digits=2)) sim-hrs in " *
-                    "$(_fmt_elapsed(tl.simulation)))")
+        println("  Sim speed      : $(ratio) sim-hrs/wall-hr  " *
+                "($(round(sim_dur/3600.0, digits=2)) sim-hrs in " *
+                "$(_fmt_elapsed(tl.simulation)))")
+        println(sep)
     end
-    push!(rows, sep); push!(rows, "")
-    @info join(rows, "\n")
+
+    # Mass balance section
+    if tl.vol_added > 0.0 || tl.vol_domain > 0.0
+        println("Mass Balance")
+        println(sep)
+        _mb_row(w, "Volume added",    tl.vol_added,   "m³")
+        _mb_row(w, "Volume removed",  tl.vol_removed, "m³")
+        _mb_row(w, "Volume in domain",tl.vol_domain,  "m³")
+        abs_err = abs(tl.mb_err)
+        pct_err = tl.vol_added > 0.0 ? abs(tl.mb_err) / tl.vol_added * 100.0 : 0.0
+        println(rpad("Mass balance error", w) * "  " *
+                lpad(_si_fmt(abs_err, "m³"), 12) * "  " *
+                lpad("(" * string(round(pct_err, sigdigits=3)) * "%)", 8))
+        println(sep)
+    end
+    println()
+end
+
+function _mb_row(w::Int, label::String, val::Float64, unit::String)
+    println(rpad(label, w) * "  " * lpad(_si_fmt(val, unit), 12))
+end
+
+"""Format a value with SI prefix for readability (k, M, G)."""
+function _si_fmt(v::Float64, unit::String)::String
+    v < 0      && return "-" * _si_fmt(-v, unit)
+    v < 1e3    && return "$(round(v, digits=2)) $unit"
+    v < 1e6    && return "$(round(v/1e3, digits=2)) k$unit"
+    v < 1e9    && return "$(round(v/1e6, digits=2)) M$unit"
+    return              "$(round(v/1e9, digits=2)) G$unit"
 end
 
 """

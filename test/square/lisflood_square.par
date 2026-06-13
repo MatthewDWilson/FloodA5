@@ -1,0 +1,38 @@
+####################################
+##SIMULATION CONTROL
+##Length of Simulation Time, in seconds (1hr = 3600 seconds)
+sim_time	72000
+
+####################################
+##INPUT FILES
+#Topographic Survey
+DEMfile		test/square/square.asc
+
+#Fixed/Floodplain Boundary Conditions
+bcifile		test/square/square.bci
+
+####################################
+##INPUT PARAMETERS
+fpfric		0.03
+
+####################################
+##MODEL OUTPUT CONTROL
+
+#Folder to save output files
+dirroot		test/square/lisflood-fp
+
+#Output File Naming Convention
+resroot		squareresults
+
+#Frequency of mass balance information (in seconds)
+massint		300
+
+#Frequency for other outputs - Flood Depths etc (in seconds)
+saveint		300
+
+#checkpoint	1.0 
+
+## Flow model:
+acceleration
+
+
