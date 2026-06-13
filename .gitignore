@@ -4,6 +4,7 @@ test/**/*.h5
 test/**/*.parquet
 test/**/*.prj
 zipfiles/
+projectinstructions/
 # Planar embankment test — generated files (run generate_planar_embankment_dem.py)
 test/planar_embankment/planar_embankment_dem.tif
 test/planar_embankment/planar_embankment_params.json
