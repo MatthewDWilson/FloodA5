@@ -1,0 +1,37 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Generate planar embankment DEM",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test/planar_embankment/generate_planar_embankment_dem.py"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Generate synthetic DEM (existing test)",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "test/synthetic_dem/generate_synthetic_dem.py"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

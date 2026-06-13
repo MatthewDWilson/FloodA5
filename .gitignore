@@ -4,3 +4,10 @@ test/**/*.h5
 test/**/*.parquet
 test/**/*.prj
 zipfiles/
+# Planar embankment test — generated files (run generate_planar_embankment_dem.py)
+test/planar_embankment/planar_embankment_dem.tif
+test/planar_embankment/planar_embankment_params.json
+test/planar_embankment/planar_embankment_aoi.geojson
+# Synthetic DEM test — generated files
+test/synthetic_dem/synthetic_dem.tif
+test/synthetic_dem/synthetic_dem_params.json

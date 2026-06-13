@@ -1,93 +1,105 @@
-# FloodA5 — Data Formats Reference
+# FloodA5 — Data Formats
 
-_Specification of all file formats used by FloodA5: GeoParquet mesh schema, HDF5 output layout, and the CesiumJS binary wire protocol. Intended as project context for visualisation, post-processing, and I/O development conversations._
+This document specifies all file formats used by FloodA5: GeoParquet mesh schema,
+HDF5 simulation output, hydrograph input formats, and the CesiumJS binary wire
+protocol.
 
 ---
 
 ## 1. GeoParquet Mesh File
 
-Produced by `save_mesh_geoparquet` (via `a5_bridge.py`). Read by `load_mesh_geoparquet` into an `A5Mesh` struct.
+Produced by `--meshout` (via `mesh/a5_bridge.py`). Loaded by `--meshload`.
+Extension: `.parquet`.
 
 ### Geometry column
-- Column name: `geometry`
-- Type: GeoParquet polygon geometry (WKB-encoded via geopandas)
-- CRS: EPSG:4326 (WGS84 geographic, lon/lat)
-- Each row: a single pentagon polygon (5 vertices + closing repeat = 6 coordinate pairs)
+
+| Property | Value |
+|---|---|
+| Column name | `geometry` |
+| Encoding | WKB via geopandas |
+| CRS | EPSG:4326 (WGS 84, longitude/latitude) |
+| Shape | Pentagon polygon — 5 vertices + closing repeat (6 coordinate pairs) |
 
 ### Required scalar columns
 
 | Column | dtype | Description |
-|--------|-------|-------------|
-| `cell_id` | string (hex) | 16-character zero-padded hex A5 cell ID (e.g. `"08a2a1072b59ffff"`) |
-| `center_lon` | float64 | Cell centre longitude (degrees, EPSG:4326) |
-| `center_lat` | float64 | Cell centre latitude (degrees, EPSG:4326) |
-| `resolution` | int32 | A5 resolution level (e.g. 14) |
+|---|---|---|
+| `cell_id` | string | 16-character zero-padded hex A5 cell ID, e.g. `08a2a1072b59ffff` |
+| `center_lon` | float64 | Cell centre longitude (degrees) |
+| `center_lat` | float64 | Cell centre latitude (degrees) |
+| `resolution` | int32 | A5 resolution level |
 
-### Optional scalar columns (added by FloodA5)
+### Static variable columns (added by FloodA5)
 
 | Column | dtype | Added by | Description |
-|--------|-------|----------|-------------|
-| `elevation` | float64 | `sample_dem_*` | Mean cell bed elevation (m above datum). NaN if out-of-DEM. |
-| `sgs_cell_area` | float64 | `build_sgs_tables!` | Geodetic plan area of cell polygon (m²) |
-| `sgs_z_min` | float64 | `build_sgs_tables!` | Minimum DEM sample within cell (m) |
-| `sgs_z_max` | float64 | `build_sgs_tables!` | Maximum DEM sample within cell (m) |
-| `sgs_n_bins` | float64 | `build_sgs_tables!` | Number of hypsometric bins (scalar, same for all cells) |
+|---|---|---|---|
+| `elevation` | float64 | `--dem` | Mean cell bed elevation (m). `NaN` if outside DEM extent. |
+| `sgs_cell_area` | float64 | SGS build | Geodetic plan area of cell polygon (m²) |
+| `sgs_z_min` | float64 | SGS build | Minimum DEM sample within cell (m) |
+| `sgs_z_max` | float64 | SGS build | Maximum DEM sample within cell (m) |
+| `sgs_n_bins` | float64 | SGS build | Number of hypsometric bins (same for all cells) |
 
-### Array columns (SGS hypsometric tables)
+### SGS array columns
 
-Stored as Apache Arrow list columns (variable-length arrays). Each row contains a 1-D array of length `n_bins` (or `n_bins+1` for bin edges).
+Stored as Apache Arrow list columns (variable-length arrays). Each row contains a
+1-D array. Length notation: `n_bins` = number of elevation bins (default 100);
+`max_nb` = 5 (maximum neighbours per cell).
 
-| Column | Array length | Description |
-|--------|-------------|-------------|
-| `sgs_elev_bins` | n_bins + 1 | Elevation bin edges (m) — quantile-spaced from z_min to z_max |
+| Column | Length | Description |
+|---|---|---|
+| `sgs_elev_bins` | n_bins + 1 | Elevation bin edges (m), quantile-spaced from z_min to z_max |
 | `sgs_vol_curve` | n_bins | Cumulative stored volume at each bin edge (m³) |
 | `sgs_area_curve` | n_bins | Wetted plan area at each bin elevation (m²) |
-| `sgs_edge_sills` | max_nb (= 5) | Minimum DEM elevation along shared edge to each neighbour (m) — indexed by adjacency slot |
+| `sgs_edge_sills` | max_nb | Minimum DEM elevation along the shared edge to each neighbour (m), indexed by adjacency slot |
+| `sgs_edge_area_curve` | n_bins × max_nb | Cross-sectional flow area at each elevation knot, per adjacency slot (m²). Stored as a flat array of length n_bins × 5; reshape to (n_bins, 5) on load. |
+| `sgs_edge_perim_curve` | n_bins × max_nb | Wetted perimeter at each elevation knot, per adjacency slot (m). Same layout as `sgs_edge_area_curve`. |
 
 ### Adjacency columns
 
 | Column | dtype | Description |
-|--------|-------|-------------|
-| `adj_0` … `adj_4` | string (hex) | Neighbour cell IDs in each of the up to 5 adjacency slots. Empty string if slot unused (boundary cells have <5 neighbours). |
+|---|---|---|
+| `adj_0` … `adj_4` | string | Neighbour cell IDs in each of the up to 5 adjacency slots. Empty string if the slot is unused (boundary cells have fewer than 5 neighbours). |
 
 ### Reading in Python
+
 ```python
 import geopandas as gpd
 import pyarrow.parquet as pq
 
-gdf = gpd.read_file("mesh.parquet")          # geometry + scalar columns
-tbl = pq.read_table("mesh.parquet")          # all columns including arrays
-sgs_vol = tbl["sgs_vol_curve"].to_pylist()  # list of lists
+# Geometry and scalar columns
+gdf = gpd.read_file("mesh.parquet")
+
+# All columns including array columns
+tbl = pq.read_table("mesh.parquet")
+sgs_vol = tbl["sgs_vol_curve"].to_pylist()   # list of lists (one per cell)
 ```
 
 ### Reading in Julia
+
 ```julia
 mesh = A5Grid.load_mesh_geoparquet("mesh.parquet")
 # mesh.static_vars["elevation"]          → Vector{Float64}
 # mesh.array_vars["sgs_vol_curve"]       → Matrix{Float64} (n_bins × n_cells)
-# mesh.adjacency                         → Dict{String, Vector{String}}
 ```
 
 ---
 
 ## 2. HDF5 Simulation Output
 
-Produced by `_write_frame!` and `_write_mesh_metadata!`. Extension `.h5` or `.hdf5`.
+Written by `--output`. Extension: `.h5` or `.hdf5`.
 
-### `/mesh` group — static data written once at simulation start
+### `/mesh` group — static data (written once at simulation start)
 
-| Dataset | shape | dtype | Description |
-|---------|-------|-------|-------------|
+| Dataset | Shape | dtype | Description |
+|---|---|---|---|
 | `/mesh/cell_ids` | (n_cells,) | string | 16-char zero-padded hex cell IDs |
-| `/mesh/elevations` | (n_cells,) | float64 | Bed elevation (m) |
+| `/mesh/elevations` | (n_cells,) | float64 | Bed elevation (m). `NaN` if not sampled. |
 | `/mesh/center_lons` | (n_cells,) | float64 | Cell centre longitude (degrees) |
 | `/mesh/center_lats` | (n_cells,) | float64 | Cell centre latitude (degrees) |
 
-Additional static variables from `mesh.static_vars` may be written if present.
-
 ### `/frames` group — time series
 
-Each timestep snapshot is stored as a numbered subgroup:
+Each snapshot is a numbered subgroup:
 
 ```
 /frames/000001/   t=60.0 s
@@ -95,46 +107,45 @@ Each timestep snapshot is stored as a numbered subgroup:
 ...
 ```
 
-| Dataset | shape | dtype | Description |
-|---------|-------|-------|-------------|
+| Dataset | Shape | dtype | Description |
+|---|---|---|---|
 | `t` | scalar | float64 | Simulation time (seconds) |
 | `water_depth` | (n_cells,) | float64 | Depth above local bed (m) |
-| `volume` | (n_cells,) | float64 | Stored water volume (m³) — primary state |
+| `volume` | (n_cells,) | float64 | Stored water volume (m³) — primary state variable |
 | `saturation` | (n_cells,) | float64 | Wetted fraction 0–1 (SGS: meaningful; standard: binary) |
-| `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s) — currently always zero |
+| `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s) |
+| `flux_Q` | (n_edges,) | float64 | Volumetric flux per edge (m³/s), SGS R-A solver only. Zero for standard solver. |
 
-Frame groups are zero-padded to 6 digits. Chunk size: `min(n_cells, 4096)`. Compression: gzip level 4.
+Datasets are chunked (`min(n_cells, 4096)`) and gzip-compressed (level 4). Frame
+groups are zero-padded to six digits.
 
 ### Reading in Python
+
 ```python
-import h5py, numpy as np
+import h5py
+import numpy as np
 
 with h5py.File("sim.h5") as f:
+    # Static mesh
     cell_ids = f["mesh/cell_ids"][:].astype(str)
     lons     = f["mesh/center_lons"][:]
     lats     = f["mesh/center_lats"][:]
-    
+
+    # All frames
     frames = sorted(f["frames"].keys())
-    depths = np.stack([f[f"frames/{fr}/water_depth"][:] for fr in frames])
     times  = np.array([f[f"frames/{fr}/t"][()] for fr in frames])
+    depths = np.stack([f[f"frames/{fr}/water_depth"][:] for fr in frames])
 
-# depths shape: (n_frames, n_cells)
-```
-
-### Reading in Julia
-```julia
-using HDF5
-
-h5open("sim.h5", "r") do f
-    cell_ids = read(f["mesh/cell_ids"])
-    frames   = sort(keys(f["frames"]))
-    depth_0  = read(f["frames/$(frames[1])/water_depth"])
-end
+# depths.shape = (n_frames, n_cells)
+print(depths[-1].max())   # peak depth in final frame
 ```
 
 ### Reading with xarray (recommended for analysis)
+
 ```python
-import xarray as xr, h5py, numpy as np
+import xarray as xr
+import h5py
+import numpy as np
 
 with h5py.File("sim.h5") as f:
     frames = sorted(f["frames"].keys())
@@ -151,72 +162,100 @@ ds = xr.Dataset(
 
 ---
 
-## 3. CesiumJS Binary Wire Protocol
+## 3. Hydrograph Input Formats
 
-The VisualisationServer serves the CesiumJS viewer via HTTP and WebSocket. The key design principle is **one variable fetched at a time** — only the actively displayed variable crosses the wire, scaling to 1M+ cells.
+### 3.1 Two-column CSV
 
-### HTTP endpoints
+The simplest format for `--inflow-point`. Two columns: simulation time in seconds
+and discharge in m³/s. An optional header row is auto-detected (if the first row
+is non-numeric, it is skipped).
 
-| Endpoint | Response | Description |
-|----------|----------|-------------|
-| `GET /viz/{file}` | `text/html` or `application/json` | Static files: `index.html`, `config.json` |
-| `GET /mesh` | `application/json` | GeoJSON FeatureCollection + `cell_order` array |
-| `GET /frames/count` | `application/json` | `{count: N, vars: ["depth", "saturation", ...]}` |
-| `GET /frames/{idx}` | `application/json` | `{t: 123.0, vars: ["depth", ...]}` — metadata only |
-| `GET /frames/{idx}/{varname}` | `application/octet-stream` | Raw Float32 LE array, n_cells × 4 bytes |
-| `GET /status` | `application/json` | Server diagnostics |
-
-### Binary frame format
-
-`GET /frames/{idx}/{varname}` returns a raw binary body:
-- Encoding: little-endian `float32` (`Float32` in Julia, `Float32Array` in JS)
-- Length: exactly `n_cells × 4` bytes
-- Ordering: matches the `cell_order` array from `/mesh` — index `i` in the Float32 array corresponds to the cell at `cell_order[i]`
-
-**Julia side (push):**
-```julia
-data = Float32.(state.water_depth)   # n_cells Float32 values
-body = Vector{UInt8}(reinterpret(UInt8, data))   # raw bytes
+```
+t_s,Q_m3s
+0,0.0
+3600,5.2
+7200,18.1
+10800,42.7
 ```
 
-**JavaScript side (receive):**
-```javascript
-const resp = await fetch(`/frames/${idx}/depth`);
-const buf  = await resp.arrayBuffer();
-const vals = new Float32Array(buf);   // vals[i] = depth of cell_order[i]
+Plain (no header):
+
+```
+0    0.0
+3600 5.2
 ```
 
-### WebSocket messages (JSON)
+Delimiter: comma or whitespace, auto-detected.
 
-The WebSocket endpoint (`WS /live`) pushes notifications from the server. The client does not send messages.
+### 3.2 LISFLOOD-FP `.bdy` file
 
-| `type` field | Payload | When sent |
-|-------------|---------|-----------|
-| `"mesh"` | `{type, data: GeoJSON, cell_order: [...]}` | On WebSocket connect |
-| `"framecount"` | `{type, count: N, vars: [...]}` | On connect (after mesh) |
-| `"newframe"` | `{type, idx: N, t: 123.0, vars: [...]}` | Each time `push_frame!` is called |
-| `"simcomplete"` | `{type, frames: N}` | When `notify_complete!` is called |
+One or more named time series in a single file. Each series begins with a name line,
+followed by a count, a time unit, and then paired rows of time and discharge. Time
+units are `seconds`, `hours`, or `days`; FloodA5 converts all to seconds on read.
+Comments (lines beginning `#` or `!`) and blank lines are ignored.
 
-The `newframe` message contains only metadata — the client decides whether to fetch the binary data based on its current variable selection and whether a render is already in progress.
+```
+UPSTREAM_GAUGE
+241
+hours
+0.0    0.0
+1.0    5.2
+2.0    18.1
+...
 
-### Variable definitions (client-side)
-
-```javascript
-const VAR_DEFS = {
-    depth:      { colormap: "turbo",  fixedMax: null },
-    saturation: { colormap: "blues",  fixedMax: 1.0  },
-    volume:     { colormap: "turbo",  fixedMax: null },
-    velocity:   { colormap: "plasma", fixedMax: null },
-};
+TRIBUTARY
+48
+hours
+0.0    0.0
+1.0    0.8
+...
 ```
 
-Unknown variables sent by the server are handled by a `varDef(name)` fallback that returns default colormap settings — new variables appear in the dropdown automatically without client changes.
+When multiple series are present in a `.bdy` file, use the LABEL argument to
+`--inflow-point` to select the desired series by name. `--inflow-bci` with `QVAR`
+entries references series by name automatically.
+
+### 3.3 LISFLOOD-FP `.bci` file
+
+Specifies boundary condition entries for the domain. FloodA5 supports `P`-type
+(point source) entries and `FREE` entries. Column layout:
+
+| Col | Description |
+|---|---|
+| 1 | Entry type: `P` (point source), `N/E/S/W` (unsupported), `F` (unsupported) |
+| 2 | Longitude (or easting if `--bc-epsg` is set) |
+| 3 | Latitude (or northing) |
+| 4 | BC code: `QVAR`, `QFIX`, or `FREE` |
+| 5 | For `QVAR`: series name in the companion `.bdy` file. For `QFIX`: discharge in m³/s. |
+
+Example:
+
+```
+P   -2.8957   54.9090   QVAR   main
+P   -2.9372   54.8838   QVAR   cummersdale
+P   -2.9146   54.8843   QFIX   1.5
+```
+
+FloodA5 looks for a `.bdy` file with the same name stem as the `.bci` file in the
+same directory. Use `--inflow-bdy` to specify a different path.
+
+`N`, `E`, `S`, `W` (cardinal edge boundaries) are not supported, because FloodA5
+domains can be arbitrary polygons with no axis-aligned boundaries. A helpful warning
+is logged if these are encountered, directing the user to use `--bc-file` (GeoJSON)
+instead.
 
 ---
 
-## 4. GeoJSON Mesh Format (alternative to GeoParquet)
+## 4. GeoJSON Boundary Condition File (`--bc-file`)
 
-When `--meshout` is given a `.geojson` extension, the mesh is saved as a GeoJSON FeatureCollection. Less efficient than GeoParquet for large meshes (no columnar compression) but human-readable and compatible with any GIS tool.
+A GeoJSON `FeatureCollection` where each feature is a `LineString` or `Polygon`
+that marks a boundary segment. Boundary cells whose centres fall within 1.5× the
+cell diameter of each feature geometry are assigned the specified BC type.
+
+| Property | Value | Description |
+|---|---|---|
+| `bc_type` | `Closed`, `ZeroGradient`, or `Critical` | BC type to apply to matched cells |
+| `label` | any string (optional) | Used in log output for traceability |
 
 ```json
 {
@@ -224,50 +263,39 @@ When `--meshout` is given a `.geojson` extension, the mesh is saved as a GeoJSON
   "features": [
     {
       "type": "Feature",
-      "geometry": { "type": "Polygon", "coordinates": [[[lon, lat], ...]] },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[172.55, -43.60], [172.60, -43.60]]
+      },
       "properties": {
-        "cell_id": "08a2a1072b59ffff",
-        "center_lon": 172.636,
-        "center_lat": -43.531,
-        "resolution": 14,
-        "elevation": 3.4
+        "bc_type": "Closed",
+        "label": "Northern levee"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[172.70, -43.55], [172.75, -43.55]]
+      },
+      "properties": {
+        "bc_type": "ZeroGradient",
+        "label": "Eastern outlet"
       }
     }
   ]
 }
 ```
 
-GeoJSON meshes do **not** include SGS array columns (hypsometric tables) — these require Parquet's columnar array support. SGS runs must use `.parquet`.
+Cells not matched by any feature use the default BC type (`ZeroGradient` unless
+`--closed-boundaries` is set).
 
 ---
 
-## 5. Config File (`viz/config.json`)
+## 5. AOI GeoJSON Input
 
-Gitignored. Copy from `viz/config.example.json`:
-
-```json
-{
-  "cesium_ion_token": "YOUR_TOKEN_FROM_ion.cesium.com",
-  "home_lon": 172.636,
-  "home_lat": -43.531,
-  "home_alt": 25000,
-  "default_basemap": "google3d"
-}
-```
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `cesium_ion_token` | `""` | Cesium Ion token for Google 3D Photorealistic Tiles. Viewer falls back gracefully if missing. |
-| `home_lon` | 172.636 | Camera home longitude (Christchurch) |
-| `home_lat` | -43.531 | Camera home latitude |
-| `home_alt` | 25000 | Camera home altitude (metres) |
-| `default_basemap` | `"google3d"` | `"google3d"` / `"osm"` / `"none"` |
-
----
-
-## 6. AOI GeoJSON Input
-
-Used with `--meshgen`. Must be a valid GeoJSON `Feature` or `FeatureCollection` with a `Polygon` geometry in EPSG:4326.
+Used with `--meshgen`. Must be a valid GeoJSON `Feature` or `FeatureCollection`
+with a `Polygon` geometry in EPSG:4326.
 
 ```json
 {
@@ -286,4 +314,81 @@ Used with `--meshgen`. Must be a valid GeoJSON `Feature` or `FeatureCollection` 
 }
 ```
 
-The polygon should be closed (first and last coordinate identical). Coordinates are `[longitude, latitude]` (GeoJSON convention). Multi-polygon AOIs are not currently supported — use the outer ring only.
+The polygon must be closed (first and last coordinate pair identical). Coordinates
+are `[longitude, latitude]` in decimal degrees (GeoJSON convention). Multi-polygon
+AOIs are not currently supported.
+
+---
+
+## 6. CesiumJS Binary Wire Protocol
+
+The visualisation server serves the CesiumJS viewer via HTTP and WebSocket. The
+key design principle is **one variable fetched at a time** — only the actively
+displayed variable crosses the wire, scaling to 1M+ cells.
+
+### HTTP endpoints
+
+| Endpoint | Response | Description |
+|---|---|---|
+| `GET /viz/{file}` | `text/html` / JSON | Static files: `index.html`, `config.json` |
+| `GET /mesh` | JSON | GeoJSON FeatureCollection + `cell_order` array |
+| `GET /frames/count` | JSON | `{count: N, vars: [...]}` |
+| `GET /frames/{idx}` | JSON | `{t: 123.0, vars: [...]}` — metadata only |
+| `GET /frames/{idx}/{varname}` | `application/octet-stream` | Raw Float32 LE array, n_cells × 4 bytes |
+| `GET /status` | JSON | Server diagnostics |
+
+### Binary frame format
+
+`GET /frames/{idx}/{varname}` returns a raw binary body:
+
+- Encoding: little-endian `float32`
+- Length: exactly `n_cells × 4` bytes
+- Ordering: matches the `cell_order` array from `/mesh` — index `i` in the Float32
+  array corresponds to the cell at `cell_order[i]`
+
+**JavaScript (receive):**
+```javascript
+const resp = await fetch(`/frames/${idx}/depth`);
+const buf  = await resp.arrayBuffer();
+const vals = new Float32Array(buf);   // vals[i] = depth of cell_order[i]
+```
+
+### WebSocket messages
+
+The WebSocket endpoint (`WS /live`) pushes notifications from the server.
+
+| `type` field | Payload | Sent when |
+|---|---|---|
+| `"mesh"` | `{type, data: GeoJSON, cell_order: [...]}` | On connect |
+| `"framecount"` | `{type, count: N, vars: [...]}` | On connect (after mesh) |
+| `"newframe"` | `{type, idx: N, t: 123.0, vars: [...]}` | Each new frame |
+| `"simcomplete"` | `{type, frames: N}` | Simulation end |
+
+`newframe` carries only metadata — the client fetches binary data on demand based
+on the currently displayed variable.
+
+---
+
+## 7. Cesium Viewer Configuration
+
+```json
+{
+  "cesium_ion_token": "YOUR_TOKEN_FROM_ion.cesium.com",
+  "home_lon": 0.0,
+  "home_lat": 0.0,
+  "home_alt": 25000,
+  "default_basemap": "google3d"
+}
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `cesium_ion_token` | `""` | Cesium Ion token for Google 3D Photorealistic Tiles. Falls back to OSM if absent. |
+| `home_lon` | 0.0 | Camera home longitude |
+| `home_lat` | 0.0 | Camera home latitude |
+| `home_alt` | 25000 | Camera home altitude (metres) |
+| `default_basemap` | `"google3d"` | `"google3d"` / `"osm"` / `"none"` |
+
+Copy `visualisation/cesium/config.example.json` to `visualisation/cesium/config.json`
+and add `config.json` to `.gitignore`. The viewer validates the token at startup and
+falls back gracefully if it is missing.

@@ -711,7 +711,7 @@
             },
             "juliaNumThreads": "auto"
         },
-        {
+                {
             "type": "julia",
             "request": "launch",
             "name": "[Carlise 09F] Run SGS simulation res 18 - uniform rainfall, 50 mm/h (mesh must exist)",
@@ -735,53 +735,6 @@
                 "JULIA_DEBUG": "Main"
             },
             "juliaNumThreads": "auto"
-        },
-        {
-            "type": "julia",
-            "request": "launch",
-            "name": "[C1] Carlisle standard res18 — full event (120h, inflows, Makie)",
-            "program": "${workspaceFolder}/FloodModel.jl",
-            "args": [
-                "--meshload",       "test/carlisle/carlisle_mesh18_standard.parquet",
-                "--flow-model",     "standard",
-                "--inflow-bci",     "test/carlisle/carlisle_wgs84.bci",
-                "--manning-n",      "0.03",
-                "--sim-duration",   "432000",
-                "--dt-max",         "10",
-                "--output", "test/carlisle/carlisle_standard_res18.h5",
-                "--output-interval","3600",
-                "--vis",            "makie"
-            ],
-            "env": {
-                "DEBUG_PROFILE_NAME": "[C1] Carlisle standard res18 — full event (120h, inflows, Makie)",
-                "JULIA_DEBUG": "Main"
-            },
-            "juliaNumThreads": "auto"
-        },
-        {
-            "name": "[C2] Carlisle SGS res18 — full event (120h, inflows, Makie)",
-            "type": "julia",
-            "request": "launch",
-            "program": "${workspaceFolder}/FloodModel.jl",
-            "args": [
-                "--meshload", "test/carlisle/carlisle_mesh18_sgs.parquet",
-                "--flow-model", "sgs",
-                "--inflow-bci", "test/carlisle/carlisle_wgs84.bci",
-                "--bc-epsg", "27700",
-                "--manning-n", "0.03",
-                "--sim-duration", "432000",
-                "--dt-max", "10",
-                "--output", "test/carlisle/carlisle_sgs_res18.h5",
-                "--output-interval", "3600",
-                "--vis", "makie"
-            ],
-            "stopOnEntry": false,
-            "juliaEnv": "${workspaceFolder}",
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "DEBUG_PROFILE_NAME": "[C2] Carlisle SGS res18 — full event (120h, inflows, Makie)",
-                "JULIA_DEBUG": "Main"
-            }
         },
         {
             "type": "julia",
@@ -834,6 +787,104 @@
             "env": {
                 "DEBUG_PROFILE_NAME": "Python A5 mesh diagnostic"
             }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-00] Generate planar embankment DEM (run once)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [],
+            "preLaunchTask": "Generate planar embankment DEM",
+            "env": { "JULIA_DEBUG": "" },
+            "juliaNumThreads": "1"
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-01] Generate SGS mesh (res 18, --threads 1 required)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",  "test/planar_embankment/planar_embankment_aoi.geojson",
+                "--meshres",  "18",
+                "--dem",      "test/planar_embankment/planar_embankment_dem.tif",
+                "--meshout",  "test/planar_embankment/planar_mesh18_sgs.parquet",
+                "--flow-model", "sgs",
+                "--mesh-only"
+            ],
+            "juliaNumThreads": "1",
+            "env": { "JULIA_DEBUG": "" }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-02] Generate Standard mesh (res 18, --threads 1 required)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshgen",  "test/planar_embankment/planar_embankment_aoi.geojson",
+                "--meshres",  "18",
+                "--dem",      "test/planar_embankment/planar_embankment_dem.tif",
+                "--meshout",  "test/planar_embankment/planar_mesh18_std.parquet",
+                "--flow-model", "standard",
+                "--mesh-only"
+            ],
+            "juliaNumThreads": "1",
+            "env": { "JULIA_DEBUG": "" }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-03] Run planar embankment tests (all T0–T5, no vis)",
+            "program": "${workspaceFolder}/test/planar_embankment/test_planar_embankment.jl",
+            "args": [],
+            "juliaNumThreads": "auto",
+            "env": { "JULIA_DEBUG": "" }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-04] Run planar embankment tests with Makie visualisation",
+            "program": "${workspaceFolder}/test/planar_embankment/test_planar_embankment.jl",
+            "args": ["--vis"],
+            "juliaNumThreads": "auto",
+            "env": { "JULIA_DEBUG": "" }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-05] SGS full run only (2h, HDF5 output, Makie)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",  "test/planar_embankment/planar_mesh18_sgs.parquet",
+                "--flow-model", "sgs",
+                "--injection-point", "0.0,0.0,0.01",
+                "--closed-boundaries",
+                "--sim-duration", "7200",
+                "--dt-max", "10",
+                "--output", "test/planar_embankment/planar_result_sgs.h5",
+                "--output-interval", "300",
+                "--vis", "makie"
+            ],
+            "juliaNumThreads": "auto",
+            "env": { "JULIA_DEBUG": "" }
+        },
+        {
+            "type": "julia",
+            "request": "launch",
+            "name": "[PE-06] Standard full run only (2h, HDF5 output, Makie)",
+            "program": "${workspaceFolder}/FloodModel.jl",
+            "args": [
+                "--meshload",  "test/planar_embankment/planar_mesh18_std.parquet",
+                "--flow-model", "standard",
+                "--injection-point", "0.0,0.0,0.01",
+                "--closed-boundaries",
+                "--sim-duration", "7200",
+                "--dt-max", "10",
+                "--output", "test/planar_embankment/planar_result_std.h5",
+                "--output-interval", "300",
+                "--vis", "makie"
+            ],
+            "juliaNumThreads": "auto",
+            "env": { "JULIA_DEBUG": "" }
         }
     ]
 }
