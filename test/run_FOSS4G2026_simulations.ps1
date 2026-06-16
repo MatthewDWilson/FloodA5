@@ -23,6 +23,33 @@ julia --threads auto --project=. FloodModel.jl `
 	--output-interval 300 `
 
 
+#-------------------------------------------------------------------------
+# Planar embankment simulations 
+#
+# Standard flow model:
+julia --project=. --threads auto FloodModel.jl `
+              --meshload test/planar_embankment/planar_mesh18_std.parquet `
+              --flow-model standard `
+              --injection-point 51.0001,-0.0434,0.1 `
+              --closed-boundaries `
+              --sim-duration 72000 `
+              --dt-max 10 `
+              --output  test/planar_embankment/planar_result_std.h5 `
+              --output-interval 300 `
+              --vis makie
+
+# SGS flow model:
+julia --project=. --threads auto FloodModel.jl `
+              --meshload test/planar_embankment/planar_mesh18_sgs.parquet `
+              --flow-model sgs `
+              --injection-point 51.0001,-0.0434,0.1 `
+              --closed-boundaries `
+              --sim-duration 72000 `
+              --dt-max 10 `
+              --output  test/planar_embankment/planar_result_sgs.h5 `
+              --output-interval 300 `
+              --vis makie
+
 
 #-------------------------------------------------------------------------
 # Carlisle test cases: grid generation (run separetely here but can be

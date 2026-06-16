@@ -12,8 +12,8 @@ storage tables.
 
 Key characteristics:
 
-- **Uniform five-connectivity** — every interior cell has exactly five edge-sharing
-  neighbours, eliminating the directional bias of rectangular grids.
+- **Uniform five-connectivity** — every interior cell has exactly five edge-sharing neighbours, 
+  a regular topological structure for hydrodynamic routing.
 - **Sub-Grid Sampling (SGS)** — hypsometric volume curves built from LiDAR allow
   partial wetting of cells and accurate routing through channels narrower than a cell.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all

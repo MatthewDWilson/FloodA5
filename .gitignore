@@ -1,8 +1,12 @@
+.vscode/*
 viz/config.json
 savedversions/
 test/**/*.h5
 test/**/*.parquet
 test/**/*.prj
+test/Carlisle/*.txt
+test/**/*.R
+test/**/*.gpkg
 zipfiles/
 projectinstructions/
 # Planar embankment test — generated files (run generate_planar_embankment_dem.py)

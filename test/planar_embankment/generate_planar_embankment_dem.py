@@ -50,7 +50,7 @@ Options:
     --domain-km W H     Domain width and height in km (default: 4 2)
     --centre LON LAT    Domain centre lon lat (default: -0.017 51.0)
     --slope-pct S       East-west slope in percent (default: 0.1)
-    --emb-height M      Embankment height above local slope (default: 2.0)
+    --emb-height M      Embankment height above local slope (default: 5.0)
     --emb-width M       Embankment width in metres (default: 20.0)
     --emb-pos X         Embankment x-position as fraction of domain (default: 0.5)
     --notch-width M     Notch width in metres (default: 5.0)
@@ -80,8 +80,8 @@ def parse_args(argv=None):
                    metavar=("LON", "LAT"))
     p.add_argument("--slope-pct",    type=float, default=0.1,      metavar="S",
                    help="East-west slope in percent (default: 0.1)")
-    p.add_argument("--emb-height",   type=float, default=2.0,      metavar="M",
-                   help="Embankment height above local slope in metres (default: 2.0)")
+    p.add_argument("--emb-height",   type=float, default=5.0,      metavar="M",
+                   help="Embankment height above local slope in metres (default: 5.0)")
     p.add_argument("--emb-width",    type=float, default=20.0,     metavar="M",
                    help="Embankment width in metres (default: 20.0)")
     p.add_argument("--emb-pos",      type=float, default=0.5,      metavar="X",

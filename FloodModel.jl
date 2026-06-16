@@ -1341,11 +1341,25 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         q_stored = 0.0
 
         if ge.is_Q_flux
-            A = A5Grid.flow_area_from_wse(tbl, 1, wse_ci)
-            R = A5Grid.hydraulic_radius_from_wse(tbl, 1, wse_ci)
+            # Ghost edges face outside the domain — no DEM data exists for an
+            # exterior-facing slot, so the SGS edge_area_curves have no valid
+            # entry for this opening.  Use a rectangular cross-section
+            # approximation: A = width × h_flow, R = A / (width + 2·h_flow).
+            # This is physically consistent with what _bates_ghost_flux implies
+            # for the standard flow path and is correct for any ghost opening
+            # regardless of interior sub-grid channel geometry.
+            h_flow_ge = max(0.0, wse_ci - ge.sill)
+            if h_flow_ge > HFLOW_THRESHOLD
+                A_ge = ge.width * h_flow_ge
+                P_ge = ge.width + 2.0 * h_flow_ge
+                R_ge = A_ge / P_ge
+            else
+                A_ge = 0.0
+                R_ge = 0.0
+            end
             Q_out, q_stored = _manning_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
-                A, R, ge.L, state.manning_n[ci], dt)
+                A_ge, R_ge, ge.L, state.manning_n[ci], dt)
         else
             Q_out, q_stored = _bates_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
