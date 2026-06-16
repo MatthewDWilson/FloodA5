@@ -11,6 +11,8 @@ routes water between them using the Bates et al. (2010) inertial shallow-water
 formulation, and resolves sub-cell terrain variability through pre-computed hypsometric
 storage tables.
 
+Note: this model is still in an experimental phase and should not be used in production. 
+
 Key characteristics:
 
 - **Uniform five-connectivity** — every interior cell has exactly five edge-sharing neighbours, 
