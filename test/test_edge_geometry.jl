@@ -2,7 +2,7 @@
 test_edge_geometry.jl
 ---------------------
 Tests for Phase 1 physics corrections and the Option D EdgeList refactor:
-  - A5Grid._edge_cos_theta
+  - A5Grid._edge_geometry (cos θ + skewness; supersedes _edge_cos_theta)
   - _build_edge_list (EdgeList construction)
   - step_standard! / step_sgs! (EdgeList-based flux loop)
 
@@ -14,7 +14,7 @@ synthetically from first principles so the tests run offline and fast.
 
 Test structure
 --------------
-  Group 1 — _edge_cos_theta: unit geometry
+  Group 1 — _edge_geometry (cos θ component): unit geometry
       1.1  Perfectly orthogonal pair      → cos θ = 1.0 exactly
       1.2  45° skew                       → cos θ = cos(45°) ≈ 0.7071
       1.3  Arbitrary known angle          → cos θ within tolerance
@@ -170,10 +170,10 @@ function _make_pair_with_skew(skew_deg::Float64;
 end
 
 # ---------------------------------------------------------------------------
-# Group 1 — _edge_cos_theta unit geometry
+# Group 1 — _edge_geometry (cos θ component) unit geometry
 # ---------------------------------------------------------------------------
 
-println("\nGroup 1 — _edge_cos_theta unit geometry")
+println("\nGroup 1 — _edge_geometry (cos θ component) unit geometry")
 println("─" ^ 50)
 
 # 1.1  Perfectly orthogonal pair: c-to-c is due north, shared edge is
@@ -187,7 +187,7 @@ let
     bnd_j = [[-hw+lon0,  hw+lat0], [hw+lon0, hw+lat0],
               [hw+lon0,  3hw+lat0], [-hw+lon0, 3hw+lat0],
               [-hw+lon0,  hw+lat0]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0-0.005,
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0-0.005,
                                               lon0, lat0+hw+0.005)
     check("1.1  orthogonal pair → cos θ ≈ 1.0",
           isfinite(ct) && abs(ct - 1.0) < 0.01,
@@ -221,7 +221,7 @@ let
 
     lon_i = lon0;             lat_i = lat0 - hw   # centre i: south of edge
     lon_j = lon0 + dlon_deg;  lat_j = lat0 + hw   # centre j: north-east of edge
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
     expected = cosd(45.0)
     check("1.2  45° skew → cos θ ≈ 0.7071",
           isfinite(ct) && abs(ct - expected) < 0.02,
@@ -231,7 +231,7 @@ end
 # 1.3  Arbitrary angle: 20°
 let
     cell_i, cell_j = _make_pair_with_skew(20.0)
-    ct = A5Grid._edge_cos_theta(cell_i.boundary, cell_j.boundary,
+    ct, _, _ = A5Grid._edge_geometry(cell_i.boundary, cell_j.boundary,
                                  cell_i.center_lon, cell_i.center_lat,
                                  cell_j.center_lon, cell_j.center_lat)
     expected = cosd(20.0)
@@ -253,7 +253,7 @@ let
     bnd_j = [[-hw+lon0+1.0, -hw+lat0+1.0], [hw+lon0+1.0, -hw+lat0+1.0],
               [hw+lon0+1.0,  hw+lat0+1.0], [-hw+lon0+1.0, hw+lat0+1.0],
               [-hw+lon0+1.0, -hw+lat0+1.0]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0, lon0+1.0, lat0+1.0)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0, lon0+1.0, lat0+1.0)
     check("1.4  non-adjacent cells → 1.0 fallback (no NaN suppression)",
           ct == 1.0, @sprintf("got %s", string(ct)))
 end
@@ -264,7 +264,7 @@ let
     lon0 = 0.0; lat0 = 0.0
     bnd_i = [[-hw, -hw], [hw, -hw], [hw, hw], [-hw, hw], [-hw, -hw]]
     bnd_j = [[-hw, hw],  [hw, hw],  [hw, 3hw], [-hw, 3hw], [-hw, hw]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0-10.0, lon0, lat0+10.0)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0-10.0, lon0, lat0+10.0)
     check("1.5  large centre separation → finite result, no crash",
           isfinite(ct))   # must be finite (NaN fallback → 1.0)
 end
@@ -272,10 +272,10 @@ end
 # 1.6  Symmetry: swap i and j → same cos θ
 let
     cell_i, cell_j = _make_pair_with_skew(30.0)
-    ct_ij = A5Grid._edge_cos_theta(cell_i.boundary, cell_j.boundary,
+    ct_ij, _, _ = A5Grid._edge_geometry(cell_i.boundary, cell_j.boundary,
                                     cell_i.center_lon, cell_i.center_lat,
                                     cell_j.center_lon, cell_j.center_lat)
-    ct_ji = A5Grid._edge_cos_theta(cell_j.boundary, cell_i.boundary,
+    ct_ji, _, _ = A5Grid._edge_geometry(cell_j.boundary, cell_i.boundary,
                                     cell_j.center_lon, cell_j.center_lat,
                                     cell_i.center_lon, cell_i.center_lat)
     check("1.6  symmetry: swap i↔j → same cos θ",
@@ -296,9 +296,9 @@ let
         bnd_j = [[-hw+lon0,  hw+lat0], [hw+lon0,  hw+lat0],
                   [hw+lon0,  3hw+lat0], [-hw+lon0, 3hw+lat0],
                   [-hw+lon0,  hw+lat0]]
-        A5Grid._edge_cos_theta(bnd_i, bnd_j,
+        A5Grid._edge_geometry(bnd_i, bnd_j,
                                 lon0, lat0-hw/2,
-                                lon0, lat0+hw*1.5)
+                                lon0, lat0+hw*1.5)[1]   # cos_theta component
     end
 
     ct_coarse = orthogonal_pair(hw_coarse)
@@ -545,7 +545,13 @@ function _make_edge_list(edges_spec::Vector{Tuple{Int,Int,Float64}};
     sls = [e[3] for e in edges_spec]
     EdgeList(ne, ci, cj,
              fill(width, ne), fill(L, ne), fill(cos_theta, ne),
-             sls, zeros(Float64, ne))
+             sls,
+             zeros(Float64, ne),   # flux
+             zeros(Float64, ne),   # flux_Q (SGS R-A; unused by these tests)
+             zeros(Int, ne),       # collinear_i (no collinear edges in these tiny synthetic meshes)
+             zeros(Int, ne),       # collinear_j
+             zeros(Float64, ne),   # skew_x (zero skewness — orthogonal synthetic edges)
+             zeros(Float64, ne))   # skew_y
 end
 
 function _minimal_state(; n_cells::Int,
@@ -558,12 +564,19 @@ function _minimal_state(; n_cells::Int,
                            sgs_tables::Vector{Any}=Any[])
     FlowState(
         ["c$i" for i in 1:n_cells],
-        copy(depth), copy(volume), zeros(n_cells), copy(elev),
+        copy(depth), copy(volume),
+        zeros(n_cells), zeros(n_cells), zeros(n_cells),   # velocity, vel_u, vel_v
+        copy(elev),
         copy(manning_n), copy(cell_area),
+        zeros(n_cells), zeros(n_cells),   # cell_lons, cell_lats (unused by these tests)
         Dict{String,Vector{String}}(),
         zeros(Int, 5, n_cells),   # adj_matrix (not used by step functions)
         edges,
         sgs_tables,
+        falses(n_cells),         # boundary_mask — no open boundaries in these synthetic tests
+        Any[],                   # ghost_edges — empty: Phase D is a no-op
+        Any[],                   # ghost_cell_bc
+        0.0,                     # vol_removed
     )
 end
 
@@ -591,7 +604,13 @@ let
     edges = EdgeList(ne, [1,1], [2,2],
                      fill(200.0, ne), fill(1500.0, ne),
                      [NaN, 1.0],     # slot 0: NaN → skipped; slot 1: valid
-                     fill(0.0, ne),  zeros(Float64, ne))
+                     fill(0.0, ne),
+                     zeros(Float64, ne),   # flux
+                     zeros(Float64, ne),   # flux_Q
+                     zeros(Int, ne),       # collinear_i
+                     zeros(Int, ne),       # collinear_j
+                     zeros(Float64, ne),   # skew_x
+                     zeros(Float64, ne))   # skew_y
     depth  = [2.0, 0.5]
     volume = depth .* 1.5e6
     state  = _minimal_state(n_cells=2, depth=depth, volume=volume, edges=edges)

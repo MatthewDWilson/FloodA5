@@ -57,7 +57,7 @@ using .VisualisationServer
 using .MakieVisualiser
 using JSON3
 using Dates
-using Statistics: mean
+using Statistics: mean, quantile
 using HDF5
 using ArchGDAL
 
@@ -138,6 +138,8 @@ struct EdgeList
     width        :: Vector{Float64}    # shared edge length (m)
     L            :: Vector{Float64}    # centre-to-centre haversine distance (m)
     cos_theta    :: Vector{Float64}    # non-orthogonality correction (1.0 = orthogonal)
+                                       #   used by the legacy/uncorrected kernels
+                                       #   (_bates_flux, _manning_flux_ra) only.
     sill         :: Vector{Float64}    # sill elevation (m) — bed or SGS minimum
     flux         :: Vector{Float64}    # q (m²/s) at t-dt, signed cell_i → cell_j
                                        #   used by standard flow and SGS Bates kernel
@@ -150,6 +152,17 @@ struct EdgeList
     # Used by step_standard! and step_sgs! Phase A to compute smoothed q_prev.
     collinear_i  :: Vector{Int}        # index of most-collinear edge on ci side
     collinear_j  :: Vector{Int}        # index of most-collinear edge on cj side
+    # Non-orthogonal gradient correction (flow-direction-fixes branch).
+    # skew_x[e], skew_y[e] are the components (m, local equirectangular frame
+    # centred on the edge midpoint at mesh-build time) of the vector from the
+    # shared-edge face midpoint to the point where the centre-to-centre line
+    # intersects the face.  (0, 0) for an orthogonal, unskewed cell pair.
+    # Used only by the WLSQ-corrected kernels (_bates_flux_corrected,
+    # _manning_flux_ra_corrected) to build the skewness-corrected driving
+    # head dWSE_n = (WSE_j - WSE_i) + ∇WSE_f · (skew_x, skew_y).
+    # See FloodA5_NonOrthogonal_Correction_Plan.md §2, §4.1, §5.1.
+    skew_x       :: Vector{Float64}
+    skew_y       :: Vector{Float64}
 end
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
@@ -733,6 +746,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     Ls    = Vector{Float64}(undef, max_e)
     cts   = Vector{Float64}(undef, max_e)
     sls   = Vector{Float64}(undef, max_e)
+    skew_xs = Vector{Float64}(undef, max_e)   # skewness vector x-component (m)
+    skew_ys = Vector{Float64}(undef, max_e)   # skewness vector y-component (m)
 
     e = 0   # edge counter
     seen = Set{Tuple{Int,Int}}()   # (min,max) pairs already added
@@ -756,6 +771,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                 append!(Ls,  zeros(Float64, n))
                 append!(cts, zeros(Float64, n))
                 append!(sls, zeros(Float64, n))
+                append!(skew_xs, zeros(Float64, n))
+                append!(skew_ys, zeros(Float64, n))
                 max_e += n
             end
 
@@ -772,12 +789,18 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                 cell_i.center_lon, cell_i.center_lat,
                 cell_j.center_lon, cell_j.center_lat)
 
-            # ── Non-orthogonality correction ──────────────────────────────
-            ct = A5Grid._edge_cos_theta(
+            # ── Non-orthogonality correction + skewness vector ─────────────
+            # Combined into a single call: both quantities share the same
+            # local equirectangular projection setup, so computing them
+            # together avoids running it twice per edge.  See
+            # FloodA5_NonOrthogonal_Correction_Plan.md §5.1.
+            ct, skx, sky = A5Grid._edge_geometry(
                 cell_i.boundary, cell_j.boundary,
                 cell_i.center_lon, cell_i.center_lat,
                 cell_j.center_lon, cell_j.center_lat)
-            cts[e] = isnan(ct) ? 1.0 : ct  # fallback: assume orthogonal
+            cts[e]     = isnan(ct) ? 1.0 : ct  # fallback: assume orthogonal
+            skew_xs[e] = isnan(ct) ? 0.0 : skx  # zero skewness on degenerate geometry
+            skew_ys[e] = isnan(ct) ? 0.0 : sky
 
             # ── Sill elevation ────────────────────────────────────────────
             # Prefer SGS pre-computed sill; fall back to max(elev_i, elev_j).
@@ -831,6 +854,36 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     valid_ct = filter(isfinite, cts[1:n_edges])
     if !isempty(valid_ct)
         @info "Edge non-orthogonality (cos θ):  min=$(round(minimum(valid_ct),digits=3))  mean=$(round(mean(valid_ct),digits=3))  max=$(round(maximum(valid_ct),digits=3))"
+
+        # ── Diagnostic for flow-direction-fixes planning (pre-implementation) ──
+        # Convert to angle θ (degrees) between the centre-to-centre vector and
+        # the face normal.  cos θ = 1.0 → θ = 0° (orthogonal).  Used to judge
+        # whether the WLSQ gradient correction (planned) needs the "limited"
+        # variant: OpenFOAM guidance treats the plain corrected scheme as safe
+        # up to θ ≈ 70°, with limiting required above that and instability risk
+        # above θ ≈ 85°.  See FloodA5_NonOrthogonal_Correction_Plan.md §9.
+        thetas_deg = acosd.(clamp.(valid_ct, -1.0, 1.0))
+        @info "Edge non-orthogonality (θ, degrees):  " *
+              "min=$(round(minimum(thetas_deg), digits=1))°  " *
+              "mean=$(round(mean(thetas_deg), digits=1))°  " *
+              "p95=$(round(quantile(thetas_deg, 0.95), digits=1))°  " *
+              "max=$(round(maximum(thetas_deg), digits=1))°  " *
+              "(OpenFOAM: corrected-scheme-safe ≤70°, limiting advised above)"
+
+        # ── Skewness diagnostic (flow-direction-fixes) ──────────────────
+        # Skewness fraction = |skew_vec| / edge_width. A value of 0 means
+        # the centre-to-centre line crosses exactly at the face midpoint
+        # (no skewness correction needed); larger values indicate the
+        # WLSQ skewness correction term will have a bigger contribution.
+        skew_mags  = sqrt.(skew_xs[1:n_edges].^2 .+ skew_ys[1:n_edges].^2)
+        edge_w     = ws[1:n_edges]
+        valid_skew = [skew_mags[k] / edge_w[k] for k in 1:n_edges
+                      if isfinite(skew_mags[k]) && edge_w[k] > 1e-6]
+        if !isempty(valid_skew)
+            @info "Edge skewness (|skew_vec| / edge width):  " *
+                  "mean=$(round(mean(valid_skew)*100, digits=1))%  " *
+                  "max=$(round(maximum(valid_skew)*100, digits=1))% of edge length"
+        end
     end
 
     if sill_matrix !== nothing
@@ -943,6 +996,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
         zeros(Float64, n_edges),   # flux_Q (m³/s) — SGS R-A kernel only
         collinear_i_vec,
         collinear_j_vec,
+        skew_xs[1:n_edges],
+        skew_ys[1:n_edges],
     )
 end
 

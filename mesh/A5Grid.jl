@@ -88,7 +88,7 @@ export flow_area_from_wse, wetted_perim_from_wse, hydraulic_radius_from_wse
 export cell_to_boundary, cell_to_lonlat, lonlat_to_cell
 export cell_to_children, cell_to_parent, get_resolution, grid_disk_neighbours
 export load_aoi, mesh_summary
-export _edge_cos_theta
+export _edge_geometry
 
 using PyCall
 using JSON3
@@ -1847,45 +1847,79 @@ function _shared_edge(bnd_i::Vector{Vector{Float64}},
 end
 
 """
-    _edge_cos_theta(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j) → Float64
+    _edge_geometry(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
+        → (cos_theta::Float64, skew_x::Float64, skew_y::Float64)
 
-Cosine of the angle θ between the centre-to-centre vector (cell i → cell j)
-and the outward face normal of their shared edge.
+Combined non-orthogonality and skewness geometry for one A5 cell-pair edge.
 
-On a perfectly orthogonal grid cos θ = 1.0 exactly.  For A5 pentagons the
-shared edge is generally not perpendicular to the centre-to-centre line, so
-cos θ < 1.0.  The value is used to project the centre-to-centre distance onto
-the face-normal direction, correcting the slope term in the Bates (2010)
-inertial formulation:
+Supersedes the former standalone `_edge_cos_theta` by computing both the
+non-orthogonality cosine *and* the skewness vector from a single local
+equirectangular projection of the shared edge and cell centres — avoiding
+running the projection setup twice per edge at mesh-build time, and keeping
+all edge-geometry maths in one place for future modification.
 
-    L_eff = centre_dist × cos θ
+Returns:
 
-Returns NaN if no shared edge is found (non-adjacent cells).
+  cos_theta  — |d̂ · n̂|, the magnitude of alignment between the centre-to-
+               centre unit vector d̂ (cell i → cell j) and the outward face
+               normal n̂ of their shared edge.  1.0 = perfectly orthogonal.
+               Used to project the centre-to-centre distance onto the
+               face-normal direction in the *uncorrected* flux kernels
+               (`_bates_flux`, `_manning_flux_ra`):  L_eff = L × cos θ.
+
+  skew_x,
+  skew_y     — components (m, local equirectangular frame) of the vector
+               from the shared-edge face midpoint to the point where the
+               centre-to-centre line intersects the face.  (0.0, 0.0) for
+               an orthogonal, unskewed cell pair; non-zero on skewed A5
+               edges.  Used by the WLSQ-corrected flux kernels
+               (`_bates_flux_corrected`, `_manning_flux_ra_corrected`) to
+               build a skewness-corrected driving head:
+                   dWSE_n = (WSE_j − WSE_i) + ∇WSE_f · (skew_x, skew_y)
+               See FloodA5_NonOrthogonal_Correction_Plan.md §2, §5.1.
+
+Returns `(1.0, 0.0, 0.0)` if no shared edge is found (non-adjacent cells) —
+an orthogonal, unskewed fallback rather than NaN.  A NaN cos_theta would
+propagate through the NaN guard in the step functions and suppress all flux
+on that edge, which is far worse than a small error in the slope projection.
+
+Returns `(NaN, 0.0, 0.0)` for degenerate edge/distance geometry (near-zero
+edge length or near-zero centre separation) — callers already guard NaN
+cos_theta by falling back to 1.0, and a zero skewness correction is the
+safe choice when the geometry itself is degenerate.
 
 Implementation notes
 ---------------------
 All geometry is performed in a local equirectangular projection centred on
-the edge midpoint.  At A5 resolution 14 (~1.4 km cell spacing) the planar
-approximation introduces < 0.05% error.  The same projection is used at finer
+the edge midpoint. At A5 resolution 14 (~1.4 km cell spacing) the planar
+approximation introduces < 0.05% error. The same projection is used at finer
 resolutions (including multi-resolution meshes in Phase 3), where the error
 is even smaller.
 
 The function accepts raw boundary arrays and cell-centre coordinates so it
 can be called for cell pairs at *different* A5 resolution levels (coarse/fine
 boundaries in a multi-resolution mesh) without any change to its interface.
+
+Skewness is computed by intersecting the centre-to-centre line with the
+shared-edge line (2D line/line intersection via Cramer's rule). If the two
+lines are parallel, or the intersection point falls outside the shared edge
+segment (a genuinely degenerate skewed case), the skewness correction is
+set to zero rather than propagating an unbounded or ill-defined value.
 """
-function _edge_cos_theta(bnd_i  :: Vector{Vector{Float64}},
-                          bnd_j  :: Vector{Vector{Float64}},
-                          lon_i  :: Float64, lat_i  :: Float64,
-                          lon_j  :: Float64, lat_j  :: Float64)::Float64
+function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
+                         bnd_j  :: Vector{Vector{Float64}},
+                         lon_i  :: Float64, lat_i  :: Float64,
+                         lon_j  :: Float64, lat_j  :: Float64
+                         )::Tuple{Float64,Float64,Float64}
 
     # ── 1. Find the shared edge vertices ─────────────────────────────────
     edge = _shared_edge(bnd_i, bnd_j)
     # If no shared edge is found, fall back to cos θ = 1.0 (orthogonal
-    # assumption) rather than NaN.  A NaN would propagate through the NaN
-    # guard in the step functions and suppress all flux on that edge, which
-    # is far worse than a small error in the slope projection.
-    edge === nothing && return 1.0
+    # assumption) with zero skewness, rather than NaN.  A NaN would
+    # propagate through the NaN guard in the step functions and suppress
+    # all flux on that edge, which is far worse than a small error in the
+    # slope projection.
+    edge === nothing && return (1.0, 0.0, 0.0)
 
     elon1, elat1, elon2, elat2 = edge
 
@@ -1904,7 +1938,7 @@ function _edge_cos_theta(bnd_i  :: Vector{Vector{Float64}},
     x2, y2 = to_xy(elon2, elat2)
     ex, ey  = x2 - x1, y2 - y1
     e_len   = sqrt(ex^2 + ey^2)
-    e_len < 1.0 && return NaN   # degenerate edge guard
+    e_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate edge guard
 
     # Face normal: rotate edge vector 90° (two choices; we take the one
     # pointing from i toward j, so the sign of the dot product is positive)
@@ -1915,7 +1949,7 @@ function _edge_cos_theta(bnd_i  :: Vector{Vector{Float64}},
     cj_x, cj_y = to_xy(lon_j, lat_j)
     dx, dy      = cj_x - ci_x, cj_y - ci_y
     d_len       = sqrt(dx^2 + dy^2)
-    d_len < 1.0 && return NaN   # degenerate distance guard
+    d_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate distance guard
 
     dx_hat, dy_hat = dx / d_len, dy / d_len
 
@@ -1923,9 +1957,42 @@ function _edge_cos_theta(bnd_i  :: Vector{Vector{Float64}},
     # Absolute value: we want the magnitude of the alignment regardless of
     # which side of the edge we are on.
     cos_theta = abs(dx_hat * nx + dy_hat * ny)
+    cos_theta = clamp(cos_theta, 0.0, 1.0)   # guard floating-point rounding above 1.0
 
-    # Clamp to [0, 1] to guard against floating-point rounding above 1.0
-    return clamp(cos_theta, 0.0, 1.0)
+    # ── 6. Skewness: face midpoint vs. centre-to-centre / face intersection ─
+    # The face midpoint is the average of the two shared-edge vertices.
+    f_mid_x, f_mid_y = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+
+    # Solve for the intersection of the centre-to-centre line
+    # (ci_x, ci_y) + s·(dx, dy)  with the edge line  (x1, y1) + t·(ex, ey):
+    #     ci_x + s·dx = x1 + t·ex
+    #     ci_y + s·dy = y1 + t·ey
+    # via Cramer's rule on the 2×2 system in (s, t).
+    denom = dx * (-ey) - dy * (-ex)   # = -dx·ey + dy·ex
+    if abs(denom) < 1e-9
+        # Lines parallel / degenerate — no well-defined intersection.
+        # Treat as zero skewness rather than propagating NaN/Inf.
+        return (cos_theta, 0.0, 0.0)
+    end
+    rhs_x = x1 - ci_x
+    rhs_y = y1 - ci_y
+    t = (dx * rhs_y - dy * rhs_x) / denom
+
+    if abs(t) > 1.0
+        # Intersection falls outside the shared edge segment (using the
+        # edge vector's own parametrisation as the unit scale) — a
+        # genuinely degenerate skewed case.  Fall back to zero skewness
+        # correction for this edge rather than extrapolating.
+        return (cos_theta, 0.0, 0.0)
+    end
+
+    d_int_x = x1 + t * ex
+    d_int_y = y1 + t * ey
+
+    skew_x = f_mid_x - d_int_x
+    skew_y = f_mid_y - d_int_y
+
+    return (cos_theta, skew_x, skew_y)
 end
 
 # ---------------------------------------------------------------------------
