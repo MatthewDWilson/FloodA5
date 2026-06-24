@@ -168,6 +168,11 @@ if abspath(PROGRAM_FILE) == @__FILE__
             Any[],              # ghost_edges
             Any[],              # ghost_cell_bc
             0.0,                # vol_removed
+            zeros(Float64, 2, n_cells),    # grad_wse — unused while gradient_correction=false
+            zeros(Float64, 10, n_cells),   # wlsq_weights — unused while gradient_correction=false
+            0.9,                # q_centre_theta (production default)
+            false,              # gradient_correction (legacy kernels; SGS unit tests
+                                 # exercise the existing Bates/R-A path, not the WLSQ fix)
         )
     end
 

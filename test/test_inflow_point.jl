@@ -76,7 +76,8 @@ end
         Dict{String,Vector{String}}(), zeros(Int,5,n),
         EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[]),
         Any[],
-        falses(n), Any[], Any[], 0.0)
+        falses(n), Any[], Any[], 0.0,
+        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)
 
     t_s   = [0.0, 3600.0]
     Q_m3s = [5.0, 5.0]   # constant 5 m³/s
@@ -115,14 +116,20 @@ end
 # ---------------------------------------------------------------------------
 # T-IP7: BDY file with 'hours' time unit converts correctly
 # ---------------------------------------------------------------------------
+# NOTE: .bdy data rows are "Value  Time" (discharge first, time second) per
+# the LISFLOOD-FP manual §3.2.5 — NOT "Time  Value". This fixture previously
+# had the columns the wrong way round (a docstring error in timeseries_io.jl
+# was copied into this test), which would have made the *test* wrong while
+# the production parser was actually correct all along. Confirmed against
+# the official LISFLOOD-FP manual before fixing — see timeseries_io.jl.
 @testset "T-IP7: LisfloodBDYReader hours→seconds" begin
     bdy_content = """
 Test BDY header
 GAUGE_MAIN
 3	hours
 0.0	0.0
-1.0	5.5
-2.0	3.2
+5.5	1.0
+3.2	2.0
 """
     tmpfile = tempname() * ".bdy"
     write(tmpfile, bdy_content)
@@ -144,17 +151,21 @@ end
 # ---------------------------------------------------------------------------
 # T-IP8: BDY file with two series parses both correctly
 # ---------------------------------------------------------------------------
+# NOTE: .bdy columns are "Value  Time" (discharge first) — see T-IP7 note
+# above. Fixture corrected to preserve the intended scenario (discharge
+# rising gently from 1.0 to 4.0 m³/s over 300s on UPSTREAM; 0.5 to 2.0 m³/s
+# on DOWNSTREAM), which the original time-first ordering did not represent.
 @testset "T-IP8: LisfloodBDYReader two series" begin
     bdy_content = """
 Test BDY header
 UPSTREAM
 2	seconds
-0.0	1.0
-300.0	4.0
+1.0	0.0
+4.0	300.0
 DOWNSTREAM
 2	seconds
-0.0	0.5
-300.0	2.0
+0.5	0.0
+2.0	300.0
 """
     tmpfile = tempname() * ".bdy"
     write(tmpfile, bdy_content)
@@ -172,13 +183,16 @@ end
 # ---------------------------------------------------------------------------
 # T-IP9: BCI QVAR entry parses and links to series
 # ---------------------------------------------------------------------------
+# NOTE: .bdy columns are "Value  Time" — see T-IP7 note above. Fixture
+# corrected to preserve the intended scenario (discharge rising 2.0 → 8.0
+# m³/s over 600s).
 @testset "T-IP9: parse_bci_file QVAR entry" begin
     bdy_content = """
 Test BDY header
 INFLOW_A
 2	seconds
-0.0	2.0
-600.0	8.0
+2.0	0.0
+8.0	600.0
 """
     bci_content = "P  172.648  -43.386  QVAR  INFLOW_A\n"
     tmpbdy = tempname() * ".bdy"
@@ -251,7 +265,8 @@ end
         Dict{String,Vector{String}}(), zeros(Int,5,n),
         EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[]),
         Any[],
-        falses(n), Any[], Any[], 0.0)
+        falses(n), Any[], Any[], 0.0,
+        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)
 
     src1 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [3.0, 3.0], "A")
     src2 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [7.0, 7.0], "B")

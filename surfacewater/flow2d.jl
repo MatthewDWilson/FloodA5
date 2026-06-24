@@ -50,10 +50,17 @@ const FROUDE_LIMIT = 0.8
 # the inertial accuracy of the momentum term. Applied in step_standard! and
 # step_sgs! Phase A via _q_centred(). Decoupled from FROUDE_LIMIT so both
 # fixes can be tuned independently.
-const Q_CENTRE_THETA = 0.9
+#
+# Promoted from a module-level constant to a _q_centred argument
+# (flow-direction-fixes, Step 2) so it can be set at runtime via
+# --q-centre-theta and varied for A/B testing against the WLSQ gradient
+# correction (FloodA5_NonOrthogonal_Correction_Plan.md §6). The value lives
+# on FlowState.q_centre_theta; this default is used only by any legacy
+# caller that does not pass theta explicitly.
+const Q_CENTRE_THETA_DEFAULT = 0.9
 
 """
-    _q_centred(flux, e, col_i, col_j) → Float64
+    _q_centred(flux, e, col_i, col_j, theta=Q_CENTRE_THETA_DEFAULT) → Float64
 
 Return the Q-centred (spatially smoothed) unit discharge for edge `e`.
 
@@ -66,17 +73,21 @@ the ci and cj sides respectively (stored in EdgeList.collinear_i/j).
 The checkerboard mode has opposite signs on alternating edges, so the average
 over collinear neighbours naturally cancels it. For a coherent flow field
 (all fluxes same sign and magnitude) the smoothing has negligible effect.
+
+`theta` is normally `state.q_centre_theta` (set via --q-centre-theta, default
+0.9). Passing `theta = 1.0` disables smoothing entirely (q_eff = flux[e]).
 """
-@inline function _q_centred(flux :: Vector{Float64},
+@inline function _q_centred(flux  :: Vector{Float64},
                               e    :: Int,
                               ci   :: Int,   # collinear_i[e]
-                              cj   :: Int    # collinear_j[e]
+                              cj   :: Int,   # collinear_j[e]
+                              theta:: Float64 = Q_CENTRE_THETA_DEFAULT
                               )::Float64
     q0   = flux[e]
     n_nb = (ci > 0 ? 1 : 0) + (cj > 0 ? 1 : 0)
     n_nb == 0 && return q0
     q_nb = (ci > 0 ? flux[ci] : 0.0) + (cj > 0 ? flux[cj] : 0.0)
-    return Q_CENTRE_THETA * q0 + (1.0 - Q_CENTRE_THETA) * q_nb / n_nb
+    return theta * q0 + (1.0 - theta) * q_nb / n_nb
 end
 
 """
@@ -123,8 +134,19 @@ Non-orthogonality correction
 -----------------------------
 L_eff = L × cos θ projects the centre-to-centre distance onto the face
 normal.  cos θ is stored in EdgeList.cos_theta (1.0 = orthogonal).
-For a future Riemann solver: replace with full over-relaxed decomposition
-(Weller 2014).  See docs/PROJECT_STATE.md Phase 5.
+
+⚠️  UNCORRECTED FOR DIRECTIONAL BIAS on non-orthogonal meshes.
+    This L_eff = L × cos θ projection corrects gradient *magnitude* but
+    not gradient *direction* — it implicitly assumes the WSE gradient
+    points along the centre-to-centre vector, when on a non-orthogonal
+    A5 mesh the true gradient points along the face normal. This produces
+    the systematic flow-direction errors documented in the FOSS4G 2026
+    paper (point-spread test: NW–SE axis bias; planar slope test: 30–60°
+    deviation from downslope). Use `_bates_flux_corrected` (WLSQ gradient
+    reconstruction + skewness correction) for production simulations —
+    see FloodA5_NonOrthogonal_Correction_Plan.md. This function is
+    retained for benchmarking and A/B comparison only
+    (`--gradient-correction off`).
 """
 @inline function _bates_flux(q_prev     :: Float64,
                               wse_i      :: Float64,
@@ -180,6 +202,10 @@ stability fixes that match the CAESAR-Lisflood qroute() implementation:
 
 Returns `(Q, q_stored)` where Q is the (limited) volumetric flux (m³/s) and
 q_stored is the unit discharge (m²/s) to persist as q_prev next step.
+
+⚠️  UNCORRECTED FOR DIRECTIONAL BIAS — see `_bates_flux`'s docstring. Use
+    `_bates_flux_limited_corrected` for production simulations; this
+    function is retained for `--gradient-correction off` benchmarking.
 """
 @inline function _bates_flux_limited(q_prev       :: Float64,
                                       wse_i        :: Float64,
@@ -223,6 +249,134 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     end
 
     # Fix C: return the post-limiting q so the caller stores a consistent q_prev
+    Q = q_new * width
+    return (Q, q_new)
+end
+
+
+# ---------------------------------------------------------------------------
+# WLSQ non-orthogonal gradient correction — corrected flux kernels
+# ---------------------------------------------------------------------------
+# These supersede _bates_flux / _bates_flux_limited above for directional-
+# bias-free flow on the A5 pentagonal mesh. See
+# FloodA5_NonOrthogonal_Correction_Plan.md §2, §5.3 for the full derivation.
+#
+# Key difference from the legacy kernels: instead of scaling the raw WSE
+# difference by L_eff = L × cos_theta (which corrects gradient *magnitude*
+# but not *direction* — the root cause of the flow-direction bias documented
+# in the FOSS4G 2026 paper), these kernels accept a pre-computed
+# skewness-corrected driving head `dWSE_n`, built by the caller from the
+# WLSQ-reconstructed cell-centre gradients (_build_wlsq_weights!,
+# _compute_wse_gradients!) and the edge's skewness vector
+# (EdgeList.skew_x/skew_y, from _edge_geometry):
+#
+#   ∇WSE_f = 0.5 × (grad_wse[:,ci] + grad_wse[:,cj])      (face-interpolated)
+#   dWSE_n = (wse_j - wse_i) + ∇WSE_f · (skew_x[e], skew_y[e])
+#
+# dWSE_n already incorporates the skewness correction, so L is used directly
+# (no cos_theta scaling) — the non-orthogonality magnitude correction that
+# cos_theta provided is now implicit in the WLSQ gradient itself.
+
+"""
+    _bates_flux_corrected(q_prev, h_flow, dWSE_n, width, L, n_mann, dt) → Float64
+
+WLSQ-corrected Bates (2010) inertial flux kernel — standard (non-limited)
+variant, analogous to `_bates_flux` but using a skewness-corrected driving
+head instead of a raw WSE difference scaled by `cos_theta`.
+
+# Arguments
+  q_prev   unit discharge from previous timestep (m²/s), signed i→j
+  h_flow   flow depth at the edge = max(WSE_i, WSE_j) - z_sill (m), computed
+           by the caller from the *raw* (uncorrected) WSE values — only the
+           gradient term is corrected, not the flow-depth/friction term
+  dWSE_n   skewness-corrected face-normal driving head (m), see module note
+           above. Replaces `dWSE / L_eff` in the legacy kernel.
+  width    shared edge length (m)
+  L        centre-to-centre haversine distance (m) — used as-is; no
+           cos_theta scaling (the WLSQ gradient already captures the
+           non-orthogonality direction correctly, so this magnitude
+           projection is unnecessary and would double-correct)
+  n_mann   Manning's roughness (s·m⁻¹ᐟ³)
+  dt       timestep (s)
+
+Returns volumetric flux Q (m³/s). Sign convention matches `_bates_flux`:
+Q < 0 when WSE_i > WSE_j (flow i→j). Returns 0.0 if h_flow ≤ HFLOW_THRESHOLD.
+
+This function is selected by `step_standard!`/`step_sgs!` Phase A when
+`state.gradient_correction == true`; see `_bates_flux` for the legacy
+(uncorrected) path used when `false` (current default — see
+FloodA5_NonOrthogonal_Correction_Plan.md §10.6.2 for the rationale).
+"""
+@inline function _bates_flux_corrected(q_prev :: Float64,
+                                        h_flow :: Float64,
+                                        dWSE_n :: Float64,
+                                        width  :: Float64,
+                                        L      :: Float64,
+                                        n_mann :: Float64,
+                                        dt     :: Float64)::Float64
+    h_flow <= HFLOW_THRESHOLD && return 0.0
+    h_flow_safe = max(h_flow, 1e-6)   # floor to avoid h^(10/3) underflow
+    L_safe      = max(L, 1.0)         # guard degenerate zero-distance pairs
+
+    numerator   = q_prev - _G * h_flow_safe * dt * dWSE_n / L_safe
+    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 * abs(q_prev) /
+                  h_flow_safe^(10.0/3.0)
+    q_new = numerator / denominator
+
+    return q_new * width
+end
+
+
+"""
+    _bates_flux_limited_corrected(q_prev, h_flow, dWSE_n, width, L, n_mann,
+                                  dt, depth_donor) → (Q, q_stored)
+
+WLSQ-corrected counterpart of `_bates_flux_limited`. Identical stability
+fixes (Froude limiter, volume limiter, consistent `q_stored` — see
+`_bates_flux_limited`'s docstring for full rationale on each), applied on
+top of the skewness-corrected driving head `dWSE_n` instead of a raw,
+cos_theta-scaled WSE difference. Used exclusively by `step_standard!` when
+`state.gradient_correction == true`.
+
+See `_bates_flux_corrected` for the argument-by-argument correspondence
+with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
+"""
+@inline function _bates_flux_limited_corrected(q_prev      :: Float64,
+                                                h_flow      :: Float64,
+                                                dWSE_n      :: Float64,
+                                                width       :: Float64,
+                                                L           :: Float64,
+                                                n_mann      :: Float64,
+                                                dt          :: Float64,
+                                                depth_donor :: Float64
+                                                )::Tuple{Float64,Float64}
+    if h_flow <= HFLOW_THRESHOLD
+        # See _bates_flux_limited's matching comment: zero out stale
+        # momentum on dry edges rather than leaving edges.flux[e] unchanged.
+        return (0.0, 0.0)
+    end
+    h_flow_safe = max(h_flow, 1e-6)
+    L_safe      = max(L, 1.0)
+
+    numerator   = q_prev - _G * h_flow_safe * dt * dWSE_n / L_safe
+    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 * abs(q_prev) /
+                  h_flow_safe^(10.0/3.0)
+    q_new = numerator / denominator
+
+    # Fix A: Froude limiter — cap at subcritical limit (Fr ≤ FROUDE_LIMIT).
+    # h_flow_safe (not the raw h_flow) is used here, consistent with the
+    # legacy kernel — the Froude cap is a function of flow depth and is
+    # unaffected by the gradient-direction correction.
+    q_max = h_flow_safe * sqrt(_G * h_flow_safe) * FROUDE_LIMIT
+    q_new = clamp(q_new, -q_max, q_max)
+
+    # Fix B: Volume limiter — unchanged from the legacy kernel.
+    if depth_donor > 0.0
+        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_new = clamp(q_new, -q_vol_max, q_vol_max)
+    end
+
+    # Fix C: return the post-limiting q so the caller stores a consistent q_prev.
     Q = q_new * width
     return (Q, q_new)
 end
@@ -280,6 +434,12 @@ n²|Q|/(R^(4/3)·A), providing physically correct Manning friction scaling for
 confined channel flow without requiring an explicit Froude or volume limiter.
 
 Returns 0.0 for dry edges: A ≤ 1e-6 m² or h_flow ≤ HFLOW_THRESHOLD.
+
+⚠️  UNCORRECTED FOR DIRECTIONAL BIAS — uses the same L_eff = L × cos θ
+    magnitude-only projection as `_bates_flux` (see its docstring for the
+    full explanation). Use `_manning_flux_ra_corrected` for production SGS
+    simulations; this function is retained for `--gradient-correction off`
+    benchmarking.
 """
 @inline function _manning_flux_ra(Q_prev    :: Float64,
                                    wse_i     :: Float64,
@@ -302,6 +462,53 @@ Returns 0.0 for dry edges: A ≤ 1e-6 m² or h_flow ≤ HFLOW_THRESHOLD.
 
     numerator   = Q_prev - _G * A * dt * dWSE / L_eff
     denominator = 1.0 + _G * dt * n_mann^2 * abs(Q_prev) / (R^(4.0/3.0) * A)
+    return numerator / denominator
+end
+
+
+"""
+    _manning_flux_ra_corrected(Q_prev, h_flow, A, R, dWSE_n, L, n_mann, dt) → Float64
+
+WLSQ-corrected counterpart of `_manning_flux_ra`, for the SGS R-A solver.
+Uses a pre-computed skewness-corrected driving head `dWSE_n` (built by the
+caller from the WLSQ-reconstructed cell-centre WSE gradients and the edge's
+skewness vector — see the module note above `_bates_flux_corrected` for the
+exact construction) in place of a raw `dWSE` scaled by `cos_theta`.
+
+# Arguments
+  Q_prev   volumetric discharge at previous timestep (m³/s), signed i→j
+  h_flow   flow depth at the edge = max(WSE_i, WSE_j) - z_sill (m), from
+           the *raw* (uncorrected) WSE values — only the gradient term is
+           corrected, matching `_bates_flux_corrected`'s convention
+  A        cross-sectional flow area (m²) at the higher-WSE side of the edge
+  R        hydraulic radius A/P (m)
+  dWSE_n   skewness-corrected face-normal driving head (m)
+  L        centre-to-centre haversine distance (m) — used as-is; no
+           cos_theta scaling (see `_bates_flux_corrected`'s docstring for
+           why this is no longer needed)
+  n_mann   Manning's roughness (s·m⁻¹ᐟ³)
+  dt       timestep (s)
+
+Sign convention matches `_manning_flux_ra`: Q < 0 → flow i→j (i higher).
+Returns 0.0 for dry edges: A ≤ 1e-6 m² or h_flow ≤ HFLOW_THRESHOLD.
+
+Selected by `step_sgs!` Phase A when `state.gradient_correction == true`.
+"""
+@inline function _manning_flux_ra_corrected(Q_prev :: Float64,
+                                             h_flow :: Float64,
+                                             A      :: Float64,
+                                             R      :: Float64,
+                                             dWSE_n :: Float64,
+                                             L      :: Float64,
+                                             n_mann :: Float64,
+                                             dt     :: Float64)::Float64
+    (h_flow <= HFLOW_THRESHOLD || A <= 1e-6) && return 0.0
+
+    R_safe = max(R, 1e-4)
+    L_safe = max(L, 1.0)
+
+    numerator   = Q_prev - _G * A * dt * dWSE_n / L_safe
+    denominator = 1.0 + _G * dt * n_mann^2 * abs(Q_prev) / (R_safe^(4.0/3.0) * A)
     return numerator / denominator
 end
 

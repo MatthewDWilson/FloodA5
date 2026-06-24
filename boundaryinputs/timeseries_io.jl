@@ -40,16 +40,23 @@ abstract type AbstractTimeSeriesReader end
 
 Reader for LISFLOOD-FP .bdy boundary data files.
 
-File format (one or more named series per file):
+File format (one or more named series per file), per the LISFLOOD-FP manual
+§3.2.5:
 
     SERIES_NAME
     N                     # number of time steps
     seconds               # time unit: seconds | hours | days
-    0.0    0.0
-    3600   5.2
+    0.0    0.0            # Value1  Time1
+    5.2    3600           # Value2  Time2
     ...
     NEXT_SERIES_NAME
     ...
+
+Each data row is "Value  Time" (NOT "Time  Value") — Value is the boundary
+quantity (discharge in m³/s for QVAR; water surface elevation in m for HVAR)
+and Time is the simulation time in the unit declared on the series' header
+line. This column order matches the official LISFLOOD-FP specification
+exactly and must not be changed without re-confirming against the manual.
 
 Comments (lines beginning # or !) and blank lines are ignored.
 Multiple series in a single file are all parsed and returned.
@@ -167,9 +174,19 @@ function read_timeseries(r::LisfloodBDYReader
             parts = split(strip(lines[i]))
 
             if length(parts) >= 2
+                # .bdy data rows are "discharge  time" (Value  Time), per the
+                # official LISFLOOD-FP manual §3.2.5:
+                #     Line 4: Value1 Time1
+                #     Line 5: Value2 Time2
+                # where Value is the boundary quantity (discharge in m³/s for
+                # QVAR) and Time is the simulation time in the declared unit.
+                # NOTE: the worked example previously in this file's docstring
+                # (implying time-first) was incorrect and has been fixed —
+                # this column order (Value, Time) matches the LISFLOOD-FP
+                # manual and is what the original implementation used.
                 q_val = tryparse(Float64, parts[1])
                 t_val = tryparse(Float64, parts[2])
-                
+
                 if t_val !== nothing && q_val !== nothing
                     n_read += 1
                     t_vec[n_read] = t_val * t_mult

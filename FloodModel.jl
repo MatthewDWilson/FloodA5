@@ -58,6 +58,7 @@ using .MakieVisualiser
 using JSON3
 using Dates
 using Statistics: mean, quantile
+using LinearAlgebra: Diagonal
 using HDF5
 using ArchGDAL
 
@@ -282,6 +283,35 @@ mutable struct FlowState
     ghost_edges    :: Vector{Any}     # Vector{GhostEdge} — one per missing edge slot
     ghost_cell_bc  :: Vector{Any}     # Vector{BCType}    — BC type per ghost edge
     vol_removed    :: Float64         # cumulative outflow through ghost edges (m³)
+    # ── Non-orthogonal gradient correction (flow-direction-fixes, Step 2) ──
+    # grad_wse: per-cell WSE gradient (∇WSE_x, ∇WSE_y), local equirectangular
+    # frame, recomputed every step by _compute_wse_gradients! before the edge
+    # flux loop. Shape (2, n_cells): row 1 = x-component, row 2 = y-component.
+    # Only meaningful when gradient_correction is true; left at its last
+    # computed value (or zero, pre-first-step) when false, but unused by the
+    # legacy/uncorrected kernels.
+    grad_wse        :: Matrix{Float64}
+    # wlsq_weights: pre-computed weighted least-squares projection matrix per
+    # cell, built once by _build_wlsq_weights! at init time and never mutated
+    # thereafter. Shape (10, n_cells): rows 1:5 are the x-gradient weights
+    # (one per adjacency slot 1..5, in adj_matrix slot order — NOT EdgeList
+    # order), rows 6:10 the y-gradient weights. Zero for slots beyond a
+    # cell's actual neighbour count and for cells with < 2 neighbours
+    # (gradient undefined; grad_wse stays zero for those cells).
+    # See FloodA5_NonOrthogonal_Correction_Plan.md §4.2, §5.1.
+    wlsq_weights    :: Matrix{Float64}
+    # q_centre_theta: θ for the Q-centred spatial momentum smoothing scheme
+    # (see flow2d.jl _q_centred). Set via --q-centre-theta; default 0.9
+    # (LISFLOOD-FP standard). θ = 1.0 disables smoothing entirely.
+    q_centre_theta  :: Float64
+    # gradient_correction: when true, step_standard!/step_sgs! Phase A use
+    # the WLSQ-corrected flux kernels (_bates_flux_corrected,
+    # _manning_flux_ra_corrected — added in a later step); when false, the
+    # legacy/uncorrected kernels (_bates_flux, _manning_flux_ra) are used.
+    # Set via --gradient-correction. Both code paths are retained side by
+    # side for A/B benchmarking per FloodA5_NonOrthogonal_Correction_Plan.md
+    # §3 (Design Decisions).
+    gradient_correction :: Bool
 end
 
 # ---------------------------------------------------------------------------
@@ -654,6 +684,184 @@ function _build_adjacency_matrix!(adj_matrix :: Matrix{Int},
 end
 
 """
+    _build_wlsq_weights!(wlsq_weights, adj_matrix, cell_lons, cell_lats)
+
+Pre-compute the weighted least-squares (WLSQ) gradient-reconstruction
+projection matrix for every cell, storing the result in `wlsq_weights`
+(shape `(10, n_cells)`: rows 1:5 = x-gradient weights per adjacency slot,
+rows 6:10 = y-gradient weights per adjacency slot — slot order matches
+`adj_matrix`, NOT `EdgeList` edge order).
+
+This is the geometric pre-computation step of the WLSQ non-orthogonal
+gradient correction (`FloodA5_NonOrthogonal_Correction_Plan.md` §2, §5.1).
+It is called once at `initialise_flow_model` time, after `adj_matrix` has
+been built. The resulting weights are static for the lifetime of the mesh
+(re-run only if the mesh itself changes, e.g. AMR refinement).
+
+# Method
+
+For cell `i` with neighbours `j₁, …, j_k` (`k` = number of non-zero slots,
+2 ≤ k ≤ 5 for a well-formed A5 mesh interior cell; boundary cells may have
+fewer), the gradient ∇WSE_i = (gx, gy) is the least-squares solution to:
+
+    minimise  Σ_k w_k [(WSE_jk − WSE_i) − ∇WSE_i · (x_jk − x_i)]²
+
+with inverse-squared-distance weights `w_k = 1 / |x_jk − x_i|²`, where
+`(x_jk − x_i)` are the neighbour displacement vectors in a local
+equirectangular frame centred on cell `i`. This is a sum-only stencil: the
+displacement vectors and weights depend only on mesh geometry and never on
+the WSE field, so the solution can be reduced to a fixed `(2 × k)` "weights"
+matrix `proj = (AᵀWA)⁻¹ AᵀW` once and reused every timestep — at runtime,
+`_compute_wse_gradients!` (a later step) only needs `gx = Σ proj[1,k]·dWSE_k`,
+`gy = Σ proj[2,k]·dWSE_k`, i.e. one multiply-add per neighbour, no solve.
+
+# Degenerate cases
+
+Cells with fewer than 2 valid neighbours have an underdetermined 2D
+gradient — `wlsq_weights[:, i]` is left at zero (its caller-supplied
+initial value) and `_compute_wse_gradients!` will later produce
+`grad_wse[:, i] = (0, 0)` for that cell, which is the safe "no correction"
+fallback (equivalent to assuming a locally flat WSE field). The same
+applies if the 2×2 normal-equations matrix `AᵀWA` is singular or
+near-singular (e.g. all neighbours collinear with cell i — possible at
+mesh edges/corners, or geometrically degenerate cells): the determinant
+guard below catches this and also leaves the weights at zero rather than
+dividing by a near-zero determinant and producing a huge, spurious
+gradient.
+
+# Arguments
+- `wlsq_weights` — `(10, n_cells)` matrix to fill, in/out. Caller must
+  pre-allocate as `zeros(Float64, 10, n_cells)` so degenerate cells are
+  correctly left at zero.
+- `adj_matrix`   — `(max_nb, n_cells)` neighbour index matrix, 0 = no
+  neighbour in that slot (from `_build_adjacency_matrix!`).
+- `cell_lons`, `cell_lats` — cell centre coordinates (degrees, EPSG:4326).
+"""
+function _build_wlsq_weights!(wlsq_weights :: Matrix{Float64},
+                               adj_matrix   :: Matrix{Int},
+                               cell_lons    :: Vector{Float64},
+                               cell_lats    :: Vector{Float64})
+    n      = length(cell_lons)
+    max_nb = size(adj_matrix, 1)
+    R      = A5Grid._EARTH_R
+
+    @inbounds for i in 1:n
+        cos_lat0 = cosd(cell_lats[i])   # local equirectangular frame centred on cell i
+
+        # Collect valid neighbour slots and their displacement vectors.
+        slots = Int[]
+        dxs   = Float64[]
+        dys   = Float64[]
+        for s in 1:max_nb
+            j = adj_matrix[s, i]
+            j == 0 && continue
+            dx = deg2rad(cell_lons[j] - cell_lons[i]) * R * cos_lat0
+            dy = deg2rad(cell_lats[j] - cell_lats[i]) * R
+            r2 = dx*dx + dy*dy
+            r2 < 1.0 && continue   # guard against duplicate/coincident centres
+            push!(slots, s)
+            push!(dxs, dx)
+            push!(dys, dy)
+        end
+
+        k = length(slots)
+        k < 2 && continue   # underdetermined — leave wlsq_weights[:, i] = 0
+
+        # Inverse-squared-distance weights.
+        ws = [1.0 / (dxs[m]^2 + dys[m]^2) for m in 1:k]
+        W  = Diagonal(ws)
+
+        # A is (k × 2): displacement vectors as rows.
+        A = hcat(dxs, dys)           # (k × 2)
+
+        AtW = A' * W                 # (2 × k)
+        M   = AtW * A                # (2 × 2) normal-equations matrix
+
+        det_M = M[1,1]*M[2,2] - M[1,2]*M[2,1]
+        if abs(det_M) < 1e-20
+            # Degenerate stencil (e.g. all neighbours collinear with cell i).
+            # Leave wlsq_weights[:, i] = 0 — _compute_wse_gradients! will
+            # produce grad_wse[:, i] = (0, 0), the safe "no correction"
+            # fallback, rather than amplifying noise through a near-singular
+            # inverse.
+            continue
+        end
+
+        proj = M \ AtW   # (2 × k) = (AᵀWA)⁻¹ AᵀW
+
+        for (m, s) in enumerate(slots)
+            wlsq_weights[s,          i] = proj[1, m]   # x-gradient weight
+            wlsq_weights[max_nb + s, i] = proj[2, m]   # y-gradient weight
+        end
+    end
+end
+
+
+"""
+    _compute_wse_gradients!(state, wse)
+
+Per-timestep WSE gradient reconstruction step (Step 5 of the WLSQ
+non-orthogonal gradient correction, `FloodA5_NonOrthogonal_Correction_Plan.md`
+§5.2). Populates `state.grad_wse` (shape `(2, n_cells)`) from the current
+WSE field `wse` and the pre-computed `state.wlsq_weights`
+(`_build_wlsq_weights!`, run once at init).
+
+For each cell `i`:
+
+    gx = Σ_s wlsq_weights[s,         i] × (wse[adj_matrix[s,i]] - wse[i])
+    gy = Σ_s wlsq_weights[max_nb+s,  i] × (wse[adj_matrix[s,i]] - wse[i])
+
+This is a pure sum-of-products over the (already-projected) WLSQ weights —
+no linear solve at runtime, since the solve was done once in
+`_build_wlsq_weights!`. Cost is O(max_nb × n_cells) per call, i.e. one
+multiply-add per neighbour slot — negligible compared to the edge flux loop.
+
+Cells with a degenerate stencil (wlsq_weights[:, i] all zero — see
+`_build_wlsq_weights!`'s docstring for when this occurs) correctly produce
+`grad_wse[:, i] = (0, 0)`, since every weight in the sum is zero. This is
+the safe "no correction" fallback: the corrected flux kernels
+(`_bates_flux_corrected`, `_manning_flux_ra_corrected`) will use a zero
+gradient at such cells, which makes their skewness-correction term vanish
+and reduces to the same driving head as the legacy kernel for any edge
+touching that cell.
+
+Called at the start of `step_standard!`/`step_sgs!` Phase A, before the
+edge flux loop, **only when `state.gradient_correction == true`** — when
+`false` (current default), this function is not called at all and
+`state.grad_wse` is left untouched (still its Step 2 zero-placeholder, or
+whatever stale value it held from a previous call — harmless either way
+since the legacy kernels never read it).
+
+# Arguments
+- `state` — the `FlowState`; must have `wlsq_weights` already populated
+  (`_build_wlsq_weights!`, run once at `initialise_flow_model` time).
+- `wse`   — current water-surface elevation per cell (m). For standard
+  flow this is `elevation[i] + volume[i]/cell_area[i]`; for SGS this is
+  `wse_from_volume(sgs_tables[i], volume[i])`. The caller is responsible
+  for computing this — `_compute_wse_gradients!` is agnostic to which flow
+  method produced it.
+"""
+function _compute_wse_gradients!(state::FlowState, wse::Vector{Float64})
+    n      = length(state.cell_ids)
+    max_nb = size(state.adj_matrix, 1)
+
+    @inbounds for i in 1:n
+        gx = 0.0
+        gy = 0.0
+        for s in 1:max_nb
+            j = state.adj_matrix[s, i]
+            j == 0 && continue
+            dWSE = wse[j] - wse[i]
+            gx += state.wlsq_weights[s,          i] * dWSE
+            gy += state.wlsq_weights[max_nb + s, i] * dWSE
+        end
+        state.grad_wse[1, i] = gx
+        state.grad_wse[2, i] = gy
+    end
+end
+
+
+"""
     _build_edge_list(cells, id_idx, adj, areas, sill_matrix) → EdgeList
 
 Build a flat list of all undirected edges in the mesh.  Each edge is stored
@@ -1007,13 +1215,30 @@ end
 
 """
     initialise_flow_model(mesh, method;
-                          manning_n=0.03, friction_raster=nothing) → FlowState
+                          manning_n=0.03, friction_raster=nothing,
+                          q_centre_theta=0.9, gradient_correction=false) → FlowState
 
 Initialise the flow model on the A5 mesh.
 
-- `method`          — `StandardFlow()` or `SGSFlow()`
-- `manning_n`       — global Manning's roughness (default 0.03)
-- `friction_raster` — path to a friction GeoTIFF; per-cell n overrides global value
+- `method`               — `StandardFlow()` or `SGSFlow()`
+- `manning_n`            — global Manning's roughness (default 0.03)
+- `friction_raster`      — path to a friction GeoTIFF; per-cell n overrides global value
+- `q_centre_theta`       — θ for the Q-centred spatial momentum smoothing
+                            scheme (checkerboard suppression). Default 0.9
+                            (LISFLOOD-FP standard). Set to 1.0 to disable.
+- `gradient_correction`  — when `true`, use the WLSQ non-orthogonal gradient
+                            correction (`_bates_flux_corrected` /
+                            `_manning_flux_ra_corrected`) in place of the
+                            legacy uncorrected kernels. Default `false` —
+                            the WLSQ machinery is being built incrementally
+                            (`flow-direction-fixes` branch); this default
+                            will change to `true` once Stages 2–5 validation
+                            (`FloodA5_NonOrthogonal_Correction_Plan.md` §10)
+                            is complete. `wlsq_weights`/`grad_wse` are always
+                            allocated regardless of this flag, but are only
+                            populated by `_build_wlsq_weights!` /
+                            `_compute_wse_gradients!` once those are wired in
+                            (Steps 5–8) — currently zero placeholders.
 
 For SGSFlow, `build_sgs_tables!` must have been called on the mesh first
 (tables are stored in `mesh.array_vars`).
@@ -1021,7 +1246,9 @@ For SGSFlow, `build_sgs_tables!` must have been called on the mesh first
 function initialise_flow_model(mesh::A5Mesh,
                                 method::FlowMethod = StandardFlow();
                                 manning_n::Float64 = 0.03,
-                                friction_raster    = nothing)::FlowState
+                                friction_raster    = nothing,
+                                q_centre_theta     :: Float64 = 0.9,
+                                gradient_correction:: Bool    = false)::FlowState
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1166,6 +1393,31 @@ function initialise_flow_model(mesh::A5Mesh,
     lons = [c.center_lon for c in mesh.cells]
     lats = [c.center_lat for c in mesh.cells]
 
+    # ── Non-orthogonal gradient correction scratch storage (Step 2–4) ──────
+    # grad_wse is recomputed every step by _compute_wse_gradients! (a later
+    # step) — allocated here as a zero placeholder; harmless until that
+    # function exists, since gradient_correction = false (current default)
+    # means no step function reads it.
+    #
+    # wlsq_weights is static mesh geometry — computed once, here, by
+    # _build_wlsq_weights! (Step 3/4), and never mutated again for the
+    # lifetime of this mesh. Computing it unconditionally (regardless of
+    # gradient_correction) keeps the cost trivial (§5.1: O(n_cells), one
+    # 2×2 solve per cell) and means switching gradient_correction on
+    # mid-session (if that's ever wired up) doesn't require re-running
+    # mesh init.
+    grad_wse     = zeros(Float64, 2, n)
+    wlsq_weights = zeros(Float64, 10, n)
+    t_wlsq = time()
+    _build_wlsq_weights!(wlsq_weights, adj_matrix, lons, lats)
+    n_degenerate = count(i -> all(==(0.0), view(wlsq_weights, :, i)), 1:n)
+    n_valid = n - n_degenerate
+    @info "WLSQ gradient weights built in $(round(time()-t_wlsq, digits=3))s — " *
+          "$n_valid/$n cells with a valid 2D gradient stencil" *
+          (n_degenerate > 0 ?
+           "; $n_degenerate cells underdetermined or geometrically degenerate (gradient correction is a no-op there)" :
+           "")
+
     return FlowState(
         ids,
         zeros(Float64, n),
@@ -1186,6 +1438,10 @@ function initialise_flow_model(mesh::A5Mesh,
         ghost_edges,
         ghost_cell_bc,
         0.0,       # vol_removed
+        grad_wse,
+        wlsq_weights,
+        q_centre_theta,
+        gradient_correction,
     )
 end
 
@@ -1580,7 +1836,12 @@ function step_standard!(state::FlowState, dt::Float64)
             bad = findall(isnan, state.volume)
             @warn "  NaN volumes at indices: $(bad[1:min(5,end)])"
         end
-        for i in [1, 2, 3, argmax(state.volume)]
+        # Sample up to the first 3 cells plus the max-volume cell, for context
+        # on small synthetic meshes (unit tests can have as few as 1-2 cells).
+        # unique() avoids printing the same cell twice when argmax coincides
+        # with one of the first three, or when n < 3.
+        sample_idxs = unique(filter(i -> 1 <= i <= n, [1, 2, 3, argmax(state.volume)]))
+        for i in sample_idxs
             wse = state.elevation[i] + state.volume[i] / max(state.cell_area[i], 1.0)
             @info "  cell[$i]: vol=$(round(state.volume[i],sigdigits=4))" *
                   "  depth=$(round(state.water_depth[i],sigdigits=4))" *
@@ -1598,6 +1859,25 @@ function step_standard!(state::FlowState, dt::Float64)
     #   • Volume limiter      (CAESAR depth/5 cap: ≤ 1/5 donor depth per edge)
     #   • Consistent q_prev  (stores post-limiting q, not raw Bates q)
     # See _bates_flux_limited docstring for full rationale.
+    #
+    # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
+    # When state.gradient_correction is true, _bates_flux_limited_corrected
+    # is used instead of _bates_flux_limited, with the WSE gradient
+    # reconstructed once (serially, below) before the threaded edge loop —
+    # _compute_wse_gradients! needs the full per-cell WSE array, which the
+    # legacy code path only ever computed inline per-edge, not as a
+    # standalone vector. Materialising `wse` here costs O(n_cells), trivial
+    # next to the edge loop itself, and is skipped entirely when
+    # gradient_correction is false so the legacy path has zero overhead.
+    # See FloodA5_NonOrthogonal_Correction_Plan.md §5.2, §5.5.
+    if state.gradient_correction
+        wse_all = Vector{Float64}(undef, n)
+        @inbounds for i in 1:n
+            wse_all[i] = state.elevation[i] + state.volume[i] / max(state.cell_area[i], 1.0)
+        end
+        _compute_wse_gradients!(state, wse_all)
+    end
+
     edge_vol = Vector{Float64}(undef, ne)
 
     Threads.@threads for e in 1:ne
@@ -1621,15 +1901,37 @@ function step_standard!(state::FlowState, dt::Float64)
 
         # Q-centred: spatially smooth q_prev using the most-collinear neighbouring
         # edge fluxes. This damps the checkerboard oscillation mode on the pentagonal
-        # mesh while preserving coherent flow signals. θ = Q_CENTRE_THETA (0.9).
+        # mesh while preserving coherent flow signals. θ = state.q_centre_theta
+        # (default 0.9; set via --q-centre-theta, 1.0 disables smoothing).
         q_prev_eff = _q_centred(edges.flux, e,
-                                 edges.collinear_i[e], edges.collinear_j[e])
+                                 edges.collinear_i[e], edges.collinear_j[e],
+                                 state.q_centre_theta)
 
-        Q, q_stored = _bates_flux_limited(
-            q_prev_eff, wse_ci, wse_cj, edges.sill[e],
-            edges.width[e], edges.L[e], edges.cos_theta[e],
-            min(state.manning_n[ci], state.manning_n[cj]), dt,
-            depth_donor)
+        if state.gradient_correction
+            # ── WLSQ-corrected driving head ─────────────────────────────────
+            # Face-interpolated gradient (average of both cells' WLSQ
+            # gradients), then the skewness correction term:
+            #   dWSE_n = (wse_cj - wse_ci) + ∇WSE_f · (skew_x, skew_y)
+            # h_flow still uses the raw (uncorrected) WSE values — only the
+            # gradient term is corrected, per _bates_flux_corrected's
+            # documented convention.
+            gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
+            gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
+            dWSE_n = (wse_cj - wse_ci) + gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e]
+            h_flow = max(wse_ci, wse_cj) - edges.sill[e]
+
+            Q, q_stored = _bates_flux_limited_corrected(
+                q_prev_eff, h_flow, dWSE_n,
+                edges.width[e], edges.L[e],
+                min(state.manning_n[ci], state.manning_n[cj]), dt,
+                depth_donor)
+        else
+            Q, q_stored = _bates_flux_limited(
+                q_prev_eff, wse_ci, wse_cj, edges.sill[e],
+                edges.width[e], edges.L[e], edges.cos_theta[e],
+                min(state.manning_n[ci], state.manning_n[cj]), dt,
+                depth_donor)
+        end
 
         edges.flux[e] = q_stored   # Fix C: post-limiting q → consistent q_prev
         edge_vol[e]   = Q * dt     # signed volume (m³)
@@ -1734,6 +2036,15 @@ function step_sgs!(state::FlowState, dt::Float64)
         A_wet[i] = wetted_area_from_wse(tbl, wse[i])
     end
 
+    # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
+    # Unlike step_standard!, `wse` here is already a full per-cell array
+    # (Step 0 above) — no separate materialisation needed before calling
+    # _compute_wse_gradients!. See FloodA5_NonOrthogonal_Correction_Plan.md
+    # §5.2, §11 (SGS extension).
+    if state.gradient_correction
+        _compute_wse_gradients!(state, wse)
+    end
+
     # ── Phase A: parallel edge flux computation ────────────────────────────
     # Reads: wse[] (just computed, read-only), state.elevation, manning_n,
     #        edges geometry.  Writes only to edge_vol[e] and edges.flux[e]
@@ -1797,14 +2108,61 @@ function step_sgs!(state::FlowState, dt::Float64)
         # Q-centred smoothing on flux_Q (volumetric momentum for R-A kernel).
         # Same collinear lookup as standard flow — the checkerboard mode exists
         # on the pentagonal mesh regardless of the flux kernel used.
+        # θ = state.q_centre_theta (default 0.9; set via --q-centre-theta).
         Q_prev_eff = _q_centred(edges.flux_Q, e,
-                                 edges.collinear_i[e], edges.collinear_j[e])
+                                 edges.collinear_i[e], edges.collinear_j[e],
+                                 state.q_centre_theta)
 
-        Q_new = _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
-                                  A_edge, R_edge,
-                                  edges.L[e], edges.cos_theta[e],
-                                  0.5 * (state.manning_n[ci] + state.manning_n[cj]),
-                                  dt)
+        Q_new = if state.gradient_correction
+            # ── WLSQ-corrected driving head ─────────────────────────────────
+            # Same construction as step_standard! — face-interpolated
+            # gradient + skewness correction. Uses the *effective* (dry-cell
+            # corrected) WSE values for h_flow/wse_flow exactly as the legacy
+            # SGS kernel does (wse_ci_eff/wse_cj_eff, not raw wse[]),
+            # consistent with the existing Bug 48 dry-cell treatment — only
+            # the gradient term is taken from the raw wse[] field used in
+            # _compute_wse_gradients!, matching _bates_flux_corrected's
+            # documented convention of correcting only the gradient, not the
+            # flow-depth/friction term.
+            #
+            # ⚠️  KNOWN OPEN QUESTION, not yet resolved by testing: a dry
+            # cell's *raw* wse[] is tbl.z_min (wse_from_volume(V=0) returns
+            # z_min — see the Bug 48 comment above), which is exactly the
+            # value Bug 48's clamp exists to suppress in the direct
+            # wse_cj_eff − wse_ci_eff term. Because _compute_wse_gradients!
+            # is called once on the raw `wse` array for ALL cells (dry and
+            # wet alike — see its docstring, "agnostic to which flow method
+            # produced it"), a dry cell's gradient is built from its
+            # raw/unclamped z_min, not its clamped effective WSE. This means
+            # the skewness-correction term (gx_f, gy_f) could reintroduce a
+            # small amount of the same spurious-head signal Bug 48 was
+            # designed to eliminate, via a different path than the one Bug
+            # 48 patches. The magnitude is expected to be small — the
+            # gradient correction term is a secondary, skewness-scaled
+            # contribution, not the primary driving-head term — but this
+            # has not been empirically verified. MUST be checked against
+            # the synthetic DEM T0–T4 regression suite (dry-cell-heavy by
+            # design — see SGS_VALIDATION_SUMMARY.md) before this SGS
+            # corrected path is considered validated. If T0/T1 (no spurious
+            # downstream flow before the notch sill) regress with
+            # --gradient-correction on, this is the first place to look.
+            gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
+            gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
+            dWSE_n = (wse_cj_eff - wse_ci_eff) +
+                     gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e]
+            h_flow = wse_flow - z_sill
+
+            _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,
+                                        dWSE_n, edges.L[e],
+                                        0.5 * (state.manning_n[ci] + state.manning_n[cj]),
+                                        dt)
+        else
+            _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
+                              A_edge, R_edge,
+                              edges.L[e], edges.cos_theta[e],
+                              0.5 * (state.manning_n[ci] + state.manning_n[cj]),
+                              dt)
+        end
 
         # Fix C: store Q (m³/s) as momentum state for next step.
         edges.flux_Q[e] = Q_new
@@ -2156,6 +2514,9 @@ function run_flood_model(;
     sgs_samples      :: Int     = 512,
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
+    # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
+    q_centre_theta      :: Float64 = 0.9,
+    gradient_correction :: Bool    = false,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -2363,12 +2724,15 @@ function run_flood_model(;
     @info "Initialising flow model ($(flow_method)) on $(length(mesh)) cells..."
     t0 = time()
     flow_state = initialise_flow_model(mesh, method_obj;
-                                        manning_n       = manning_n,
-                                        friction_raster = friction_source)
+                                        manning_n           = manning_n,
+                                        friction_raster      = friction_source,
+                                        q_centre_theta       = q_centre_theta,
+                                        gradient_correction  = gradient_correction)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
-          "Manning n = $(manning_n))"
+          "Manning n = $(manning_n), q_centre_theta = $(q_centre_theta), " *
+          "gradient_correction = $(gradient_correction))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -2647,6 +3011,28 @@ Flow model options:
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
   --friction FILE    GeoTIFF friction raster. Per-cell Manning's n sampled at
                      cell centres; overrides --manning-n where finite.
+  --q-centre-theta N Spatial momentum smoothing parameter θ for the
+                     Q-centred scheme (checkerboard suppression).
+                     Range [0.0, 1.0]. Default: 0.9 (LISFLOOD-FP standard,
+                     light smoothing). θ = 1.0 disables the scheme entirely
+                     (pure Bates semi-implicit momentum, no smoothing).
+                     Lower values damp oscillations more strongly but
+                     reduce inertial accuracy. Note: disabling (θ = 1.0)
+                     may reveal period-2 checkerboarding on irregular
+                     meshes, particularly at high rainfall rates or fine
+                     resolution.
+  --gradient-correction on|off
+                     Enable the WLSQ non-orthogonal gradient correction for
+                     the flux kernels (default: off while under validation
+                     on the flow-direction-fixes branch).
+                       on   Use the corrected kernels (_bates_flux_corrected /
+                            _manning_flux_ra_corrected) — recommended once
+                            validated; corrects the flow-direction bias
+                            documented in the FOSS4G 2026 paper.
+                       off  Use the legacy kernels (_bates_flux /
+                            _manning_flux_ra) — uncorrected; retained for
+                            A/B benchmarking against the corrected scheme.
+                     See FloodA5_NonOrthogonal_Correction_Plan.md.
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
@@ -3020,6 +3406,11 @@ function main(args=String[])
     manning_n_val,    args = _pop_flag(args, "--manning-n")
     friction_val,     args = _pop_flag(args, "--friction")
 
+    # --q-centre-theta / --gradient-correction (flow-direction-fixes)
+    # See FloodA5_NonOrthogonal_Correction_Plan.md §6, §7.
+    q_centre_theta_val,    args = _pop_flag(args, "--q-centre-theta")
+    gradient_correction_val, args = _pop_flag(args, "--gradient-correction")
+
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
     flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) :
@@ -3027,6 +3418,30 @@ function main(args=String[])
     sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
     sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 512
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
+
+    q_centre_theta = q_centre_theta_val !== nothing ?
+                     parse(Float64, q_centre_theta_val) : 0.9
+    (q_centre_theta < 0.0 || q_centre_theta > 1.0) &&
+        (println("ERROR: --q-centre-theta must be in [0.0, 1.0]\n"); print_help(1))
+
+    # --gradient-correction on|off (flow-direction-fixes; FloodA5_NonOrthogonal_
+    # Correction_Plan.md §7). This is a value flag, not a presence flag: unlike
+    # --closed-boundaries (_pop_bool), _pop_flag always consumes the *next*
+    # token as the value if one exists, so a bare --gradient-correction with
+    # no value (e.g. immediately followed by another flag) would silently and
+    # incorrectly swallow that next token. An explicit on/off/true/false/1/0
+    # value is therefore required whenever the flag is present at all.
+    gradient_correction = if gradient_correction_val === nothing
+        false
+    elseif gradient_correction_val in ("on", "true", "1")
+        true
+    elseif gradient_correction_val in ("off", "false", "0")
+        false
+    else
+        println("ERROR: --gradient-correction requires an explicit value: " *
+                 "'on' or 'off' (got '$gradient_correction_val')\n")
+        print_help(1)
+    end
 
     flow_method ∉ (:sgs, :standard) &&
         (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
@@ -3159,6 +3574,8 @@ function main(args=String[])
         sgs_samples     = sgs_samples,
         manning_n       = manning_n,
         friction_source = friction_source,
+        q_centre_theta      = q_centre_theta,
+        gradient_correction = gradient_correction,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,
