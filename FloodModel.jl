@@ -154,14 +154,26 @@ struct EdgeList
     collinear_i  :: Vector{Int}        # index of most-collinear edge on ci side
     collinear_j  :: Vector{Int}        # index of most-collinear edge on cj side
     # Non-orthogonal gradient correction (flow-direction-fixes branch).
-    # skew_x[e], skew_y[e] are the components (m, local equirectangular frame
-    # centred on the edge midpoint at mesh-build time) of the vector from the
-    # shared-edge face midpoint to the point where the centre-to-centre line
-    # intersects the face.  (0, 0) for an orthogonal, unskewed cell pair.
+    #
+    # ⚠️  REVISION NOTE (2026-06-24): skew_x[e]/skew_y[e] previously held a
+    # *positional* offset vector (face midpoint minus centre-to-centre/face
+    # intersection point). That formulation was found to be geometrically
+    # incorrect during T-NOC5b investigation — see _edge_geometry's
+    # docstring (A5Grid.jl) for the full account. These fields now hold a
+    # *directional* correction vector V̂ = n̂ - c·d̂ (dimensionless, m⁻¹ in
+    # effect — NOT a positional offset in metres despite the field names,
+    # which were kept unchanged to minimise the diff).
+    #
+    # cos_theta[e] is now the ORIENTED cosine c = d̂·n̂ ∈ [0,1] (n̂ oriented
+    # so d̂·n̂ ≥ 0 — see _edge_geometry), used by BOTH the legacy kernels
+    # (as a magnitude-only scalar, L_eff = L×cos_theta) and the corrected
+    # kernels (as the coefficient `c` in the formula below).
+    #
     # Used only by the WLSQ-corrected kernels (_bates_flux_corrected,
-    # _manning_flux_ra_corrected) to build the skewness-corrected driving
-    # head dWSE_n = (WSE_j - WSE_i) + ∇WSE_f · (skew_x, skew_y).
-    # See FloodA5_NonOrthogonal_Correction_Plan.md §2, §4.1, §5.1.
+    # _manning_flux_ra_corrected), via the caller-constructed driving head:
+    #   dWSE_n = cos_theta[e]·(WSE_i - WSE_j) - L[e]·∇WSE_f·(skew_x, skew_y)
+    # (0, 0) for an orthogonal cell pair — recovers the legacy term exactly.
+    # See FloodA5_NonOrthogonal_Correction_Plan.md §2, §4.1, §5.1, §10.6.
     skew_x       :: Vector{Float64}
     skew_y       :: Vector{Float64}
 end
@@ -1078,19 +1090,26 @@ function _build_edge_list(cells       :: Vector{A5Cell},
               "max=$(round(maximum(thetas_deg), digits=1))°  " *
               "(OpenFOAM: corrected-scheme-safe ≤70°, limiting advised above)"
 
-        # ── Skewness diagnostic (flow-direction-fixes) ──────────────────
-        # Skewness fraction = |skew_vec| / edge_width. A value of 0 means
-        # the centre-to-centre line crosses exactly at the face midpoint
-        # (no skewness correction needed); larger values indicate the
-        # WLSQ skewness correction term will have a bigger contribution.
-        skew_mags  = sqrt.(skew_xs[1:n_edges].^2 .+ skew_ys[1:n_edges].^2)
-        edge_w     = ws[1:n_edges]
-        valid_skew = [skew_mags[k] / edge_w[k] for k in 1:n_edges
-                      if isfinite(skew_mags[k]) && edge_w[k] > 1e-6]
-        if !isempty(valid_skew)
-            @info "Edge skewness (|skew_vec| / edge width):  " *
-                  "mean=$(round(mean(valid_skew)*100, digits=1))%  " *
-                  "max=$(round(maximum(valid_skew)*100, digits=1))% of edge length"
+        # ── WLSQ correction-vector diagnostic (flow-direction-fixes) ────
+        # ⚠️  REVISION NOTE (2026-06-24): skew_x/skew_y now hold a
+        # *directional* correction vector V̂ = n̂ - c·d̂ (see EdgeList's
+        # field comment and _edge_geometry's docstring in A5Grid.jl for the
+        # full account), not a positional offset — so normalising by edge
+        # width (the previous diagnostic) is no longer geometrically
+        # meaningful. |V̂| is provably equal to sin θ (verified analytically
+        # and numerically during the T-NOC5b investigation), so it is
+        # already a dimensionless quantity bounded in [0, 1] and directly
+        # comparable to the θ diagnostic above — no normalisation needed.
+        # |V̂| = 0 means no correction needed (orthogonal edge); |V̂| → 1
+        # means the correction term's magnitude approaches that of the
+        # direct WSE-difference term itself.
+        corr_mags = sqrt.(skew_xs[1:n_edges].^2 .+ skew_ys[1:n_edges].^2)
+        valid_corr = filter(isfinite, corr_mags)
+        if !isempty(valid_corr)
+            @info "Edge WLSQ correction vector |V̂| (= sin θ):  " *
+                  "mean=$(round(mean(valid_corr), digits=3))  " *
+                  "max=$(round(maximum(valid_corr), digits=3))  " *
+                  "(0 = orthogonal/no correction, bounded in [0,1])"
         end
     end
 
@@ -1909,15 +1928,44 @@ function step_standard!(state::FlowState, dt::Float64)
 
         if state.gradient_correction
             # ── WLSQ-corrected driving head ─────────────────────────────────
-            # Face-interpolated gradient (average of both cells' WLSQ
-            # gradients), then the skewness correction term:
-            #   dWSE_n = (wse_cj - wse_ci) + ∇WSE_f · (skew_x, skew_y)
-            # h_flow still uses the raw (uncorrected) WSE values — only the
-            # gradient term is corrected, per _bates_flux_corrected's
-            # documented convention.
+            # Direct WSE-difference term uses (wse_ci - wse_cj), matching the
+            # legacy kernel's convention exactly (_bates_flux: dWSE = wse_i -
+            # wse_j) — this is the part verified bit-identical to the legacy
+            # kernel by T-NOC4 (test_noc_correction.jl) when skew=0.
+            # ── WLSQ-corrected driving head (re-derived 2026-06-24) ─────────
+            # dWSE_n = c·(wse_i - wse_j) - L·(∇WSE_f · V̂)
+            # where c = edges.cos_theta[e] (now the ORIENTED cosine, always
+            # ≥ 0, identical in magnitude to the legacy cos_theta but
+            # computed via a consistently i→j-oriented face normal — see
+            # _edge_geometry's 2026-06-24 revision note in A5Grid.jl) and
+            # V̂ = (edges.skew_x[e], edges.skew_y[e]) is the WLSQ correction
+            # direction vector (NOT a positional skewness offset, despite
+            # the field names — see EdgeList's field comment).
+            #
+            # This supersedes TWO bugs found during T-NOC5b investigation:
+            #   (1) wrong sign on the direct WSE-difference term — caught by
+            #       T-NOC5b's spurious-uphill-flow failure;
+            #   (2) wrong correction vector entirely — the original formula
+            #       used _edge_geometry's then-named "skew_vec" (a
+            #       *positional* face-midpoint-to-line-intersection offset)
+            #       where the rigorous derivation requires a *directional*
+            #       vector V̂ = n̂ - c·d̂ built from a consistently-oriented
+            #       face normal. These coincide only at exact orthogonality
+            #       (both zero), which is why T-NOC4 (skew=0 backward-compat
+            #       test) did not catch bug (2) — it only ever exercised the
+            #       trivial case where both formulations agree.
+            #
+            # Both the sign and the V̂ formula have been independently
+            # verified against five distinct synthetic skewed geometries by
+            # direct comparison to a first-principles Taylor-expansion
+            # derivation (not just internal self-consistency) — see
+            # FloodA5_NonOrthogonal_Correction_Plan.md §10.6 for the full
+            # derivation record, kept for any future re-verification.
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            dWSE_n = (wse_cj - wse_ci) + gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e]
+            c    = edges.cos_theta[e]
+            dWSE_n = c * (wse_ci - wse_cj) -
+                     edges.L[e] * (gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e])
             h_flow = max(wse_ci, wse_cj) - edges.sill[e]
 
             Q, q_stored = _bates_flux_limited_corrected(
@@ -2114,42 +2162,46 @@ function step_sgs!(state::FlowState, dt::Float64)
                                  state.q_centre_theta)
 
         Q_new = if state.gradient_correction
-            # ── WLSQ-corrected driving head ─────────────────────────────────
-            # Same construction as step_standard! — face-interpolated
-            # gradient + skewness correction. Uses the *effective* (dry-cell
-            # corrected) WSE values for h_flow/wse_flow exactly as the legacy
-            # SGS kernel does (wse_ci_eff/wse_cj_eff, not raw wse[]),
-            # consistent with the existing Bug 48 dry-cell treatment — only
-            # the gradient term is taken from the raw wse[] field used in
-            # _compute_wse_gradients!, matching _bates_flux_corrected's
-            # documented convention of correcting only the gradient, not the
-            # flow-depth/friction term.
+            # ── WLSQ-corrected driving head (re-derived 2026-06-24) ─────────
+            # dWSE_n = c·(wse_i_eff - wse_j_eff) - L·(∇WSE_f · V̂)
+            # Same formula and derivation as step_standard! (see its comment
+            # for the full account of both bugs found and fixed via T-NOC5b:
+            # wrong base-term sign, and the wrong V̂/skew_vec correction
+            # vector). Uses the *effective* (dry-cell corrected) WSE values
+            # for h_flow/wse_flow and the direct WSE-difference term, exactly
+            # as the legacy SGS kernel does (wse_ci_eff/wse_cj_eff, not raw
+            # wse[]), consistent with the existing Bug 48 dry-cell treatment
+            # — only the gradient term (gx_f, gy_f, via ∇WSE_f) is taken from
+            # the raw wse[] field used in _compute_wse_gradients!, matching
+            # _bates_flux_corrected's documented convention of correcting
+            # only the gradient, not the flow-depth/friction term.
             #
             # ⚠️  KNOWN OPEN QUESTION, not yet resolved by testing: a dry
             # cell's *raw* wse[] is tbl.z_min (wse_from_volume(V=0) returns
             # z_min — see the Bug 48 comment above), which is exactly the
             # value Bug 48's clamp exists to suppress in the direct
-            # wse_cj_eff − wse_ci_eff term. Because _compute_wse_gradients!
+            # wse_ci_eff − wse_cj_eff term. Because _compute_wse_gradients!
             # is called once on the raw `wse` array for ALL cells (dry and
             # wet alike — see its docstring, "agnostic to which flow method
             # produced it"), a dry cell's gradient is built from its
             # raw/unclamped z_min, not its clamped effective WSE. This means
-            # the skewness-correction term (gx_f, gy_f) could reintroduce a
-            # small amount of the same spurious-head signal Bug 48 was
-            # designed to eliminate, via a different path than the one Bug
-            # 48 patches. The magnitude is expected to be small — the
-            # gradient correction term is a secondary, skewness-scaled
-            # contribution, not the primary driving-head term — but this
-            # has not been empirically verified. MUST be checked against
-            # the synthetic DEM T0–T4 regression suite (dry-cell-heavy by
-            # design — see SGS_VALIDATION_SUMMARY.md) before this SGS
-            # corrected path is considered validated. If T0/T1 (no spurious
-            # downstream flow before the notch sill) regress with
-            # --gradient-correction on, this is the first place to look.
+            # the correction term (gx_f, gy_f) could reintroduce a small
+            # amount of the same spurious-head signal Bug 48 was designed to
+            # eliminate, via a different path than the one Bug 48 patches.
+            # The magnitude is expected to be small — the correction term is
+            # a secondary, c-and-V̂-scaled contribution, not the primary
+            # driving-head term — but this has not been empirically
+            # verified. MUST be checked against the synthetic DEM T0–T4
+            # regression suite (dry-cell-heavy by design — see
+            # SGS_VALIDATION_SUMMARY.md) before this SGS corrected path is
+            # considered validated. If T0/T1 (no spurious downstream flow
+            # before the notch sill) regress with --gradient-correction on,
+            # this is the first place to look.
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            dWSE_n = (wse_cj_eff - wse_ci_eff) +
-                     gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e]
+            c    = edges.cos_theta[e]
+            dWSE_n = c * (wse_ci_eff - wse_cj_eff) -
+                     edges.L[e] * (gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e])
             h_flow = wse_flow - z_sill
 
             _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,

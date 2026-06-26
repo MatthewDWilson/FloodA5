@@ -259,23 +259,33 @@ end
 # ---------------------------------------------------------------------------
 # These supersede _bates_flux / _bates_flux_limited above for directional-
 # bias-free flow on the A5 pentagonal mesh. See
-# FloodA5_NonOrthogonal_Correction_Plan.md §2, §5.3 for the full derivation.
+# FloodA5_NonOrthogonal_Correction_Plan.md §2, §5.3, §10.6 for the full
+# derivation (including the 2026-06-24 revision after two bugs were found
+# via T-NOC5b — see that section for the complete account).
 #
 # Key difference from the legacy kernels: instead of scaling the raw WSE
 # difference by L_eff = L × cos_theta (which corrects gradient *magnitude*
 # but not *direction* — the root cause of the flow-direction bias documented
-# in the FOSS4G 2026 paper), these kernels accept a pre-computed
-# skewness-corrected driving head `dWSE_n`, built by the caller from the
-# WLSQ-reconstructed cell-centre gradients (_build_wlsq_weights!,
-# _compute_wse_gradients!) and the edge's skewness vector
-# (EdgeList.skew_x/skew_y, from _edge_geometry):
+# in the FOSS4G 2026 paper), these kernels accept a pre-computed, fully
+# corrected driving head `dWSE_n`, built by the caller from:
+#   - the WLSQ-reconstructed cell-centre gradients (_build_wlsq_weights!,
+#     _compute_wse_gradients!)
+#   - the edge's ORIENTED cosine c and correction direction vector V̂
+#     (EdgeList.cos_theta, EdgeList.skew_x/skew_y — see _edge_geometry's
+#     docstring in A5Grid.jl for what these actually contain; the field
+#     names skew_x/skew_y are historical and now hold a directional vector,
+#     not a positional skewness offset)
 #
 #   ∇WSE_f = 0.5 × (grad_wse[:,ci] + grad_wse[:,cj])      (face-interpolated)
-#   dWSE_n = (wse_j - wse_i) + ∇WSE_f · (skew_x[e], skew_y[e])
+#   c      = edges.cos_theta[e]                            (oriented, ∈[0,1])
+#   dWSE_n = c·(wse_i - wse_j) - L·(∇WSE_f · (skew_x[e], skew_y[e]))
 #
-# dWSE_n already incorporates the skewness correction, so L is used directly
-# (no cos_theta scaling) — the non-orthogonality magnitude correction that
-# cos_theta provided is now implicit in the WLSQ gradient itself.
+# This reduces exactly to the legacy form (wse_i - wse_j) at orthogonality
+# (c=1, V̂=0) — verified both analytically and numerically across multiple
+# synthetic skewed geometries (§10.6). dWSE_n already incorporates the full
+# non-orthogonal correction, so the raw L is used directly in the corrected
+# kernels below (no separate cos_theta scaling at the kernel level — that
+# scaling is now folded into how the caller constructs dWSE_n itself).
 
 """
     _bates_flux_corrected(q_prev, h_flow, dWSE_n, width, L, n_mann, dt) → Float64

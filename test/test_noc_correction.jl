@@ -511,8 +511,27 @@ let
                                             # _compute_wse_gradients!'s
                                             # docstring is exercised here.
 
-    volume = [300.0, 100.0, 0.0]
-    cell_area = fill(100.0, n)
+    volume = [30000.0, 10000.0, 0.0]
+    cell_area = fill(10000.0, n)   # FIXED 2026-06-24: was fill(100.0, n),
+                                   # i.e. cell_area == width (100.0) — a
+                                   # geometrically nonsensical fixture (a
+                                   # 100m-wide cell with only 100 m² area
+                                   # implies an absurdly thin cell, roughly
+                                   # 1m "deep"). Real A5 cells have area
+                                   # roughly proportional to width², not
+                                   # equal to width — confirmed against the
+                                   # real square-mesh run (~127,200 m² area,
+                                   # ~400m equivalent diameter). This was a
+                                   # second, independent fixture bug found
+                                   # alongside the dWSE_n sign/formula bugs:
+                                   # it didn't cause incorrect *direction*,
+                                   # but made the Fix B volume-limiter
+                                   # bound (depth_donor×width/(5×dt)) huge
+                                   # relative to the cell's actual stored
+                                   # volume, masking whether the limiter
+                                   # was behaving sensibly. Volumes below
+                                   # are scaled up to preserve the same
+                                   # depths (3.0, 1.0, 0.0 m) as before.
     state = FlowState(
         ["c1", "c2", "c3"],
         volume ./ cell_area,        # water_depth — MUST be synced from volume

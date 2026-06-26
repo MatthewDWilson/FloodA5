@@ -1848,45 +1848,74 @@ end
 
 """
     _edge_geometry(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
-        → (cos_theta::Float64, skew_x::Float64, skew_y::Float64)
+        → (cos_theta::Float64, corr_x::Float64, corr_y::Float64)
 
-Combined non-orthogonality and skewness geometry for one A5 cell-pair edge.
+Combined non-orthogonality geometry for one A5 cell-pair edge: the
+unsigned magnitude `cos_theta` (used by the legacy/uncorrected flux
+kernels), and the WLSQ gradient-correction direction vector `(corr_x,
+corr_y)` (used by the corrected kernels).
 
-Supersedes the former standalone `_edge_cos_theta` by computing both the
-non-orthogonality cosine *and* the skewness vector from a single local
-equirectangular projection of the shared edge and cell centres — avoiding
-running the projection setup twice per edge at mesh-build time, and keeping
-all edge-geometry maths in one place for future modification.
+⚠️  REVISION NOTE (2026-06-24): this function previously returned a
+    `skew_vec` (face-midpoint-to-line-intersection offset) for the second
+    pair of values, intended for use as `dWSE_n = (wse_i-wse_j) +
+    ∇WSE_f · skew_vec`. That formula was found to be geometrically
+    incorrect during T-NOC5b investigation (it used a *positional* offset
+    vector where the rigorous correction requires a *directional* one —
+    they coincide only in the trivial orthogonal limit). This function now
+    returns the correct vector, re-derived and independently verified
+    against five distinct synthetic geometries (see implementation notes
+    below and `FloodA5_NonOrthogonal_Correction_Plan.md` §10.6 for the full
+    derivation record). The field names `skew_x`/`skew_y` in `EdgeList`
+    were intentionally NOT renamed to `corr_x`/`corr_y` to keep this diff
+    minimal — they now hold the corrected vector's components, not a
+    skewness offset. See `EdgeList`'s field comment for the updated
+    meaning.
 
 Returns:
 
-  cos_theta  — |d̂ · n̂|, the magnitude of alignment between the centre-to-
-               centre unit vector d̂ (cell i → cell j) and the outward face
-               normal n̂ of their shared edge.  1.0 = perfectly orthogonal.
-               Used to project the centre-to-centre distance onto the
-               face-normal direction in the *uncorrected* flux kernels
-               (`_bates_flux`, `_manning_flux_ra`):  L_eff = L × cos θ.
+  cos_theta — |d̂ · n̂|, the unsigned magnitude of alignment between the
+              centre-to-centre unit vector d̂ (cell i → cell j) and the
+              edge face normal. 1.0 = perfectly orthogonal. Used by the
+              legacy kernels' `L_eff = L × cos θ` magnitude-only
+              projection. Unsigned because the legacy kernels have no
+              concept of a consistently-oriented normal — they only ever
+              use this as a scalar distance-scaling factor.
 
-  skew_x,
-  skew_y     — components (m, local equirectangular frame) of the vector
-               from the shared-edge face midpoint to the point where the
-               centre-to-centre line intersects the face.  (0.0, 0.0) for
-               an orthogonal, unskewed cell pair; non-zero on skewed A5
-               edges.  Used by the WLSQ-corrected flux kernels
-               (`_bates_flux_corrected`, `_manning_flux_ra_corrected`) to
-               build a skewness-corrected driving head:
-                   dWSE_n = (WSE_j − WSE_i) + ∇WSE_f · (skew_x, skew_y)
-               See FloodA5_NonOrthogonal_Correction_Plan.md §2, §5.1.
+  corr_x,
+  corr_y    — components (m⁻¹, dimensionless direction vector — NOT a
+              positional offset) of `V̂ = n̂ − c·d̂`, where `n̂` is the face
+              normal **consistently oriented so that d̂·n̂ ≥ 0** (i.e.
+              re-oriented to point from cell i toward cell j; this
+              orientation step is essential — the raw candidate normal
+              from rotating the edge vector has an orientation that
+              depends only on shared-vertex ordering, unrelated to which
+              cell is i and which is j) and `c = d̂·n̂` (always ≥ 0 after
+              orientation). `(corr_x, corr_y)` is used by the WLSQ-corrected
+              kernels to build the corrected driving head:
+                  dWSE_n = c·(wse_i − wse_j) − L·∇WSE_f·(corr_x, corr_y)
+              `(corr_x, corr_y) = (0, 0)` exactly at perfect orthogonality
+              (c = ±1), recovering the legacy term exactly with no
+              correction needed — verified analytically and numerically.
+              See FloodA5_NonOrthogonal_Correction_Plan.md §5.1/§10.6 for
+              the full derivation, including why the orientation step is
+              necessary and why the value returned here is `c`-free (the
+              caller multiplies by the now-signed, always-nonnegative `c`
+              separately — NOT by `cos_theta` from this same return tuple,
+              since `cos_theta` is for the *legacy* kernel and is
+              positionally identical to `c` in magnitude but the caller
+              must use the oriented version consistently within the
+              corrected-kernel code path).
 
-Returns `(1.0, 0.0, 0.0)` if no shared edge is found (non-adjacent cells) —
-an orthogonal, unskewed fallback rather than NaN.  A NaN cos_theta would
-propagate through the NaN guard in the step functions and suppress all flux
-on that edge, which is far worse than a small error in the slope projection.
+Returns `(1.0, 0.0, 0.0)` if no shared edge is found (non-adjacent cells)
+— an orthogonal, uncorrected fallback rather than NaN. A NaN cos_theta
+would propagate through the NaN guard in the step functions and suppress
+all flux on that edge, which is far worse than a small error in the slope
+projection.
 
 Returns `(NaN, 0.0, 0.0)` for degenerate edge/distance geometry (near-zero
 edge length or near-zero centre separation) — callers already guard NaN
-cos_theta by falling back to 1.0, and a zero skewness correction is the
-safe choice when the geometry itself is degenerate.
+cos_theta by falling back to 1.0, and a zero correction vector is the safe
+choice when the geometry itself is degenerate.
 
 Implementation notes
 ---------------------
@@ -1899,12 +1928,6 @@ is even smaller.
 The function accepts raw boundary arrays and cell-centre coordinates so it
 can be called for cell pairs at *different* A5 resolution levels (coarse/fine
 boundaries in a multi-resolution mesh) without any change to its interface.
-
-Skewness is computed by intersecting the centre-to-centre line with the
-shared-edge line (2D line/line intersection via Cramer's rule). If the two
-lines are parallel, or the intersection point falls outside the shared edge
-segment (a genuinely degenerate skewed case), the skewness correction is
-set to zero rather than propagating an unbounded or ill-defined value.
 """
 function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
                          bnd_j  :: Vector{Vector{Float64}},
@@ -1912,39 +1935,35 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
                          lon_j  :: Float64, lat_j  :: Float64
                          )::Tuple{Float64,Float64,Float64}
 
-    # ── 1. Find the shared edge vertices ─────────────────────────────────
+    # ── 1. Find the shared edge vertices ─────────────────────────────
     edge = _shared_edge(bnd_i, bnd_j)
-    # If no shared edge is found, fall back to cos θ = 1.0 (orthogonal
-    # assumption) with zero skewness, rather than NaN.  A NaN would
-    # propagate through the NaN guard in the step functions and suppress
-    # all flux on that edge, which is far worse than a small error in the
-    # slope projection.
     edge === nothing && return (1.0, 0.0, 0.0)
 
     elon1, elat1, elon2, elat2 = edge
 
-    # ── 2. Local equirectangular projection ───────────────────────────────
-    # Centre the projection on the edge midpoint to minimise distortion.
+    # ── 2. Local equirectangular projection ────────────────────────
     lat0     = (elat1 + elat2) * 0.5
     cos_lat0 = cosd(lat0)
     R        = _EARTH_R
 
-    # Project a lon/lat point to local (x, y) metres
     to_xy(lon, lat) = (deg2rad(lon) * R * cos_lat0,
                        deg2rad(lat) * R)
 
-    # ── 3. Edge vector and face normal ────────────────────────────────────
+    # ── 3. Edge vector and face normal candidate ──────────────────
     x1, y1 = to_xy(elon1, elat1)
     x2, y2 = to_xy(elon2, elat2)
     ex, ey  = x2 - x1, y2 - y1
     e_len   = sqrt(ex^2 + ey^2)
     e_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate edge guard
 
-    # Face normal: rotate edge vector 90° (two choices; we take the one
-    # pointing from i toward j, so the sign of the dot product is positive)
-    nx, ny  = -ey / e_len, ex / e_len   # unit normal candidate
+    # Rotate the edge vector 90° to get a normal candidate. This has NO
+    # guaranteed orientation relative to i/j — it depends only on the
+    # (elon1,elat1)/(elon2,elat2) vertex ordering from _shared_edge, which
+    # is unrelated to which cell is i and which is j. The orientation step
+    # below (step 5) fixes this; do not skip it.
+    nx, ny  = -ey / e_len, ex / e_len
 
-    # ── 4. Centre-to-centre unit vector ───────────────────────────────────
+    # ── 4. Centre-to-centre unit vector (i → j) ────────────────────
     ci_x, ci_y = to_xy(lon_i, lat_i)
     cj_x, cj_y = to_xy(lon_j, lat_j)
     dx, dy      = cj_x - ci_x, cj_y - ci_y
@@ -1953,46 +1972,34 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
 
     dx_hat, dy_hat = dx / d_len, dy / d_len
 
-    # ── 5. cos θ = |d̂ · n̂| ───────────────────────────────────────────────
-    # Absolute value: we want the magnitude of the alignment regardless of
-    # which side of the edge we are on.
-    cos_theta = abs(dx_hat * nx + dy_hat * ny)
-    cos_theta = clamp(cos_theta, 0.0, 1.0)   # guard floating-point rounding above 1.0
-
-    # ── 6. Skewness: face midpoint vs. centre-to-centre / face intersection ─
-    # The face midpoint is the average of the two shared-edge vertices.
-    f_mid_x, f_mid_y = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
-
-    # Solve for the intersection of the centre-to-centre line
-    # (ci_x, ci_y) + s·(dx, dy)  with the edge line  (x1, y1) + t·(ex, ey):
-    #     ci_x + s·dx = x1 + t·ex
-    #     ci_y + s·dy = y1 + t·ey
-    # via Cramer's rule on the 2×2 system in (s, t).
-    denom = dx * (-ey) - dy * (-ex)   # = -dx·ey + dy·ex
-    if abs(denom) < 1e-9
-        # Lines parallel / degenerate — no well-defined intersection.
-        # Treat as zero skewness rather than propagating NaN/Inf.
-        return (cos_theta, 0.0, 0.0)
+    # ── 5. Orient n̂ so that d̂·n̂ ≥ 0 (points from i toward j) ─────────
+    # This is the critical step that was missing before the 2026-06-24
+    # revision. Without it, the signed correction vector below would have
+    # an arbitrary, geometry-vertex-ordering-dependent sign, unrelated to
+    # the physically meaningful i→j direction.
+    c_raw = dx_hat * nx + dy_hat * ny
+    if c_raw < 0.0
+        nx, ny = -nx, -ny
+        c_raw = -c_raw
     end
-    rhs_x = x1 - ci_x
-    rhs_y = y1 - ci_y
-    t = (dx * rhs_y - dy * rhs_x) / denom
+    c = clamp(c_raw, 0.0, 1.0)   # = cos_theta, but kept separate for clarity
+                                  # at the call site; guard float rounding.
 
-    if abs(t) > 1.0
-        # Intersection falls outside the shared edge segment (using the
-        # edge vector's own parametrisation as the unit scale) — a
-        # genuinely degenerate skewed case.  Fall back to zero skewness
-        # correction for this edge rather than extrapolating.
-        return (cos_theta, 0.0, 0.0)
-    end
+    cos_theta = c   # unsigned magnitude — identical to c now that n̂ is
+                     # oriented (c ≥ 0 by construction), kept as a separate
+                     # named return value for the legacy kernels' clarity.
 
-    d_int_x = x1 + t * ex
-    d_int_y = y1 + t * ey
+    # ── 6. WLSQ correction direction: V̂ = n̂ − c·d̂ ─────────────────────
+    # The tangential remainder of the (now consistently i→j-oriented) face
+    # normal after removing its component along the centre-to-centre
+    # direction. Verified to vanish exactly at orthogonality (c = 1) and to
+    # exactly recover the true face-normal gradient for an arbitrary linear
+    # field when used in the formula documented above. See the docstring's
+    # revision note for the verification record.
+    corr_x = nx - c * dx_hat
+    corr_y = ny - c * dy_hat
 
-    skew_x = f_mid_x - d_int_x
-    skew_y = f_mid_y - d_int_y
-
-    return (cos_theta, skew_x, skew_y)
+    return (cos_theta, corr_x, corr_y)
 end
 
 # ---------------------------------------------------------------------------
