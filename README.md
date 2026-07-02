@@ -12,8 +12,12 @@ storage tables.
 
 Key characteristics:
 
-- **Uniform five-connectivity** — every interior cell has exactly five edge-sharing neighbours, 
-  a regular topological structure for hydrodynamic routing.
+- **Uniform five-connectivity** — every interior cell has exactly five edge-sharing
+  neighbours. A5 pentagon edges are not perpendicular to the cell-centre-to-cell-centre
+  vector (non-orthogonality angle ~16–38°); FloodA5 corrects the resulting flow-direction
+  bias using weighted least-squares gradient reconstruction at every edge, every timestep.
+  On a square grid a circular flood front becomes a diamond; on the corrected A5 grid
+  it remains circular.
 - **Sub-Grid Sampling (SGS)** — hypsometric volume curves built from LiDAR allow
   partial wetting of cells and accurate routing through channels narrower than a cell.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
@@ -149,6 +153,10 @@ Both solvers use the Bates et al. (2010) inertial formulation with:
 - Froude limiter (Fr ≤ 0.8)
 - Q-centred spatial momentum smoothing (θ = 0.9)
 - Consistent momentum state (q_prev matches actual transferred flux)
+- **WLSQ non-orthogonal gradient correction** — reconstructs the face-normal
+  pressure gradient via weighted least-squares at each edge, eliminating the
+  systematic flow-direction bias caused by A5's non-orthogonal edge geometry
+  (see [docs/METHODS.md §5.4](docs/METHODS.md))
 
 See [docs/METHODS.md](docs/METHODS.md) for full details.
 
@@ -209,8 +217,15 @@ julia --threads auto --project=. test/test_sgs_unit.jl
 # SGS synthetic DEM validation (T0–T4: mesh, routing, mass balance)
 julia --threads 1 --project=. test/synthetic_dem/test_sgs_synthetic.jl
 
-# Edge geometry tests
+# Edge geometry and non-orthogonal correction unit tests
 julia --threads auto --project=. test/test_edge_geometry.jl
+julia --threads auto --project=. test/test_noc_correction.jl
+
+# Point-spread directional-bias benchmark (gradient correction validation)
+julia --project=. test/test_point_spread.jl \
+    --baseline  test/square/square_baseline.h5 \
+    --corrected test/square/square_corrected.h5 \
+    --frame 50 --source-lon 0.0 --source-lat 0.0
 
 # Inflow and boundary condition tests
 julia --threads auto --project=. test/test_inflow_point.jl

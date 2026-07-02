@@ -350,6 +350,8 @@ Structure of the HDF5 file
         volume        Float64 dataset (n_cells,) — stored volume (m³)
         saturation    Float64 dataset (n_cells,) — fractional wetted area [0-1]
         velocity      Float64 dataset (n_cells,) — scalar velocity (m/s)
+        vel_u         Float64 dataset (n_cells,) — eastward velocity component (m/s)
+        vel_v         Float64 dataset (n_cells,) — northward velocity component (m/s)
     /0002/ ...
 
 Rationale for HDF5
@@ -538,6 +540,8 @@ Datasets per frame:
   volume       — stored volume per cell (m³), primary state variable
   saturation   — fractional wetted area [0–1] (SGS only; 1.0 where wet otherwise)
   velocity     — scalar velocity magnitude (m/s)
+  vel_u        — eastward velocity component (m/s)
+  vel_v        — northward velocity component (m/s)
 """
 function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
     output.enabled || return
@@ -554,7 +558,9 @@ function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
         for (name, data) in (("water_depth", state.water_depth),
                               ("volume",      state.volume),
                               ("saturation",  sat),
-                              ("velocity",    state.velocity))
+                              ("velocity",    state.velocity),
+                              ("vel_u",       state.vel_u),
+                              ("vel_v",       state.vel_v))
             ds = HDF5.create_dataset(g, name, eltype(data), (n,);
                                      chunk=chunk, deflate=4)
             write(ds, data)
@@ -837,6 +843,20 @@ gradient at such cells, which makes their skewness-correction term vanish
 and reduces to the same driving head as the legacy kernel for any edge
 touching that cell.
 
+NaN guard (added after a real-mesh bug, see FloodA5_NonOrthogonal_
+Correction_Plan.md §10.6.7): if `wse[i]` is non-finite (e.g. cell i has
+NaN elevation), `grad_wse[:, i]` is left at the same safe `(0, 0)`
+fallback. If a neighbour `j`'s `wse[j]` is non-finite, that neighbour's
+contribution is skipped (treated as if `adj_matrix[s, i] == 0`) rather
+than allowed to poison `gx`/`gy` for cell `i`. Do not remove this guard —
+without it, a single NaN-elevation or NaN-WSE cell anywhere in the mesh
+contaminates the gradient of every adjacent cell, which then poisons
+every edge of those cells (not only the edge touching the bad cell),
+spreading NaN outward by one mesh-hop per timestep. The per-edge
+degenerate guard in the Phase A edge loop below only protects edges that
+directly touch a bad cell; it cannot undo contamination that already
+happened upstream in this function.
+
 Called at the start of `step_standard!`/`step_sgs!` Phase A, before the
 edge flux loop, **only when `state.gradient_correction == true`** — when
 `false` (current default), this function is not called at all and
@@ -858,11 +878,40 @@ function _compute_wse_gradients!(state::FlowState, wse::Vector{Float64})
     max_nb = size(state.adj_matrix, 1)
 
     @inbounds for i in 1:n
+        # If cell i's own WSE is non-finite (e.g. NaN elevation — Bug
+        # tracked in FloodA5_NonOrthogonal_Correction_Plan.md §10.6.7's
+        # "outstanding risk" note, this being the real-mesh manifestation
+        # of that class of issue: a per-cell invalid value reaching
+        # _compute_wse_gradients! unguarded and propagating outward through
+        # the gradient stencil to cells that never directly touch the bad
+        # cell), there is no meaningful gradient to compute here. Leave it
+        # at the safe (0,0) "no correction" fallback — same convention as
+        # the underdetermined/degenerate stencil case in
+        # _build_wlsq_weights!.
+        if !isfinite(wse[i])
+            state.grad_wse[1, i] = 0.0
+            state.grad_wse[2, i] = 0.0
+            continue
+        end
+
         gx = 0.0
         gy = 0.0
         for s in 1:max_nb
             j = state.adj_matrix[s, i]
             j == 0 && continue
+            # Skip a non-finite neighbour WSE (e.g. j has NaN elevation)
+            # rather than letting it poison gx/gy for cell i — without this
+            # guard, a single NaN-elevation cell contaminates the gradient
+            # of every cell adjacent to it, which then poisons every edge
+            # of THOSE cells (not just the edge touching the bad cell),
+            # spreading NaN outward by one mesh-hop per timestep. This is
+            # the bug confirmed against a real mesh with 6 NaN-elevation
+            # boundary cells: NaN_cells grew 194→413→607→794→976→1103
+            # (= n_cells − 6) over successive steps before this guard was
+            # added. Treating a non-finite neighbour as if its slot were
+            # empty (adj_matrix[s,i] == 0) is the same fallback already
+            # used elsewhere for missing/degenerate geometry.
+            isfinite(wse[j]) || continue
             dWSE = wse[j] - wse[i]
             gx += state.wlsq_weights[s,          i] * dWSE
             gy += state.wlsq_weights[max_nb + s, i] * dWSE

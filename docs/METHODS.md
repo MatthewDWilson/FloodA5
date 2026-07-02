@@ -86,10 +86,14 @@ Edge geometry is computed from the actual cell boundary polygons:
 - **Edge width** (`w`) — haversine length of the shared edge arc.
 - **Centre-to-centre distance** (`L`) — haversine distance between the two cell
   centres.
-- **Non-orthogonality correction** (`cos θ`) — dot product of the centre-to-centre
-  unit vector with the edge face normal, computed on a local equirectangular
-  projection. This corrects for the fact that A5 pentagon edges are generally not
-  perpendicular to the line joining cell centres.
+- **Non-orthogonality angle** (`cos θ`) — dot product of the centre-to-centre
+  unit vector **d̂** with the edge face normal **n̂**, computed on a local
+  equirectangular projection. On A5 pentagons θ ranges from ~16° to ~38° (mean ~23°).
+- **WLSQ correction vector** (`V̂ = n̂ − (d̂·n̂)·d̂`) — the tangential component of
+  the face normal after removing its projection onto **d̂**. This encodes both the
+  direction and magnitude of the non-orthogonality and is used by the gradient
+  correction described in §5.3. By construction `|V̂| = sin θ`, so the correction is
+  zero for orthogonal edges and increases smoothly with skew angle.
 
 ---
 
@@ -275,7 +279,90 @@ of checkerboarding identified in comparison with LISFLOOD-FP.
 any single edge is capped at `V_donor / 10` per step, ensuring at most 50% of a
 cell's volume can leave via all five edges in a single timestep.
 
-### 5.4 Manning's roughness
+---
+
+### 5.4 Non-orthogonal gradient correction
+
+A5 pentagon edges are generally not perpendicular to the centre-to-centre vector
+**d**. Without correction, the face-normal pressure gradient — the term driving
+flux in eq. (1) — is approximated along **d** rather than along the true face
+normal **n̂**. On A5 cells, where the angle between **d** and **n̂** (the
+non-orthogonality angle θ) ranges from ~16° to ~38° (mean ~23°), this produces
+a systematic directional bias: point-source flood fronts are elongated rather
+than circular, and flow on a planar slope deviates significantly from the
+analytically expected downslope direction.
+
+FloodA5 corrects this using **weighted least-squares (WLSQ) cell-centre gradient
+reconstruction**, following the approach of Jasak (1996) and Moukalled et al.
+(2016) for non-orthogonal finite-volume meshes.
+
+#### Gradient reconstruction
+
+At each timestep, before the flux loop, a 2D WSE gradient vector
+∇WSE_i = (∂WSE/∂x, ∂WSE/∂y) is reconstructed for every cell _i_ by solving:
+
+```
+minimise Σ_k w_k [(WSE_jk − WSE_i) − ∇WSE_i · (x_jk − x_i)]²
+```
+
+over all mesh neighbours j₁, …, j₅. The inverse-distance weights `w_k = 1/|x_k − x_i|²`
+down-weight distant neighbours. The solution (a 2×2 weighted normal equation system)
+depends only on cell geometry and is pre-computed once at model initialisation as a
+`(2 × 5)` projection matrix per cell (`wlsq_weights`). The per-timestep gradient
+computation is then a single matrix–vector multiply per cell — O(5 × n_cells), negligible
+compared to the flux loop.
+
+#### Corrected driving head
+
+At each edge `e = (i, j)`, the standard `ΔWSE / L` gradient term is replaced by the
+non-orthogonal corrected value:
+
+```
+dWSE_n = c·(WSE_i − WSE_j) − L·(∇WSE_f · V̂)
+```
+
+where:
+- `c = d̂·n̂ = cos θ` (always ≥ 0 after orienting n̂ toward j)
+- `∇WSE_f = ½(∇WSE_i + ∇WSE_j)` (face-centre gradient by linear interpolation)
+- `V̂ = n̂ − c·d̂` (the tangential component of the face normal — the skewness
+  direction; pre-computed per edge as `skew_x`, `skew_y` in the `EdgeList`)
+- `L` is the centre-to-centre distance
+
+The first term `c·(WSE_i − WSE_j)` is the projection of the raw WSE difference
+onto the face normal; the second term `L·(∇WSE_f · V̂)` corrects for the lateral
+offset between the face midpoint and the point where **d** crosses the face. Together
+they reconstruct the face-normal gradient without the directional bias of the
+uncorrected scheme. For orthogonal edges, `V̂ = 0` and `c = 1`, so the formula
+reduces exactly to the standard `WSE_i − WSE_j`, confirming backward compatibility.
+
+This replaces `dWSE / L_eff` in eq. (1) and eq. (2), and `L` is used as-is (no
+`cos θ` scaling). The same `_bates_flux_corrected` and `_manning_flux_ra_corrected`
+kernels are used for standard and SGS solvers respectively.
+
+#### Validated improvement
+
+On A5 meshes at resolution 16 (mean θ ≈ 23°, max θ ≈ 38°):
+
+| Test | Metric | Before correction | After correction |
+|---|---|---|---|
+| Point-spread (flat domain, point source) | Polsby–Popper circularity | 0.938 | **0.980** |
+| Point-spread | Directional front-radius CV | 0.137 | **0.055** |
+| Planar slope (0.1% E–W slope) | N/S volume asymmetry at 2 h | 0.254 | **0.066** |
+
+The non-orthogonality range on A5 meshes (max 38°) is well within the OpenFOAM
+"corrected scheme safe" envelope (≤70°), so no additional limiting of the correction
+term is required.
+
+#### CLI control
+
+Gradient correction is enabled by default. It can be disabled for benchmarking
+or comparison via `--gradient-correction off`. The `--q-centre-theta` flag (default
+0.9) adjusts the Q-centred momentum smoothing weight (set to 1.0 to disable
+momentum smoothing entirely while retaining gradient correction).
+
+---
+
+### 5.5 Manning's roughness
 
 Manning's `n` per edge is the arithmetic mean of the two adjacent cell values:
 `n_edge = 0.5 × (n_i + n_j)`. This matches the LISFLOOD-FP convention and
@@ -410,6 +497,12 @@ cell matching.
   of the shallow water equations for efficient two-dimensional flood inundation
   modelling. *Journal of Hydrology* 387(1–2), 33–45.
   https://doi.org/10.1016/j.jhydrol.2010.03.027
+- Jasak, H. (1996). Error analysis and estimation for the finite volume method
+  with applications to fluid flows. PhD thesis, Imperial College London. *(WLSQ
+  gradient reconstruction for non-orthogonal meshes.)*
+- Moukalled, F., Mangani, L., Darwish, M. (2016). *The Finite Volume Method in
+  Computational Fluid Dynamics.* Springer. Chapter 8: Gradient computation on
+  unstructured meshes.
 - Neal, J.C. et al. (2012). How much physical complexity is needed to model flood
   inundation? *Hydrological Processes* 26(15), 2264–2282.
 - Weller, H. (2014). Non-orthogonal version of the arbitrary polygonal C-grid and
