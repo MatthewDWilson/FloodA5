@@ -353,6 +353,19 @@ The non-orthogonality range on A5 meshes (max 38°) is well within the OpenFOAM
 "corrected scheme safe" envelope (≤70°), so no additional limiting of the correction
 term is required.
 
+#### Computational cost
+
+The correction adds one O(5 × n_cells) gradient reconstruction pass per timestep — a single multiply-accumulate loop over the neighbour structure, cheaper than the edge flux loop (O(2.4 × n_cells) edges but with heavier per-edge arithmetic). In practice the overhead is modest and solver-dependent:
+
+| Solver | Mesh | Overhead vs uncorrected |
+|---|---|---|
+| Standard | res-16, 1,958 cells | +15% simulation wall time |
+| Standard | res-18, 29,902 cells | +30% simulation wall time |
+| SGS | res-16, 1,958 cells | +11% simulation wall time |
+| SGS | res-18, 29,902 cells | +4% simulation wall time |
+
+The larger fractional overhead for the standard solver at res-18 reflects the fact that the corrected run takes slightly more steps (the correction shifts the effective CFL slightly), not a per-step cost difference. For the SGS solver the hypsometric table lookups dominate per-step cost, making the gradient pass negligible at both resolutions. All figures from Carlisle domain simulations (10 h, 50 mm/hr), validated 2026-07-02.
+
 #### CLI control
 
 Gradient correction is enabled by default. It can be disabled for benchmarking

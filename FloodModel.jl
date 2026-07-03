@@ -1316,7 +1316,7 @@ function initialise_flow_model(mesh::A5Mesh,
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing,
                                 q_centre_theta     :: Float64 = 0.9,
-                                gradient_correction:: Bool    = false)::FlowState
+                                gradient_correction:: Bool    = true)::FlowState
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1461,11 +1461,15 @@ function initialise_flow_model(mesh::A5Mesh,
     lons = [c.center_lon for c in mesh.cells]
     lats = [c.center_lat for c in mesh.cells]
 
-    # ── Non-orthogonal gradient correction scratch storage (Step 2–4) ──────
-    # grad_wse is recomputed every step by _compute_wse_gradients! (a later
-    # step) — allocated here as a zero placeholder; harmless until that
-    # function exists, since gradient_correction = false (current default)
-    # means no step function reads it.
+    # ── Non-orthogonal gradient correction scratch storage ───────────────────
+    # grad_wse is recomputed every step by _compute_wse_gradients!.
+    # Allocated here as a zero placeholder; safe on the first step because
+    # step_standard!/step_sgs! call _compute_wse_gradients! before the flux
+    # loop, so the placeholder is overwritten before any edge reads it.
+    # gradient_correction defaults to true (validated on Carlisle res-16/18,
+    # 2026-06-29 — see FloodA5_NonOrthogonal_Correction_Plan.md §10.7).
+    # Use --gradient-correction off to revert to the legacy uncorrected kernel
+    # for benchmarking or comparison.
     #
     # wlsq_weights is static mesh geometry — computed once, here, by
     # _build_wlsq_weights! (Step 3/4), and never mutated again for the
@@ -1936,7 +1940,8 @@ function step_standard!(state::FlowState, dt::Float64)
     # legacy code path only ever computed inline per-edge, not as a
     # standalone vector. Materialising `wse` here costs O(n_cells), trivial
     # next to the edge loop itself, and is skipped entirely when
-    # gradient_correction is false so the legacy path has zero overhead.
+    # gradient_correction is true by default; use --gradient-correction off
+    # to select the legacy uncorrected path for benchmarking.
     # See FloodA5_NonOrthogonal_Correction_Plan.md §5.2, §5.5.
     if state.gradient_correction
         wse_all = Vector{Float64}(undef, n)
@@ -2617,7 +2622,7 @@ function run_flood_model(;
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
     q_centre_theta      :: Float64 = 0.9,
-    gradient_correction :: Bool    = false,
+    gradient_correction :: Bool    = true,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
