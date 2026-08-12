@@ -74,7 +74,7 @@ end
         fill("", n), zeros(n), vol, zeros(n), zeros(n), zeros(n),
         zeros(n), fill(0.03, n), fill(1e4, n), zeros(n), zeros(n),
         Dict{String,Vector{String}}(), zeros(Int,5,n),
-        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[]),
+        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[]),
         Any[],
         falses(n), Any[], Any[], 0.0,
         zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)
@@ -263,7 +263,7 @@ end
         fill("", n), zeros(n), vol, zeros(n), zeros(n), zeros(n),
         zeros(n), fill(0.03, n), fill(1e4, n), zeros(n), zeros(n),
         Dict{String,Vector{String}}(), zeros(Int,5,n),
-        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[]),
+        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[]),
         Any[],
         falses(n), Any[], Any[], 0.0,
         zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)

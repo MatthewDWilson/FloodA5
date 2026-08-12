@@ -576,11 +576,13 @@ function _make_edge_list(edges_spec::Vector{Tuple{Int,Int,Float64}};
              fill(width, ne), fill(L, ne), fill(cos_theta, ne),
              sls,
              zeros(Float64, ne),   # flux
-             zeros(Float64, ne),   # flux_Q (SGS R-A; unused by these tests)
-             zeros(Int, ne),       # collinear_i (no collinear edges in these tiny synthetic meshes)
+             zeros(Float64, ne),   # flux_Q
+             zeros(Int, ne),       # collinear_i
              zeros(Int, ne),       # collinear_j
-             zeros(Float64, ne),   # skew_x (zero skewness — orthogonal synthetic edges)
-             zeros(Float64, ne))   # skew_y
+             zeros(Float64, ne),   # skew_x (orthogonal synthetic edges)
+             zeros(Float64, ne),   # skew_y
+             fill(L, ne),          # dx_m = L (edges run east)
+             zeros(Float64, ne))   # dy_m = 0
 end
 
 function _minimal_state(; n_cells::Int,
@@ -640,12 +642,14 @@ let
                      fill(200.0, ne), fill(1500.0, ne),
                      [NaN, 1.0],     # slot 0: NaN → skipped; slot 1: valid
                      fill(0.0, ne),
-                     zeros(Float64, ne),   # flux
-                     zeros(Float64, ne),   # flux_Q
-                     zeros(Int, ne),       # collinear_i
-                     zeros(Int, ne),       # collinear_j
-                     zeros(Float64, ne),   # skew_x
-                     zeros(Float64, ne))   # skew_y
+                     zeros(Float64, ne),    # flux
+                     zeros(Float64, ne),    # flux_Q
+                     zeros(Int, ne),        # collinear_i
+                     zeros(Int, ne),        # collinear_j
+                     zeros(Float64, ne),    # skew_x
+                     zeros(Float64, ne),    # skew_y
+                     fill(1500.0, ne),      # dx_m = L (east)
+                     zeros(Float64, ne))    # dy_m = 0
     depth  = [2.0, 0.5]
     volume = depth .* 1.5e6
     state  = _minimal_state(n_cells=2, depth=depth, volume=volume, edges=edges)

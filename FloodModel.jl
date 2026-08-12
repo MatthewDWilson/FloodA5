@@ -169,13 +169,23 @@ struct EdgeList
     # (as a magnitude-only scalar, L_eff = L×cos_theta) and the corrected
     # kernels (as the coefficient `c` in the formula below).
     #
-    # Used only by the WLSQ-corrected kernels (_bates_flux_corrected,
-    # _manning_flux_ra_corrected), via the caller-constructed driving head:
-    #   dWSE_n = cos_theta[e]·(WSE_i - WSE_j) - L[e]·∇WSE_f·(skew_x, skew_y)
-    # (0, 0) for an orthogonal cell pair — recovers the legacy term exactly.
-    # See FloodA5_NonOrthogonal_Correction_Plan.md §2, §4.1, §5.1, §10.6.
-    skew_x       :: Vector{Float64}
-    skew_y       :: Vector{Float64}
+    # V̂ = n̂_f − c·d̂: the tangential component of the face normal after
+    # removing its projection onto d̂. Retained as a diagnostic (|V̂| = sin θ)
+    # and used in the n̂_f gradient projection formula (see §4.1 of
+    # FloodA5_GradientCorrection_Fix.md):
+    #   dWSE_n = −c·(∇WSE_f·d_vec_m) − L·(∇WSE_f·V̂)
+    #          = −L·(∇WSE_f · n̂_f)
+    # This projects the WLSQ gradient onto the true face normal rather than
+    # the centre-to-centre direction, eliminating grid-induced anisotropy on
+    # the non-orthogonal A5 mesh. (0,0) for orthogonal edges → no correction.
+    skew_x       :: Vector{Float64}    # V̂_x component (dimensionless)
+    skew_y       :: Vector{Float64}    # V̂_y component (dimensionless)
+    # Pre-computed d_vec_m: displacement from cell_i to cell_j in local
+    # equirectangular metres centred on cell_i. Same cos_lat0 convention as
+    # _build_wlsq_weights!, ensuring grad_wse and d_vec_m share a frame.
+    # Used as the d̂ component of the n̂_f projection: ∇WSE_f · d_vec_m.
+    dx_m         :: Vector{Float64}    # x-component of cj−ci (local m, E+)
+    dy_m         :: Vector{Float64}    # y-component of cj−ci (local m, N+)
 end
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
@@ -1017,6 +1027,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     sls   = Vector{Float64}(undef, max_e)
     skew_xs = Vector{Float64}(undef, max_e)   # skewness vector x-component (m)
     skew_ys = Vector{Float64}(undef, max_e)   # skewness vector y-component (m)
+    dx_ms   = Vector{Float64}(undef, max_e)   # d_vec_m x: cj−ci (local metres)
+    dy_ms   = Vector{Float64}(undef, max_e)   # d_vec_m y: cj−ci (local metres)
 
     e = 0   # edge counter
     seen = Set{Tuple{Int,Int}}()   # (min,max) pairs already added
@@ -1042,6 +1054,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                 append!(sls, zeros(Float64, n))
                 append!(skew_xs, zeros(Float64, n))
                 append!(skew_ys, zeros(Float64, n))
+                append!(dx_ms,   zeros(Float64, n))
+                append!(dy_ms,   zeros(Float64, n))
                 max_e += n
             end
 
@@ -1067,9 +1081,20 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                 cell_i.boundary, cell_j.boundary,
                 cell_i.center_lon, cell_i.center_lat,
                 cell_j.center_lon, cell_j.center_lat)
-            cts[e]     = isnan(ct) ? 1.0 : ct  # fallback: assume orthogonal
+            cts[e]     = isnan(ct) ? 1.0 : ct
             skew_xs[e] = isnan(ct) ? 0.0 : skx  # zero skewness on degenerate geometry
             skew_ys[e] = isnan(ct) ? 0.0 : sky
+
+            # ── d_vec_m: ci→cj in local equirectangular metres ────────────
+            # Centred on cell_i (lo), using cos_lat0 = cosd(lat_i) — same
+            # per-cell latitude convention as _build_wlsq_weights!, ensuring
+            # grad_wse and d_vec_m are in the same coordinate frame.
+            # Used in the n̂_f projection: ∇WSE_f · n̂_f = c·(∇·d̂) + (∇·V̂)
+            cos_lat_i = cosd(cells[lo].center_lat)
+            dx_ms[e]  = deg2rad(cells[hi].center_lon - cells[lo].center_lon) *
+                        A5Grid._EARTH_R * cos_lat_i
+            dy_ms[e]  = deg2rad(cells[hi].center_lat - cells[lo].center_lat) *
+                        A5Grid._EARTH_R
 
             # ── Sill elevation ────────────────────────────────────────────
             # Prefer SGS pre-computed sill; fall back to max(elev_i, elev_j).
@@ -1274,6 +1299,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
         collinear_j_vec,
         skew_xs[1:n_edges],
         skew_ys[1:n_edges],
+        dx_ms[1:n_edges],
+        dy_ms[1:n_edges],
     )
 end
 
@@ -2010,16 +2037,34 @@ function step_standard!(state::FlowState, dt::Float64)
             #       trivial case where both formulations agree.
             #
             # Both the sign and the V̂ formula have been independently
-            # verified against five distinct synthetic skewed geometries by
-            # direct comparison to a first-principles Taylor-expansion
-            # derivation (not just internal self-consistency) — see
-            # FloodA5_NonOrthogonal_Correction_Plan.md §10.6 for the full
-            # derivation record, kept for any future re-verification.
+            # ── n̂_f gradient projection (2026-07-22) ────────────────────────
+            # Replaces both the original V̂ formula and the intermediate d̂
+            # formula. Motivated by the ChatGPT/finite-volume insight that the
+            # correct driving slope for a face is ∇H·n̂_f (the gradient
+            # projected onto the face NORMAL), not ∇H·d̂ (projected onto the
+            # centre-to-centre direction). These are identical on orthogonal
+            # grids; on A5 non-orthogonal cells they differ by the V̂ term.
+            #
+            # Using the decomposition n̂_f = c·d̂ + V̂ (where c = cos_theta,
+            # V̂ = (skew_x, skew_y) from _edge_geometry):
+            #
+            #   dWSE_n = −L · (∇WSE_f · n̂_f)
+            #          = −c · (∇WSE_f · d_vec_m) − L · (∇WSE_f · V̂)
+            #
+            # The d_vec_m term uses pre-computed (dx_m, dy_m) in local metres;
+            # the V̂ term uses (skew_x, skew_y) already stored in EdgeList.
+            # No direct WSE-difference measurement — purely gradient-driven.
+            #
+            # Backward-compatibility: when skew_x=skew_y=0 (orthogonal edge),
+            # cos_theta=1, so dWSE_n = −(∇WSE_f · d_vec_m) ≈ wse_ci−wse_cj
+            # for a linear field — recovering the legacy result (T-NOC4 still
+            # passes). When gradient_correction=false the legacy kernel is used
+            # unchanged (the else branch below).
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            c    = edges.cos_theta[e]
-            dWSE_n = c * (wse_ci - wse_cj) -
-                     edges.L[e] * (gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e])
+            dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
+            Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
+            dWSE_n   = -edges.cos_theta[e] * dhat_dot - edges.L[e] * Vhat_dot
             h_flow = max(wse_ci, wse_cj) - edges.sill[e]
 
             Q, q_stored = _bates_flux_limited_corrected(
@@ -2251,11 +2296,21 @@ function step_sgs!(state::FlowState, dt::Float64)
             # considered validated. If T0/T1 (no spurious downstream flow
             # before the notch sill) regress with --gradient-correction on,
             # this is the first place to look.
+            # ── n̂_f gradient projection (2026-07-22) ────────────────────────
+            # Same formula as step_standard! corrected branch. wse_ci_eff and
+            # wse_cj_eff (Bug 48 dry-cell clamps) are NOT used directly in
+            # dWSE_n here — the gradient is computed from the raw wse[] array
+            # via _compute_wse_gradients! (see the open-question note above
+            # regarding dry-cell gradient contamination; T0/T1 of the
+            # synthetic DEM suite remain the acceptance gate for this path).
+            #
+            # dWSE_n = −c·(∇WSE_f·d_vec_m) − L·(∇WSE_f·V̂)
+            #        = −L·(∇WSE_f · n̂_f)
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            c    = edges.cos_theta[e]
-            dWSE_n = c * (wse_ci_eff - wse_cj_eff) -
-                     edges.L[e] * (gx_f * edges.skew_x[e] + gy_f * edges.skew_y[e])
+            dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
+            Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
+            dWSE_n   = -edges.cos_theta[e] * dhat_dot - edges.L[e] * Vhat_dot
             h_flow = wse_flow - z_sill
 
             _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,

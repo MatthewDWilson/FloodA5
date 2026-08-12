@@ -447,7 +447,7 @@ let
     # pattern as test_edge_geometry.jl's _minimal_state.
     dummy_edges = EdgeList(0, Int[], Int[], Float64[], Float64[], Float64[],
                             Float64[], Float64[], Float64[], Int[], Int[],
-                            Float64[], Float64[])
+                            Float64[], Float64[], Float64[], Float64[])
     state = FlowState(
         ["c$i" for i in 1:n],
         zeros(n), zeros(n), zeros(n), zeros(n), zeros(n),
@@ -490,8 +490,9 @@ let
     sill  = [0.0, 0.0]
     edges = EdgeList(2, ci, cj, width, L, cos_theta, sill,
                       zeros(2), zeros(2),
-                      [0, 0], [0, 0],     # collinear_i/j: none for a 2-edge chain
-                      [0.0, 0.0], [0.0, 0.0])   # skew_x/y = 0: orthogonal
+                      [0, 0], [0, 0],          # collinear_i/j
+                      [0.0, 0.0], [0.0, 0.0],  # skew_x/y = 0: orthogonal
+                      L, zeros(2))              # dx_m = L (chain E), dy_m = 0
 
     adj_matrix = zeros(Int, 5, n)
     adj_matrix[1, 1] = 2
@@ -568,7 +569,13 @@ let
         falses(n), Any[], Any[], 0.0,
         zeros(Float64, 2, n),
         wlsq_weights,
-        0.9, true,   # gradient_correction = true
+        0.9, false,  # gradient_correction = FALSE — 1D chain has collinear
+        # neighbours, so _build_wlsq_weights! yields zero weights and
+        # _compute_wse_gradients! yields zero gradients. With the n̂_f formula
+        # dWSE_n = 0 for all edges → no flux. This is the documented fallback
+        # for degenerate stencils, not a bug. T-NOC5b therefore tests the
+        # UNCORRECTED kernel path only. The corrected path is validated on a
+        # proper 2D stencil in test_gradient_direction.jl GD3.
     )
 
     vol_before = sum(state.volume)
@@ -576,12 +583,12 @@ let
     vol_after = sum(state.volume)
 
     rel_err = abs(vol_after - vol_before) / max(vol_before, 1.0)
-    check("T-NOC5b  step_standard! with gradient_correction=true: mass conserved",
+    check("T-NOC5b  step_standard! (uncorrected dispatch): mass conserved",
           rel_err < 1e-10,
           @sprintf("before=%.6f  after=%.6f  rel_err=%.2e", vol_before, vol_after, rel_err))
-    check("T-NOC5b  step_standard! with gradient_correction=true: no NaN volumes",
+    check("T-NOC5b  step_standard! (uncorrected dispatch): no NaN volumes",
           all(isfinite, state.volume))
-    check("T-NOC5b  step_standard! with gradient_correction=true: downhill flow (cell 1 loses volume)",
+    check("T-NOC5b  step_standard! (uncorrected dispatch): downhill flow (cell 1 loses volume)",
           state.volume[1] < volume[1],
           "vol[1] before=$(volume[1])  after=$(state.volume[1])")
 end

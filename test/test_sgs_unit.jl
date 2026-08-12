@@ -135,9 +135,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     e_flux   = zeros(Float64, n_edges)
 
     edges = EdgeList(n_edges, e_ci, e_cj, e_width, e_L, e_ct, e_sill,
-                     e_flux, zeros(Float64, n_edges),   # flux_Q (m³/s, R-A kernel)
-                     zeros(Int, n_edges), zeros(Int, n_edges),     # collinear_i, collinear_j
-                     zeros(Float64, n_edges), zeros(Float64, n_edges))  # skew_x, skew_y
+                     e_flux, zeros(Float64, n_edges),
+                     zeros(Int, n_edges), zeros(Int, n_edges),
+                     zeros(Float64, n_edges), zeros(Float64, n_edges),
+                     e_L, zeros(Float64, n_edges))  # dx_m=L (chain E), dy_m=0
 
     # Lons/lats: ~30m spacing along a longitude line near (0,0)
     cell_lons = Float64[i * 0.00027 for i in 0:(n_cells-1)]   # ~30m per step
@@ -160,9 +161,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
             copy(adj_matrix),
             EdgeList(n_edges, copy(e_ci), copy(e_cj), copy(e_width),
                      copy(e_L), copy(e_ct), copy(e_sill), copy(e_flux),
-                     zeros(Float64, n_edges),   # flux_Q (m³/s, R-A kernel)
-                     zeros(Int, n_edges), zeros(Int, n_edges),    # collinear_i, collinear_j
-                     zeros(Float64, n_edges), zeros(Float64, n_edges)),  # skew_x, skew_y
+                     zeros(Float64, n_edges),
+                     zeros(Int, n_edges), zeros(Int, n_edges),
+                     zeros(Float64, n_edges), zeros(Float64, n_edges),
+                     copy(e_L), zeros(Float64, n_edges)),  # dx_m=L, dy_m=0
             deepcopy(tbls),
             falses(n_cells),    # boundary_mask — no open boundaries in this synthetic chain
             Any[],              # ghost_edges
