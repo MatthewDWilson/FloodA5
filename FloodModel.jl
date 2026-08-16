@@ -333,7 +333,18 @@ mutable struct FlowState
     # Set via --gradient-correction. Both code paths are retained side by
     # side for A/B benchmarking per FloodA5_NonOrthogonal_Correction_Plan.md
     # §3 (Design Decisions).
-    gradient_correction :: Bool
+    gradient_correction       :: Bool
+    # Scale factor for the V̂ component of the n̂_f projection formula:
+    #   dWSE_n = −c·(∇WSE_f·d_vec_m) − alpha·L·(∇WSE_f·V̂)
+    # alpha=1.0 (default): full n̂_f projection onto face normal.
+    # alpha=0.0: d̂-only projection (V̂ term dropped entirely).
+    # Intermediate values allow empirical calibration for research/diagnosis.
+    # NOTE: a fixed alpha is NOT a viable production correction — it cannot
+    # self-calibrate to mesh geometry. This flag exists purely to characterise
+    # the V̂ feedback mechanism and inform the architectural decision
+    # (per-cell velocity vector) documented in the handover summary.
+    # Set via --gradient-correction-alpha.
+    gradient_correction_alpha :: Float64
 end
 
 # ---------------------------------------------------------------------------
@@ -1342,8 +1353,9 @@ function initialise_flow_model(mesh::A5Mesh,
                                 method::FlowMethod = StandardFlow();
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing,
-                                q_centre_theta     :: Float64 = 0.9,
-                                gradient_correction:: Bool    = true)::FlowState
+                                q_centre_theta          :: Float64 = 0.9,
+                                gradient_correction     :: Bool    = true,
+                                gradient_correction_alpha :: Float64 = 1.0)::FlowState
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1541,6 +1553,7 @@ function initialise_flow_model(mesh::A5Mesh,
         wlsq_weights,
         q_centre_theta,
         gradient_correction,
+        gradient_correction_alpha,
     )
 end
 
@@ -2064,7 +2077,8 @@ function step_standard!(state::FlowState, dt::Float64)
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
             dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
             Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = -edges.cos_theta[e] * dhat_dot - edges.L[e] * Vhat_dot
+            dWSE_n   = -edges.cos_theta[e] * dhat_dot -
+                       state.gradient_correction_alpha * edges.L[e] * Vhat_dot
             h_flow = max(wse_ci, wse_cj) - edges.sill[e]
 
             Q, q_stored = _bates_flux_limited_corrected(
@@ -2310,7 +2324,8 @@ function step_sgs!(state::FlowState, dt::Float64)
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
             dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
             Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = -edges.cos_theta[e] * dhat_dot - edges.L[e] * Vhat_dot
+            dWSE_n   = -edges.cos_theta[e] * dhat_dot -
+                       state.gradient_correction_alpha * edges.L[e] * Vhat_dot
             h_flow = wse_flow - z_sill
 
             _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,
@@ -2676,8 +2691,9 @@ function run_flood_model(;
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
-    q_centre_theta      :: Float64 = 0.9,
-    gradient_correction :: Bool    = true,
+    q_centre_theta            :: Float64 = 0.9,
+    gradient_correction       :: Bool    = true,
+    gradient_correction_alpha :: Float64 = 1.0,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -2885,15 +2901,17 @@ function run_flood_model(;
     @info "Initialising flow model ($(flow_method)) on $(length(mesh)) cells..."
     t0 = time()
     flow_state = initialise_flow_model(mesh, method_obj;
-                                        manning_n           = manning_n,
-                                        friction_raster      = friction_source,
-                                        q_centre_theta       = q_centre_theta,
-                                        gradient_correction  = gradient_correction)
+                                        manning_n                 = manning_n,
+                                        friction_raster           = friction_source,
+                                        q_centre_theta            = q_centre_theta,
+                                        gradient_correction       = gradient_correction,
+                                        gradient_correction_alpha = gradient_correction_alpha)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n), q_centre_theta = $(q_centre_theta), " *
-          "gradient_correction = $(gradient_correction))"
+          "gradient_correction = $(gradient_correction), " *
+          "alpha = $(gradient_correction_alpha))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3569,8 +3587,9 @@ function main(args=String[])
 
     # --q-centre-theta / --gradient-correction (flow-direction-fixes)
     # See FloodA5_NonOrthogonal_Correction_Plan.md §6, §7.
-    q_centre_theta_val,    args = _pop_flag(args, "--q-centre-theta")
-    gradient_correction_val, args = _pop_flag(args, "--gradient-correction")
+    q_centre_theta_val,           args = _pop_flag(args, "--q-centre-theta")
+    gradient_correction_val,      args = _pop_flag(args, "--gradient-correction")
+    gradient_correction_alpha_val, args = _pop_flag(args, "--gradient-correction-alpha")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -3602,6 +3621,21 @@ function main(args=String[])
         println("ERROR: --gradient-correction requires an explicit value: " *
                  "'on' or 'off' (got '$gradient_correction_val')\n")
         print_help(1)
+    end
+
+    # --gradient-correction-alpha: scale factor for the V̂ component of the
+    # n̂_f projection formula. 1.0 = full projection; 0.0 = d̂ only.
+    # Research/diagnostic flag — not a production correction mechanism.
+    gradient_correction_alpha = if gradient_correction_alpha_val === nothing
+        1.0
+    else
+        a = tryparse(Float64, gradient_correction_alpha_val)
+        if a === nothing
+            println("ERROR: --gradient-correction-alpha must be a number " *
+                    "(got '$gradient_correction_alpha_val')\n")
+            print_help(1)
+        end
+        a
     end
 
     flow_method ∉ (:sgs, :standard) &&
@@ -3735,8 +3769,9 @@ function main(args=String[])
         sgs_samples     = sgs_samples,
         manning_n       = manning_n,
         friction_source = friction_source,
-        q_centre_theta      = q_centre_theta,
-        gradient_correction = gradient_correction,
+        q_centre_theta            = q_centre_theta,
+        gradient_correction       = gradient_correction,
+        gradient_correction_alpha = gradient_correction_alpha,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,
