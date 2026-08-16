@@ -74,10 +74,13 @@ end
         fill("", n), zeros(n), vol, zeros(n), zeros(n), zeros(n),
         zeros(n), fill(0.03, n), fill(1e4, n), zeros(n), zeros(n),
         Dict{String,Vector{String}}(), zeros(Int,5,n),
-        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[]),
+        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[]),
         Any[],
         falses(n), Any[], Any[], 0.0,
-        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)
+        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false,
+        zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
+        zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
+        :edge)
 
     t_s   = [0.0, 3600.0]
     Q_m3s = [5.0, 5.0]   # constant 5 m³/s
@@ -263,10 +266,13 @@ end
         fill("", n), zeros(n), vol, zeros(n), zeros(n), zeros(n),
         zeros(n), fill(0.03, n), fill(1e4, n), zeros(n), zeros(n),
         Dict{String,Vector{String}}(), zeros(Int,5,n),
-        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[]),
+        EdgeList(0,Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[],Int[],Int[],Float64[],Float64[],Float64[],Float64[],Float64[],Float64[]),
         Any[],
         falses(n), Any[], Any[], 0.0,
-        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false)
+        zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false,
+        zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
+        zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
+        :edge)
 
     src1 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [3.0, 3.0], "A")
     src2 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [7.0, 7.0], "B")

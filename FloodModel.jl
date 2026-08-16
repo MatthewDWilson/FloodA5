@@ -186,6 +186,14 @@ struct EdgeList
     # Used as the d̂ component of the n̂_f projection: ∇WSE_f · d_vec_m.
     dx_m         :: Vector{Float64}    # x-component of cj−ci (local m, E+)
     dy_m         :: Vector{Float64}    # y-component of cj−ci (local m, N+)
+    # Unit face normal: n̂_f = c·d̂ + V̂  (always oriented so that d̂·n̂_f ≥ 0,
+    # i.e. n̂_f has a component pointing from cell_i toward cell_j).
+    # Derived at build time from cos_theta, dx_m/L, dy_m/L, skew_x, skew_y.
+    # Used in both the n̂_f gradient projection and the cell-vector momentum
+    # formulation (Phase A projection and Phase D reconstruction).
+    # For degenerate edges (NaN cos_theta): set to (0,0) and skip in WLSQ.
+    nf_x         :: Vector{Float64}    # face normal x-component (dimensionless)
+    nf_y         :: Vector{Float64}    # face normal y-component (dimensionless)
 end
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
@@ -345,6 +353,24 @@ mutable struct FlowState
     # (per-cell velocity vector) documented in the handover summary.
     # Set via --gradient-correction-alpha.
     gradient_correction_alpha :: Float64
+    # ── Cell-vector discharge state (Stage 2, cell-momentum branch) ────────
+    # Replaces per-edge scalar q_prev as the momentum state for the standard
+    # flow solver when --momentum-model cell is active.
+    # Called qvec (not momentum) because units are m²/s not kg/(m·s), and the
+    # WLSQ projection is a filtering operation on face observations.
+    # Coordinate frame: local equirectangular (same as wlsq_weights/grad_wse).
+    qvec_u         :: Vector{Float64}    # eastward unit discharge (m²/s)
+    qvec_v         :: Vector{Float64}    # northward unit discharge (m²/s)
+    # (slot, cell) -> edge index in EdgeList. 0 = no edge (boundary).
+    # Built once by _build_cell_edge_index! at init.
+    cell_edge_index :: Matrix{Int}
+    # WLSQ projection matrix: face fluxes -> (qvec_u, qvec_v).
+    # Shape (10 x n_cells): rows 1:5 = qvec_u weights, 6:10 = qvec_v weights.
+    # Observation: qvec_i . n_hat_f = -flux[e] for each adjacent edge e.
+    # Weights: edge width. Built by _build_mom_weights! at init.
+    mom_weights    :: Matrix{Float64}
+    # :edge (legacy, default) or :cell (Stage 2). Set via --momentum-model.
+    momentum_model :: Symbol
 end
 
 # ---------------------------------------------------------------------------
@@ -835,6 +861,100 @@ function _build_wlsq_weights!(wlsq_weights :: Matrix{Float64},
     end
 end
 
+"""
+    _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n)
+
+Build the (N_SIDES × n_cells) lookup table mapping adjacency slot → EdgeList index.
+`cell_edge_index[s, i] = e` means the edge connecting cell i to its slot-s neighbour
+is stored at position e in the EdgeList. 0 = no edge (boundary or empty slot).
+
+Called once at `initialise_flow_model` time. O(n_edges).
+"""
+function _build_cell_edge_index!(cell_edge_index :: Matrix{Int},
+                                  adj_matrix      :: Matrix{Int},
+                                  edges           :: EdgeList,
+                                  n               :: Int)
+    fill!(cell_edge_index, 0)
+    for e in 1:edges.n_edges
+        ci = edges.cell_i[e]
+        cj = edges.cell_j[e]
+        # find slot of cj in ci's adjacency, and slot of ci in cj's adjacency
+        for s in 1:N_SIDES
+            if adj_matrix[s, ci] == cj
+                cell_edge_index[s, ci] = e
+            end
+            if adj_matrix[s, cj] == ci
+                cell_edge_index[s, cj] = e
+            end
+        end
+    end
+end
+
+"""
+    _build_mom_weights!(mom_weights, cell_edge_index, edges, n)
+
+Pre-compute the WLSQ projection matrix that maps per-face unit discharges to
+the best-fit cell-vector unit discharge `(qvec_u, qvec_v)`.
+
+For each cell i with k active adjacent edges, the overdetermined system is:
+
+    qvec_i · n̂_f_k = −flux[e_k]     (k = 1..5)
+
+where `n̂_f_k = (nf_x[e_k], nf_y[e_k])` (always oriented cell_i→cell_j),
+and the observation `−flux[e_k]` holds for BOTH cells adjacent to edge e_k.
+
+The WLSQ solution uses edge widths as weights (wider faces carry more flux).
+The 2×2 normal equations `(AᵀWA) qvec_i = AᵀW b` are solved analytically.
+The pre-computed projection matrix `P = (AᵀWA)⁻¹ AᵀW` (shape 2×5) is stored
+in `mom_weights` as rows 1:5 (qvec_u) and 6:10 (qvec_v), per cell column.
+
+Cells with fewer than 2 non-degenerate adjacent edges get zero weights (safe
+fallback — qvec remains zero, equivalent to edge-momentum behaviour).
+"""
+function _build_mom_weights!(mom_weights     :: Matrix{Float64},
+                              cell_edge_index :: Matrix{Int},
+                              edges           :: EdgeList,
+                              n               :: Int)
+    fill!(mom_weights, 0.0)
+    for i in 1:n
+        # Collect face normal components and weights for active edges
+        nxs = Float64[]
+        nys = Float64[]
+        ws  = Float64[]
+        for s in 1:N_SIDES
+            e = cell_edge_index[s, i]
+            e == 0 && continue
+            # Skip degenerate edges (nf = (0,0) set during build)
+            (edges.nf_x[e] == 0.0 && edges.nf_y[e] == 0.0) && continue
+            push!(nxs, edges.nf_x[e])
+            push!(nys, edges.nf_y[e])
+            push!(ws,  max(edges.width[e], 1.0))   # width as WLSQ weight
+        end
+        k = length(nxs)
+        k < 2 && continue   # underdetermined: leave weights at zero
+
+        # Build 2×2 normal equations AᵀWA where A rows are (nx_k, ny_k)
+        Sxx = sum(ws .* nxs .^ 2)
+        Sxy = sum(ws .* nxs .* nys)
+        Syy = sum(ws .* nys .^ 2)
+        det_M = Sxx * Syy - Sxy^2
+        abs(det_M) < 1e-20 && continue   # degenerate (e.g. collinear normals)
+
+        # P = M⁻¹ AᵀW  (shape 2×k)
+        # P[1,:] = (Syy * w_k*nx_k - Sxy * w_k*ny_k) / det_M
+        # P[2,:] = (-Sxy * w_k*nx_k + Sxx * w_k*ny_k) / det_M
+        slot = 0
+        for s in 1:N_SIDES
+            e = cell_edge_index[s, i]
+            e == 0 && continue
+            (edges.nf_x[e] == 0.0 && edges.nf_y[e] == 0.0) && continue
+            slot += 1
+            wk = ws[slot];  nxk = nxs[slot];  nyk = nys[slot]
+            mom_weights[s,     i] = ( Syy * wk * nxk - Sxy * wk * nyk) / det_M
+            mom_weights[5 + s, i] = (-Sxy * wk * nxk + Sxx * wk * nyk) / det_M
+        end
+    end
+end
 
 """
     _compute_wse_gradients!(state, wse)
@@ -1040,6 +1160,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     skew_ys = Vector{Float64}(undef, max_e)   # skewness vector y-component (m)
     dx_ms   = Vector{Float64}(undef, max_e)   # d_vec_m x: cj−ci (local metres)
     dy_ms   = Vector{Float64}(undef, max_e)   # d_vec_m y: cj−ci (local metres)
+    nf_xs   = Vector{Float64}(undef, max_e)   # face normal x: cos_theta*dx/L + skew_x
+    nf_ys   = Vector{Float64}(undef, max_e)   # face normal y: cos_theta*dy/L + skew_y
 
     e = 0   # edge counter
     seen = Set{Tuple{Int,Int}}()   # (min,max) pairs already added
@@ -1067,6 +1189,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                 append!(skew_ys, zeros(Float64, n))
                 append!(dx_ms,   zeros(Float64, n))
                 append!(dy_ms,   zeros(Float64, n))
+                append!(nf_xs,   zeros(Float64, n))
+                append!(nf_ys,   zeros(Float64, n))
                 max_e += n
             end
 
@@ -1106,6 +1230,18 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                         A5Grid._EARTH_R * cos_lat_i
             dy_ms[e]  = deg2rad(cells[hi].center_lat - cells[lo].center_lat) *
                         A5Grid._EARTH_R
+
+            # ── Unit face normal n̂_f = c·d̂ + V̂ ──────────────────────────
+            # Derived entirely from already-computed fields; no new geometry.
+            # For degenerate edges (isnan(ct)): nf = (0,0), skipped in WLSQ.
+            if isnan(ct) || Ls[e] < 1.0
+                nf_xs[e] = 0.0
+                nf_ys[e] = 0.0
+            else
+                inv_L     = 1.0 / Ls[e]
+                nf_xs[e]  = cts[e] * dx_ms[e] * inv_L + skew_xs[e]
+                nf_ys[e]  = cts[e] * dy_ms[e] * inv_L + skew_ys[e]
+            end
 
             # ── Sill elevation ────────────────────────────────────────────
             # Prefer SGS pre-computed sill; fall back to max(elev_i, elev_j).
@@ -1312,6 +1448,8 @@ function _build_edge_list(cells       :: Vector{A5Cell},
         skew_ys[1:n_edges],
         dx_ms[1:n_edges],
         dy_ms[1:n_edges],
+        nf_xs[1:n_edges],
+        nf_ys[1:n_edges],
     )
 end
 
@@ -1353,9 +1491,10 @@ function initialise_flow_model(mesh::A5Mesh,
                                 method::FlowMethod = StandardFlow();
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing,
-                                q_centre_theta          :: Float64 = 0.9,
-                                gradient_correction     :: Bool    = true,
-                                gradient_correction_alpha :: Float64 = 1.0)::FlowState
+                                q_centre_theta            :: Float64 = 0.9,
+                                gradient_correction       :: Bool    = true,
+                                gradient_correction_alpha :: Float64 = 1.0,
+                                momentum_model            :: Symbol  = :edge)::FlowState
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1529,6 +1668,20 @@ function initialise_flow_model(mesh::A5Mesh,
            "; $n_degenerate cells underdetermined or geometrically degenerate (gradient correction is a no-op there)" :
            "")
 
+    # ── Cell-vector momentum infrastructure (Step 2.2, cell-momentum branch) ──
+    qvec_u          = zeros(Float64, n)
+    qvec_v          = zeros(Float64, n)
+    cell_edge_index = zeros(Int, N_SIDES, n)
+    mom_weights     = zeros(Float64, 10, n)
+    t_mom = time()
+    _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n)
+    _build_mom_weights!(mom_weights, cell_edge_index, edges, n)
+    n_mom_degen = count(i -> all(==(0.0), view(mom_weights, :, i)), 1:n)
+    @info "Cell-vector momentum weights built in $(round(time()-t_mom, digits=3))s — " *
+          "$(n - n_mom_degen)/$n cells with a valid 2D momentum stencil" *
+          (momentum_model == :cell ? " (momentum_model=cell: active)" :
+                                    " (momentum_model=edge: precomputed but inactive)")
+
     return FlowState(
         ids,
         zeros(Float64, n),
@@ -1554,6 +1707,11 @@ function initialise_flow_model(mesh::A5Mesh,
         q_centre_theta,
         gradient_correction,
         gradient_correction_alpha,
+        qvec_u,
+        qvec_v,
+        cell_edge_index,
+        mom_weights,
+        momentum_model,
     )
 end
 
@@ -2009,16 +2167,28 @@ function step_standard!(state::FlowState, dt::Float64)
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
 
-        # Identify donor depth for the volume limiter (higher-WSE side donates).
+        # Identify donor depth for the volume limiter (higher-WSE side donates)
         depth_donor = wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
 
-        # Q-centred: spatially smooth q_prev using the most-collinear neighbouring
-        # edge fluxes. This damps the checkerboard oscillation mode on the pentagonal
-        # mesh while preserving coherent flow signals. θ = state.q_centre_theta
-        # (default 0.9; set via --q-centre-theta, 1.0 disables smoothing).
-        q_prev_eff = _q_centred(edges.flux, e,
-                                 edges.collinear_i[e], edges.collinear_j[e],
-                                 state.q_centre_theta)
+        # ── q_prev: edge-scalar (legacy) or face projection of cell vector ──
+        # When momentum_model == :cell, the face unit discharge predictor is
+        # obtained by projecting the average of the two adjacent cells' vector
+        # unit discharges onto the face normal (arithmetic face averaging;
+        # sign negated because flux convention is opposite to n̂_f direction):
+        #   q_prev_eff = −0.5·((qvec_u_ci + qvec_u_cj)·nf_x +
+        #                      (qvec_v_ci + qvec_v_cj)·nf_y)
+        # When momentum_model == :edge, the legacy per-edge scalar is used
+        # with optional Q-centred smoothing (theta). Q-centred is disabled
+        # for the cell-vector path (already spatially coupled via the vector
+        # reconstruction; adding theta would double-smooth).
+        q_prev_eff = if state.momentum_model === :cell
+            -0.5 * ((state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_x[e] +
+                    (state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_y[e])
+        else
+            _q_centred(edges.flux, e,
+                       edges.collinear_i[e], edges.collinear_j[e],
+                       state.q_centre_theta)
+        end
 
         if state.gradient_correction
             # ── WLSQ-corrected driving head ─────────────────────────────────
@@ -2135,6 +2305,37 @@ function step_standard!(state::FlowState, dt::Float64)
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
+
+    # ── Phase F: cell-vector momentum reconstruction ───────────────────────
+    # Only active when --momentum-model cell is set. Projects the post-limiter
+    # per-edge unit discharges (edges.flux) back onto a per-cell 2D vector
+    # (qvec_u, qvec_v) via the pre-computed WLSQ projection matrix mom_weights.
+    #
+    # Observation model: for every edge e adjacent to cell i,
+    #   qvec_i · n̂_f = −flux[e]
+    # where n̂_f = (nf_x[e], nf_y[e]) always points from cell_i→cell_j.
+    # This holds for BOTH cells adjacent to the edge (see _build_mom_weights!).
+    #
+    # The reconstructed (qvec_u, qvec_v) replaces edges.flux as the momentum
+    # state feeding Phase A q_prev_eff on the next step — breaking the per-edge
+    # directional-feedback mechanism identified in the alpha sweep (2026-08-14).
+    # edges.flux is still updated each step (Fix C) for the WLSQ input here and
+    # as a diagnostic record; it is no longer the primary momentum state.
+    if state.momentum_model === :cell
+        n_cells = length(state.cell_ids)
+        @inbounds for i in 1:n_cells
+            qu = 0.0;  qv = 0.0
+            for s in 1:N_SIDES
+                e = state.cell_edge_index[s, i]
+                e == 0 && continue
+                obs = -edges.flux[e]   # observation: qvec_i · n̂_f = -flux[e]
+                qu += state.mom_weights[s,     i] * obs
+                qv += state.mom_weights[5 + s, i] * obs
+            end
+            state.qvec_u[i] = qu
+            state.qvec_v[i] = qv
+        end
+    end
 end
 
 """
@@ -2694,6 +2895,7 @@ function run_flood_model(;
     q_centre_theta            :: Float64 = 0.9,
     gradient_correction       :: Bool    = true,
     gradient_correction_alpha :: Float64 = 1.0,
+    momentum_model            :: Symbol  = :edge,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -2905,13 +3107,15 @@ function run_flood_model(;
                                         friction_raster           = friction_source,
                                         q_centre_theta            = q_centre_theta,
                                         gradient_correction       = gradient_correction,
-                                        gradient_correction_alpha = gradient_correction_alpha)
+                                        gradient_correction_alpha = gradient_correction_alpha,
+                                        momentum_model            = momentum_model)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n), q_centre_theta = $(q_centre_theta), " *
           "gradient_correction = $(gradient_correction), " *
-          "alpha = $(gradient_correction_alpha))"
+          "alpha = $(gradient_correction_alpha), " *
+          "momentum_model = $(momentum_model))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3587,9 +3791,10 @@ function main(args=String[])
 
     # --q-centre-theta / --gradient-correction (flow-direction-fixes)
     # See FloodA5_NonOrthogonal_Correction_Plan.md §6, §7.
-    q_centre_theta_val,           args = _pop_flag(args, "--q-centre-theta")
-    gradient_correction_val,      args = _pop_flag(args, "--gradient-correction")
+    q_centre_theta_val,            args = _pop_flag(args, "--q-centre-theta")
+    gradient_correction_val,       args = _pop_flag(args, "--gradient-correction")
     gradient_correction_alpha_val, args = _pop_flag(args, "--gradient-correction-alpha")
+    momentum_model_val,            args = _pop_flag(args, "--momentum-model")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -3623,9 +3828,18 @@ function main(args=String[])
         print_help(1)
     end
 
-    # --gradient-correction-alpha: scale factor for the V̂ component of the
-    # n̂_f projection formula. 1.0 = full projection; 0.0 = d̂ only.
-    # Research/diagnostic flag — not a production correction mechanism.
+    # --momentum-model edge|cell  (default: edge — legacy per-face scalar)
+    momentum_model = if momentum_model_val === nothing
+        :edge
+    elseif momentum_model_val in ("edge", "Edge")
+        :edge
+    elseif momentum_model_val in ("cell", "Cell")
+        :cell
+    else
+        println("ERROR: --momentum-model requires 'edge' or 'cell' " *
+                "(got '$momentum_model_val')\n")
+        print_help(1)
+    end
     gradient_correction_alpha = if gradient_correction_alpha_val === nothing
         1.0
     else
@@ -3772,6 +3986,7 @@ function main(args=String[])
         q_centre_theta            = q_centre_theta,
         gradient_correction       = gradient_correction,
         gradient_correction_alpha = gradient_correction_alpha,
+        momentum_model            = momentum_model,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,

@@ -138,7 +138,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
                      e_flux, zeros(Float64, n_edges),
                      zeros(Int, n_edges), zeros(Int, n_edges),
                      zeros(Float64, n_edges), zeros(Float64, n_edges),
-                     e_L, zeros(Float64, n_edges))  # dx_m=L (chain E), dy_m=0
+                     e_L, zeros(Float64, n_edges),  # dx_m=L
+                     zeros(Float64, n_edges), zeros(Float64, n_edges))  # dy_m=0; nf=0
 
     # Lons/lats: ~30m spacing along a longitude line near (0,0)
     cell_lons = Float64[i * 0.00027 for i in 0:(n_cells-1)]   # ~30m per step
@@ -164,7 +165,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
                      zeros(Float64, n_edges),
                      zeros(Int, n_edges), zeros(Int, n_edges),
                      zeros(Float64, n_edges), zeros(Float64, n_edges),
-                     copy(e_L), zeros(Float64, n_edges)),  # dx_m=L, dy_m=0
+                     copy(e_L), zeros(Float64, n_edges),   # dx_m=L
+                     zeros(Float64, n_edges), zeros(Float64, n_edges)),  # nf=0
             deepcopy(tbls),
             falses(n_cells),    # boundary_mask — no open boundaries in this synthetic chain
             Any[],              # ghost_edges

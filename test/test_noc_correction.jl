@@ -447,7 +447,7 @@ let
     # pattern as test_edge_geometry.jl's _minimal_state.
     dummy_edges = EdgeList(0, Int[], Int[], Float64[], Float64[], Float64[],
                             Float64[], Float64[], Float64[], Int[], Int[],
-                            Float64[], Float64[], Float64[], Float64[])
+                            Float64[], Float64[], Float64[], Float64[], Float64[], Float64[])
     state = FlowState(
         ["c$i" for i in 1:n],
         zeros(n), zeros(n), zeros(n), zeros(n), zeros(n),
@@ -492,7 +492,8 @@ let
                       zeros(2), zeros(2),
                       [0, 0], [0, 0],          # collinear_i/j
                       [0.0, 0.0], [0.0, 0.0],  # skew_x/y = 0: orthogonal
-                      L, zeros(2))              # dx_m = L (chain E), dy_m = 0
+                      L, zeros(2),             # dx_m = L (chain E)
+                      zeros(2), zeros(2))  # dy_m=0; nf_x/nf_y=0 (orthogonal synth)
 
     adj_matrix = zeros(Int, 5, n)
     adj_matrix[1, 1] = 2
@@ -576,6 +577,10 @@ let
         # for degenerate stencils, not a bug. T-NOC5b therefore tests the
         # UNCORRECTED kernel path only. The corrected path is validated on a
         # proper 2D stencil in test_gradient_direction.jl GD3.
+        1.0,                        # gradient_correction_alpha
+        zeros(Float64, n), zeros(Float64, n),           # qvec_u, qvec_v
+        zeros(Int, N_SIDES, n), zeros(Float64, 10, n),  # cell_edge_index, mom_weights
+        :edge,                      # momentum_model
     )
 
     vol_before = sum(state.volume)

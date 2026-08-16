@@ -582,7 +582,9 @@ function _make_edge_list(edges_spec::Vector{Tuple{Int,Int,Float64}};
              zeros(Float64, ne),   # skew_x (orthogonal synthetic edges)
              zeros(Float64, ne),   # skew_y
              fill(L, ne),          # dx_m = L (edges run east)
-             zeros(Float64, ne))   # dy_m = 0
+             zeros(Float64, ne),   # dy_m = 0
+             fill(1.0, ne),        # nf_x = 1 (east, orthogonal)
+             zeros(Float64, ne))   # nf_y = 0
 end
 
 function _minimal_state(; n_cells::Int,
@@ -649,7 +651,9 @@ let
                      zeros(Float64, ne),    # skew_x
                      zeros(Float64, ne),    # skew_y
                      fill(1500.0, ne),      # dx_m = L (east)
-                     zeros(Float64, ne))    # dy_m = 0
+                     zeros(Float64, ne),    # dy_m = 0
+                     fill(1.0, ne),         # nf_x = 1 (east, orthogonal)
+                     zeros(Float64, ne))    # nf_y = 0
     depth  = [2.0, 0.5]
     volume = depth .* 1.5e6
     state  = _minimal_state(n_cells=2, depth=depth, volume=volume, edges=edges)
