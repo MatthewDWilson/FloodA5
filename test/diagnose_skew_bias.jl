@@ -140,3 +140,58 @@ println("from 50%: this is a real, fixable geometry-construction bias in")
 println("_edge_geometry's orientation-flip logic on irregular pentagons --")
 println("worth a targeted look at that function specifically.")
 println("=" ^ 76)
+
+# ── 5. skew_x -- the component that actually matters on THIS domain ────────
+# Vhat_dot = gx_f*skew_x + gy_f*skew_y. This domain is translation-invariant
+# in latitude (uniform east-west slope), so gy_f ~ 0 almost everywhere --
+# meaning Vhat_dot is dominated by gx_f*skew_x, NOT skew_y. A skew_y bias
+# that cancels in aggregate (as found above) says nothing about whether
+# skew_x -- the component that actually multiplies the real, large,
+# dominant gradient here -- is itself systematically different between
+# north-pointing and south-pointing edges. THAT would translate directly,
+# via the real east-west gradient, into asymmetric flux on north vs south
+# edges -- a much more direct mechanism than anything in skew_y alone.
+println("\n" * "=" ^ 76)
+println("Step 5 -- skew_x (the component multiplying the DOMINANT gx_f")
+println("gradient on this east-west-sloped domain -- not checked above)")
+println("=" ^ 76)
+
+mean_skew_x  = mean(skew_x)
+wmean_skew_x = sum(skew_x .* width) / sum(width)
+println("\n--- Global skew_x statistics ---")
+println("  mean(skew_x)                = $mean_skew_x")
+println("  width-weighted mean(skew_x) = $wmean_skew_x")
+println("  std(skew_x)                 = $(std(skew_x))")
+
+mean_sx_north = mean(skew_x[north_mask])
+mean_sx_south = mean(skew_x[south_mask])
+println("\n--- skew_x: north-pointing vs south-pointing edges ---")
+println("  north (dy_m>0): mean(skew_x) = $mean_sx_north")
+println("  south (dy_m<0): mean(skew_x) = $mean_sx_south")
+println("  difference (north - south)   = $(mean_sx_north - mean_sx_south)")
+println("  (THIS is the number that matters: if north and south edges see a")
+println("   systematically different skew_x, and the dominant gradient here")
+println("   is east-west (gx_f), every edge picks up a directionally-biased")
+println("   extra push via alpha*L*gx_f*skew_x -- consistent regardless of")
+println("   sign(skew_y), and consistent with a drift that keeps compounding")
+println("   rather than saturating.)")
+
+# ── 6. Direct proxy for Vhat_dot under the domain's real gradient shape ────
+# Approximate gx_f as a small positive constant (east-west downhill,
+# magnitude irrelevant -- we only care about the north/south SPLIT) and
+# gy_f = 0 (the domain's actual, near-exact condition away from the
+# embankment). Under that approximation, Vhat_dot ∝ skew_x exactly, so the
+# north/south split above already answers this -- but report it in
+# physical terms (mean correction to dWSE_n per unit gx_f, per unit alpha*L)
+# for a direct sanity check against the north/south asym magnitudes seen in
+# the real 20-hour runs.
+println("\n--- Proxy: mean Vhat_dot under gx_f=1, gy_f=0 (pure E-W gradient) ---")
+println("  north-pointing edges: mean(Vhat_dot proxy) = $mean_sx_north")
+println("  south-pointing edges: mean(Vhat_dot proxy) = $mean_sx_south")
+println("  A nonzero, consistent-sign difference here directly predicts a")
+println("  systematic north/south flux bias under --gradient-correction on,")
+println("  scaling with alpha and with the real (larger) gx_f magnitude --")
+println("  exactly the lever --gradient-correction-alpha 0 vs 1 already")
+println("  showed empirically (small stable bias at alpha=0, large growing")
+println("  bias at alpha=1).")
+println("=" ^ 76)
