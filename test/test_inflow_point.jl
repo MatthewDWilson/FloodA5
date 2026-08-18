@@ -78,6 +78,7 @@ end
         Any[],
         falses(n), Any[], Any[], 0.0,
         zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false,
+        1.0,                                            # gradient_correction_alpha
         zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
         :edge)
@@ -270,6 +271,7 @@ end
         Any[],
         falses(n), Any[], Any[], 0.0,
         zeros(Float64, 2, n), zeros(Float64, 10, n), 0.9, false,
+        1.0,                                            # gradient_correction_alpha
         zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
         :edge)

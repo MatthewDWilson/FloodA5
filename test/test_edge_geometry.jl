@@ -596,7 +596,16 @@ function _minimal_state(; n_cells::Int,
                            cell_area::Vector{Float64}=fill(1.5e6, n_cells),
                            sgs_tables::Vector{Any}=Any[],
                            q_centre_theta::Float64=0.9,
-                           gradient_correction::Bool=false)
+                           gradient_correction::Bool=false,
+                           gradient_correction_alpha::Float64=1.0,
+                           momentum_model::Symbol=:edge)
+    adj_matrix = zeros(Int, 5, n_cells)   # not used by step functions in these tests
+
+    cell_edge_index = zeros(Int, N_SIDES, n_cells)
+    _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n_cells)
+    mom_weights = zeros(Float64, 10, n_cells)
+    _build_mom_weights!(mom_weights, cell_edge_index, edges, n_cells)
+
     FlowState(
         ["c$i" for i in 1:n_cells],
         copy(depth), copy(volume),
@@ -605,7 +614,7 @@ function _minimal_state(; n_cells::Int,
         copy(manning_n), copy(cell_area),
         zeros(n_cells), zeros(n_cells),   # cell_lons, cell_lats (unused by these tests)
         Dict{String,Vector{String}}(),
-        zeros(Int, 5, n_cells),   # adj_matrix (not used by step functions)
+        adj_matrix,
         edges,
         sgs_tables,
         falses(n_cells),         # boundary_mask — no open boundaries in these synthetic tests
@@ -616,6 +625,10 @@ function _minimal_state(; n_cells::Int,
         zeros(Float64, 10, n_cells),   # wlsq_weights — unused while gradient_correction=false
         q_centre_theta,
         gradient_correction,
+        gradient_correction_alpha,
+        zeros(Float64, n_cells), zeros(Float64, n_cells),   # qvec_u, qvec_v
+        cell_edge_index, mom_weights,
+        momentum_model,
     )
 end
 

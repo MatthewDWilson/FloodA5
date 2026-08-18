@@ -461,6 +461,10 @@ let
         zeros(Float64, 2, n),
         wlsq_weights,
         0.9, true,
+        1.0,                                            # gradient_correction_alpha
+        zeros(Float64, n), zeros(Float64, n),            # qvec_u, qvec_v
+        zeros(Int, N_SIDES, n), zeros(Float64, 10, n),   # cell_edge_index, mom_weights
+        :edge,                                           # momentum_model
     )
 
     _compute_wse_gradients!(state, wse)

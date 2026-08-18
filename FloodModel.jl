@@ -171,19 +171,30 @@ struct EdgeList
     #
     # V̂ = n̂_f − c·d̂: the tangential component of the face normal after
     # removing its projection onto d̂. Retained as a diagnostic (|V̂| = sin θ)
-    # and used in the n̂_f gradient projection formula (see §4.1 of
-    # FloodA5_GradientCorrection_Fix.md):
-    #   dWSE_n = −c·(∇WSE_f·d_vec_m) − L·(∇WSE_f·V̂)
-    #          = −L·(∇WSE_f · n̂_f)
-    # This projects the WLSQ gradient onto the true face normal rather than
-    # the centre-to-centre direction, eliminating grid-induced anisotropy on
-    # the non-orthogonal A5 mesh. (0,0) for orthogonal edges → no correction.
+    # and used in the local-orthogonal + non-orthogonal-correction formula
+    # (OpenFOAM-style decomposition, 2026-08-18 — see step_standard! Phase A
+    # for the full rationale):
+    #   dWSE_n = c·(wse_ci − wse_cj) − alpha·L·(∇WSE_f·V̂)
+    # The dominant (orthogonal) term uses the direct, locally-measured WSE
+    # difference between the two adjacent cells; only the smaller
+    # non-orthogonal remainder comes from the WLSQ-reconstructed gradient.
+    # A prior formula (2026-07-22 to 2026-08-17) computed BOTH terms from the
+    # reconstructed gradient alone (dWSE_n = −c·(∇WSE_f·d_vec_m) −
+    # alpha·L·(∇WSE_f·V̂), i.e. "purely gradient-driven") — this passed every
+    # symmetry/correctness test available at the time but produced a severe
+    # dt-dependent north/south instability on the real planar-slope mesh once
+    # combined with cell-vector momentum (two independent WLSQ
+    # reconstructions over the same stencil feeding back into the same flux
+    # equation, with no locally-anchored term in either). (0,0) for
+    # orthogonal edges → no correction, either way.
     skew_x       :: Vector{Float64}    # V̂_x component (dimensionless)
     skew_y       :: Vector{Float64}    # V̂_y component (dimensionless)
     # Pre-computed d_vec_m: displacement from cell_i to cell_j in local
     # equirectangular metres centred on cell_i. Same cos_lat0 convention as
-    # _build_wlsq_weights!, ensuring grad_wse and d_vec_m share a frame.
-    # Used as the d̂ component of the n̂_f projection: ∇WSE_f · d_vec_m.
+    # _build_wlsq_weights!. Retained for diagnostics; no longer used in the
+    # current dWSE_n formula (superseded 2026-08-18 — see skew_x/skew_y
+    # comment above), which uses the direct wse_ci−wse_cj difference instead
+    # of ∇WSE_f·d_vec_m for the orthogonal term.
     dx_m         :: Vector{Float64}    # x-component of cj−ci (local m, E+)
     dy_m         :: Vector{Float64}    # y-component of cj−ci (local m, N+)
     # Unit face normal: n̂_f = c·d̂ + V̂  (always oriented so that d̂·n̂_f ≥ 0,
@@ -342,15 +353,19 @@ mutable struct FlowState
     # side for A/B benchmarking per FloodA5_NonOrthogonal_Correction_Plan.md
     # §3 (Design Decisions).
     gradient_correction       :: Bool
-    # Scale factor for the V̂ component of the n̂_f projection formula:
-    #   dWSE_n = −c·(∇WSE_f·d_vec_m) − alpha·L·(∇WSE_f·V̂)
-    # alpha=1.0 (default): full n̂_f projection onto face normal.
-    # alpha=0.0: d̂-only projection (V̂ term dropped entirely).
+    # Scale factor for the V̂ (non-orthogonal correction) term:
+    #   dWSE_n = c·(wse_ci − wse_cj) − alpha·L·(∇WSE_f·V̂)
+    # alpha=1.0 (default): full V̂ correction applied.
+    # alpha=0.0: orthogonal-only (direct WSE-difference term alone, V̂ dropped).
     # Intermediate values allow empirical calibration for research/diagnosis.
     # NOTE: a fixed alpha is NOT a viable production correction — it cannot
     # self-calibrate to mesh geometry. This flag exists purely to characterise
     # the V̂ feedback mechanism and inform the architectural decision
     # (per-cell velocity vector) documented in the handover summary.
+    # Formula updated 2026-08-18 — see step_standard! Phase A and the
+    # EdgeList skew_x/skew_y field comment for the full rationale (reverts
+    # to a locally-anchored orthogonal term after a purely-gradient-driven
+    # variant was found to produce a real-mesh directional instability).
     # Set via --gradient-correction-alpha.
     gradient_correction_alpha :: Float64
     # ── Cell-vector discharge state (Stage 2, cell-momentum branch) ────────
@@ -2191,63 +2206,49 @@ function step_standard!(state::FlowState, dt::Float64)
         end
 
         if state.gradient_correction
-            # ── WLSQ-corrected driving head ─────────────────────────────────
-            # Direct WSE-difference term uses (wse_ci - wse_cj), matching the
-            # legacy kernel's convention exactly (_bates_flux: dWSE = wse_i -
-            # wse_j) — this is the part verified bit-identical to the legacy
-            # kernel by T-NOC4 (test_noc_correction.jl) when skew=0.
-            # ── WLSQ-corrected driving head (re-derived 2026-06-24) ─────────
-            # dWSE_n = c·(wse_i - wse_j) - L·(∇WSE_f · V̂)
-            # where c = edges.cos_theta[e] (now the ORIENTED cosine, always
-            # ≥ 0, identical in magnitude to the legacy cos_theta but
-            # computed via a consistently i→j-oriented face normal — see
-            # _edge_geometry's 2026-06-24 revision note in A5Grid.jl) and
-            # V̂ = (edges.skew_x[e], edges.skew_y[e]) is the WLSQ correction
-            # direction vector (NOT a positional skewness offset, despite
-            # the field names — see EdgeList's field comment).
+            # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
+            # (2026-08-18, standard-flow-momentum-instability session)
             #
-            # This supersedes TWO bugs found during T-NOC5b investigation:
-            #   (1) wrong sign on the direct WSE-difference term — caught by
-            #       T-NOC5b's spurious-uphill-flow failure;
-            #   (2) wrong correction vector entirely — the original formula
-            #       used _edge_geometry's then-named "skew_vec" (a
-            #       *positional* face-midpoint-to-line-intersection offset)
-            #       where the rigorous derivation requires a *directional*
-            #       vector V̂ = n̂ - c·d̂ built from a consistently-oriented
-            #       face normal. These coincide only at exact orthogonality
-            #       (both zero), which is why T-NOC4 (skew=0 backward-compat
-            #       test) did not catch bug (2) — it only ever exercised the
-            #       trivial case where both formulations agree.
+            # SUPERSEDES the "purely gradient-driven" (2026-07-22) formula
+            # below, which computed BOTH the dominant driving term and the
+            # tangential correction from the WLSQ-reconstructed cell-centred
+            # gradient (grad_wse), with no direct local WSE-difference anchor
+            # anywhere in the calculation. That formula passed every
+            # correctness/symmetry test available at the time (T-NOC1-5,
+            # test_mirror_symmetry.jl MS1-4 — a hand-built, exactly
+            # mirror-symmetric synthetic mesh confirms the formula is
+            # per-step symmetric in isolation) but produced a severe,
+            # dt-dependent (non-monotonic, V-shaped) north/south instability
+            # on the real planar-slope mesh once combined with cell-vector
+            # momentum (--momentum-model cell): two independent WLSQ
+            # reconstructions over the same 5-neighbour stencil, both fed
+            # back into the same flux equation every step, with nothing
+            # tying either one to a locally-measured, self-correcting value.
             #
-            # Both the sign and the V̂ formula have been independently
-            # ── n̂_f gradient projection (2026-07-22) ────────────────────────
-            # Replaces both the original V̂ formula and the intermediate d̂
-            # formula. Motivated by the ChatGPT/finite-volume insight that the
-            # correct driving slope for a face is ∇H·n̂_f (the gradient
-            # projected onto the face NORMAL), not ∇H·d̂ (projected onto the
-            # centre-to-centre direction). These are identical on orthogonal
-            # grids; on A5 non-orthogonal cells they differ by the V̂ term.
+            # This is the standard OpenFOAM "orthogonal-corrected" /
+            # "over-relaxed" decomposition: the dominant (orthogonal) part of
+            # the face gradient is computed directly from the two adjacent
+            # cell values — cheap, local, and inherently self-correcting,
+            # since it reacts immediately to this specific edge's own state —
+            # and only the smaller non-orthogonal remainder (the V̂ term,
+            # typically |V̂| ~ 0.3-0.6 on this mesh, i.e. a minority
+            # contribution) comes from the reconstructed gradient:
             #
-            # Using the decomposition n̂_f = c·d̂ + V̂ (where c = cos_theta,
-            # V̂ = (skew_x, skew_y) from _edge_geometry):
+            #   dWSE_n = c·(wse_ci - wse_cj) − alpha·L·(∇WSE_f · V̂)
             #
-            #   dWSE_n = −L · (∇WSE_f · n̂_f)
-            #          = −c · (∇WSE_f · d_vec_m) − L · (∇WSE_f · V̂)
-            #
-            # The d_vec_m term uses pre-computed (dx_m, dy_m) in local metres;
-            # the V̂ term uses (skew_x, skew_y) already stored in EdgeList.
-            # No direct WSE-difference measurement — purely gradient-driven.
-            #
-            # Backward-compatibility: when skew_x=skew_y=0 (orthogonal edge),
-            # cos_theta=1, so dWSE_n = −(∇WSE_f · d_vec_m) ≈ wse_ci−wse_cj
-            # for a linear field — recovering the legacy result (T-NOC4 still
-            # passes). When gradient_correction=false the legacy kernel is used
-            # unchanged (the else branch below).
+            # where c = edges.cos_theta[e] (oriented cosine, ≥ 0) and
+            # V̂ = (edges.skew_x[e], edges.skew_y[e]). Recovers the legacy
+            # kernel exactly at skew=0 (T-NOC4 still applies unchanged, since
+            # the direct-difference term is bit-identical to _bates_flux's
+            # dWSE = wse_i - wse_j). Should be re-validated with
+            # test_mirror_symmetry.jl (still expected to pass — wse_ci-wse_cj
+            # is trivially mirror-symmetric by the same construction) and
+            # with the real-mesh planar-symmetry dt sweep before flipping
+            # gradient_correction's default.
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
             Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = -edges.cos_theta[e] * dhat_dot -
+            dWSE_n   = edges.cos_theta[e] * (wse_ci - wse_cj) -
                        state.gradient_correction_alpha * edges.L[e] * Vhat_dot
             h_flow = max(wse_ci, wse_cj) - edges.sill[e]
 
@@ -2476,19 +2477,18 @@ function step_sgs!(state::FlowState, dt::Float64)
                                  state.q_centre_theta)
 
         Q_new = if state.gradient_correction
-            # ── WLSQ-corrected driving head (re-derived 2026-06-24) ─────────
-            # dWSE_n = c·(wse_i_eff - wse_j_eff) - L·(∇WSE_f · V̂)
-            # Same formula and derivation as step_standard! (see its comment
-            # for the full account of both bugs found and fixed via T-NOC5b:
-            # wrong base-term sign, and the wrong V̂/skew_vec correction
-            # vector). Uses the *effective* (dry-cell corrected) WSE values
-            # for h_flow/wse_flow and the direct WSE-difference term, exactly
-            # as the legacy SGS kernel does (wse_ci_eff/wse_cj_eff, not raw
-            # wse[]), consistent with the existing Bug 48 dry-cell treatment
-            # — only the gradient term (gx_f, gy_f, via ∇WSE_f) is taken from
-            # the raw wse[] field used in _compute_wse_gradients!, matching
-            # _bates_flux_corrected's documented convention of correcting
-            # only the gradient, not the flow-depth/friction term.
+            # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
+            # (2026-08-18 — matches step_standard!'s corrected branch; see
+            # its comment for the full rationale and the real-mesh instability
+            # this supersedes.) Uses the *effective* (dry-cell corrected) WSE
+            # values for both h_flow and the direct WSE-difference term, as
+            # the legacy SGS kernel and the original 2026-06-24 formula both
+            # did — only the tangential (V̂) correction comes from the WLSQ
+            # gradient. This does NOT resolve the separate open question
+            # noted below (dry-cell gradient contamination via gx_f/gy_f,
+            # which are still built from the raw wse[] array) — that remains
+            # the acceptance gate for this SGS path once real-mesh testing
+            # resumes here.
             #
             # ⚠️  KNOWN OPEN QUESTION, not yet resolved by testing: a dry
             # cell's *raw* wse[] is tbl.z_min (wse_from_volume(V=0) returns
@@ -2499,33 +2499,19 @@ function step_sgs!(state::FlowState, dt::Float64)
             # wet alike — see its docstring, "agnostic to which flow method
             # produced it"), a dry cell's gradient is built from its
             # raw/unclamped z_min, not its clamped effective WSE. This means
-            # the correction term (gx_f, gy_f) could reintroduce a small
+            # the V̂ correction term (gx_f, gy_f) could reintroduce a small
             # amount of the same spurious-head signal Bug 48 was designed to
             # eliminate, via a different path than the one Bug 48 patches.
-            # The magnitude is expected to be small — the correction term is
-            # a secondary, c-and-V̂-scaled contribution, not the primary
-            # driving-head term — but this has not been empirically
-            # verified. MUST be checked against the synthetic DEM T0–T4
-            # regression suite (dry-cell-heavy by design — see
-            # SGS_VALIDATION_SUMMARY.md) before this SGS corrected path is
-            # considered validated. If T0/T1 (no spurious downstream flow
-            # before the notch sill) regress with --gradient-correction on,
-            # this is the first place to look.
-            # ── n̂_f gradient projection (2026-07-22) ────────────────────────
-            # Same formula as step_standard! corrected branch. wse_ci_eff and
-            # wse_cj_eff (Bug 48 dry-cell clamps) are NOT used directly in
-            # dWSE_n here — the gradient is computed from the raw wse[] array
-            # via _compute_wse_gradients! (see the open-question note above
-            # regarding dry-cell gradient contamination; T0/T1 of the
-            # synthetic DEM suite remain the acceptance gate for this path).
-            #
-            # dWSE_n = −c·(∇WSE_f·d_vec_m) − L·(∇WSE_f·V̂)
-            #        = −L·(∇WSE_f · n̂_f)
+            # MUST be checked against the synthetic DEM T0–T4 regression
+            # suite (dry-cell-heavy by design — see SGS_VALIDATION_SUMMARY.md)
+            # before this SGS corrected path is considered validated. If
+            # T0/T1 (no spurious downstream flow before the notch sill)
+            # regress with --gradient-correction on, this is the first place
+            # to look.
             gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
             gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            dhat_dot = gx_f * edges.dx_m[e]    + gy_f * edges.dy_m[e]
             Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = -edges.cos_theta[e] * dhat_dot -
+            dWSE_n   = edges.cos_theta[e] * (wse_ci_eff - wse_cj_eff) -
                        state.gradient_correction_alpha * edges.L[e] * Vhat_dot
             h_flow = wse_flow - z_sill
 
