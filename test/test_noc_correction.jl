@@ -465,6 +465,7 @@ let
         zeros(Float64, n), zeros(Float64, n),            # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n),   # cell_edge_index, mom_weights
         :edge,                                           # momentum_model
+        :legacy, nothing,   # face_flux_method, diamond_table (Phase C)
     )
 
     _compute_wse_gradients!(state, wse)
@@ -585,6 +586,7 @@ let
         zeros(Float64, n), zeros(Float64, n),           # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n),  # cell_edge_index, mom_weights
         :edge,                      # momentum_model
+        :legacy, nothing,           # face_flux_method, diamond_table (Phase C)
     )
 
     vol_before = sum(state.volume)

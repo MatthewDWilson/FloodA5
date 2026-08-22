@@ -293,6 +293,7 @@ println("   qvec should be non-zero after step")
         zeros(Float64, n), zeros(Float64, n),   # qvec_u, qvec_v
         cell_edge_index, mom_weights,
         :cell,   # momentum_model = :cell
+        :legacy, nothing,   # face_flux_method, diamond_table (Phase C)
     )
 
     vol_before = sum(state.volume)

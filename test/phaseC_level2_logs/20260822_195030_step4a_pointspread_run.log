@@ -1,0 +1,145 @@
+[ Info: A5Grid: CUDA GPU detected ÔÇö PIP sampling will run on GPU
+Ôöî Info: Starting FloodA5 model...
+Ôöö   Dates.now() = 2026-08-22T19:58:30.952
+[ Info: Arguments passed: ["--meshload", "D:\\FloodA5\\test\\square\\square_mesh18_standard.parquet", "--flow-model", "standard", "--injection-point", "0,0,50", "--closed-boundaries", "--sim-duration", "3600", "--dt-max", "10", "--gradient-correction", "on", "--face-flux-method", "diamond", "--output", "D:\\FloodA5\\test\\square\\square_res18_diamond.h5", "--output-interval", "60"]
+Ôöî Info: === A5 Flood Model ===
+Ôöö   Dates.now() = 2026-08-22T19:59:00.875
+[ Info: Vis mode    : none
+[ Info: Flow method : standard
+[ Info: Loading mesh from D:\FloodA5\test\square\square_mesh18_standard.parquet...
+[ Info: Loaded adjacency for 4702 cells from parquet neighbours column
+[ Info: Loaded mesh ÔÇö scalar: [cell_area], adjacency: 4702 cells
+[ Info: Mesh loaded in 3.38 s ÔÇö 4702 cells
+Ôöî Warning: No DEM provided and mesh has no saved elevation data. The model will run with flat terrain (z=0 everywhere). Use --dem <file.tif> to sample elevation data.
+Ôöö @ Main D:\FloodA5\FloodModel.jl:3083
+Ôöî Info: A5 Pentagon Mesh Summary
+Ôöé   Resolution   : 18
+Ôöé   Cell count   : 4702
+Ôöé   Lon range    : -0.0069 ÔåÆ 0.0069
+Ôöé   Lat range    : -0.0069 ÔåÆ 0.0069
+Ôöé   Elevation    : not sampled
+Ôöé   SGS tables   : not built
+Ôöé   Static vars  : cell_area
+Ôöé   Array vars   : none
+Ôöö   Backend      : GPU (CUDA, threshold=500000)
+[ Info: Initialising flow model (standard) on 4702 cells...
+Ôöî Warning: No elevation data ÔÇö all cells at z=0. Use --dem before running.
+Ôöö @ Main D:\FloodA5\FloodModel.jl:1550
+[ Info: Cell areas: min=497.0 max=497.0 mean=497.0 NaN=0 zero/small=0
+[ Info: Using pre-computed adjacency from mesh parquet...
+[ Info:   Adjacency ready in 0.0s (4702 cells)
+[ Info: Building edge list...
+[ Info: Edge list built: 11523 edges for 4702 cells (2.45 edges/cell)
+[ Info: Edge non-orthogonality (cos ╬©):  min=0.807  mean=0.916  max=0.953
+[ Info: Edge non-orthogonality (╬©, degrees):  min=17.7┬░  mean=22.7┬░  p95=36.2┬░  max=36.2┬░  (OpenFOAM: corrected-scheme-safe Ôëñ70┬░, limiting advised above)
+[ Info: Edge WLSQ correction vector |V╠é| (= sin ╬©):  mean=0.383  max=0.591  (0 = orthogonal/no correction, bounded in [0,1])
+[ Info: Q-centred collinear edges: ci=11425/11523  cj=11430/11523 found
+[ Info:   Edge list built in 0.0s
+[ Info: Mesh connectivity: fully connected (4702 cells, 1 component)
+[ Info: Building ghost edges (boundary BCs)...
+[ Info: Boundary cells: 273 / 4702 (5.8%)
+[ Info: Ghost edges: 464 created for 273 boundary cells (default BC: ZeroGradient)
+[ Info: WLSQ gradient weights built in 0.143s ÔÇö 4702/4702 cells with a valid 2D gradient stencil
+[ Info: Cell-vector momentum weights built in 0.0s ÔÇö 4702/4702 cells with a valid 2D momentum stencil (momentum_model=edge: precomputed but inactive)
+[ Info: Diamond flux: vertex table built ÔÇö 7286 vertices (227 k=2 fallback, 191 k<=1 fallback, 0 ill-conditioned)
+[ Info: Diamond flux: 11523/11523 edges have a valid diamond record (0 no shared edge, 0 degenerate normal, 0 degenerate area ÔÇö these fall back to the legacy gradient-correction path automatically)
+[ Info: Diamond flux table built in 0.208s
+[ Info: Flow model ready in 417 ms  (adjacency: 4702 cells, Manning n = 0.03, q_centre_theta = 0.9, gradient_correction = true, alpha = 1.0, momentum_model = edge, face_flux_method = diamond)
+[ Info: Injection point: (0.0, 0.0) ÔåÆ cell 4f05dccc72800000  (dist=4.0m)  rate=50.0 m┬│/s
+[ Info: Closed boundaries: all ghost edges set to Closed (no outflow)
+[ Info: HDF5 output file created: D:\FloodA5\test\square\square_res18_diamond.h5
+[ Info: Starting simulation: duration=3600.0s  dt_max=10.0s  rainfall=0.0 mm/hr  sources=1  open_bc=0
+[ Info: Pre-sim check: n_cells=4702  initial_vol_sum=0.0  rainfall_rate=0.0  n_inflow=0  n_injection=1  n_rainpoints=0  ghost_edges=464  open_bc=0
+[ Info:   Step 0: vol_sum=500.0  src=injection @ 4f05dccc72800000  src_vol=[500.0]  wet=0 (non-src=0)  dt=10.0
+[ Info: step_standard! call 1: NaN_vol=0  NaN_elev=0 NaN_area=0  zero_area=0 vol_sum=500.0  max_water_depth=1.006
+[ Info:   cell[1]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[2]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[3]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[770]: vol=500.0  depth=1.006  wse=1.00594
+[ Info:   Step 1: vol_sum=851.29  src=injection @ 4f05dccc72800000  src_vol=[601.29]  wet=6 (non-src=5)  dt=7.02575678585493
+[ Info: step_standard! call 2: NaN_vol=0  NaN_elev=0 NaN_area=0  zero_area=0 vol_sum=851.3  max_water_depth=1.21
+[ Info:   cell[1]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[2]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[3]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[770]: vol=601.3  depth=1.21  wse=1.20971
+[ Info:   Step 2: vol_sum=1171.6  src=injection @ 4f05dccc72800000  src_vol=[620.98]  wet=17 (non-src=16)  dt=6.40673710432633
+[ Info:   Step 3: vol_sum=1486.8  src=injection @ 4f05dccc72800000  src_vol=[625.71]  wet=19 (non-src=18)  dt=6.304331422892324
+[ Info:   Step 4: vol_sum=1800.9  src=injection @ 4f05dccc72800000  src_vol=[626.88]  wet=29 (non-src=28)  dt=6.280476880914581
+[ Info:   Step 5: vol_sum=2114.6  src=injection @ 4f05dccc72800000  src_vol=[627.17]  wet=30 (non-src=29)  dt=6.274611392952831
+[ Info:   Step 10: vol_sum=3706.7  src=injection @ 4f05dccc72800000  src_vol=[651.15]  wet=56 (non-src=55)  dt=6.750369837426346
+[ Info:   Step 20: vol_sum=6964.7  src=injection @ 4f05dccc72800000  src_vol=[646.67]  wet=110 (non-src=109)  dt=6.464020020679745
+[ Info:   Step 30: vol_sum=10222.0  src=injection @ 4f05dccc72800000  src_vol=[657.07]  wet=162 (non-src=161)  dt=6.569693207543403
+[ Info:   Step 40: vol_sum=13497.0  src=injection @ 4f05dccc72800000  src_vol=[654.5]  wet=225 (non-src=224)  dt=6.5441223030886295
+[ Info:   step=   50  t=331.4s  dt=6.99s  wet=283  max_depth=0.704m  domain_vol=16572.3m┬│  vol_removed=0.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 50: vol_sum=16921.0  src=injection @ 4f05dccc72800000  src_vol=[698.83]  wet=283 (non-src=282)  dt=6.9779042323106255
+[ Info:   Step 60: vol_sum=20425.0  src=injection @ 4f05dccc72800000  src_vol=[719.8]  wet=351 (non-src=350)  dt=7.436353058300448
+[ Info:   Step 70: vol_sum=24085.0  src=injection @ 4f05dccc72800000  src_vol=[729.64]  wet=415 (non-src=414)  dt=7.292083152677564
+[ Info:   Step 80: vol_sum=27741.0  src=injection @ 4f05dccc72800000  src_vol=[732.85]  wet=485 (non-src=484)  dt=7.3277999124071
+[ Info:   Step 90: vol_sum=31400.0  src=injection @ 4f05dccc72800000  src_vol=[731.79]  wet=545 (non-src=544)  dt=7.317785304673824
+[ Info:   step=  100  t=695.0s  dt=7.44s  wet=610  max_depth=0.748m  domain_vol=34749.3m┬│  vol_removed=0.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 100: vol_sum=35121.0  src=injection @ 4f05dccc72800000  src_vol=[743.62]  wet=610 (non-src=609)  dt=7.4344146721254765
+[ Info:   Step 110: vol_sum=38962.0  src=injection @ 4f05dccc72800000  src_vol=[789.72]  wet=685 (non-src=684)  dt=7.9011337003411
+[ Info:   Step 120: vol_sum=42877.0  src=injection @ 4f05dccc72800000  src_vol=[782.29]  wet=753 (non-src=752)  dt=7.861981160195924
+[ Info:   Step 130: vol_sum=46802.0  src=injection @ 4f05dccc72800000  src_vol=[783.93]  wet=829 (non-src=828)  dt=7.8378943768173635
+[ Info:   Step 140: vol_sum=50743.0  src=injection @ 4f05dccc72800000  src_vol=[789.66]  wet=902 (non-src=901)  dt=7.89404413346787
+[ Info:   step=  150  t=1086.0s  dt=7.92s  wet=975  max_depth=0.796m  domain_vol=54297.7m┬│  vol_removed=0.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 150: vol_sum=54693.0  src=injection @ 4f05dccc72800000  src_vol=[791.59]  wet=975 (non-src=974)  dt=7.9152323606039285
+[ Info:   Step 160: vol_sum=58647.0  src=injection @ 4f05dccc72800000  src_vol=[790.42]  wet=1046 (non-src=1045)  dt=7.903359509200837
+[ Info:   Step 170: vol_sum=62607.0  src=injection @ 4f05dccc72800000  src_vol=[791.67]  wet=1125 (non-src=1124)  dt=7.916111302232248
+[ Info:   Step 180: vol_sum=66622.0  src=injection @ 4f05dccc72800000  src_vol=[807.29]  wet=1196 (non-src=1195)  dt=8.06979776063271
+[ Info:   Step 190: vol_sum=70681.0  src=injection @ 4f05dccc72800000  src_vol=[817.85]  wet=1270 (non-src=1269)  dt=8.179801058495293
+[ Info:   step=  200  t=1487.0s  dt=8.14s  wet=1349  max_depth=0.819m  domain_vol=74350.1m┬│  vol_removed=0.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 200: vol_sum=74757.0  src=injection @ 4f05dccc72800000  src_vol=[814.38]  wet=1349 (non-src=1348)  dt=8.142767412780195
+[ Info:   Step 210: vol_sum=78925.0  src=injection @ 4f05dccc72800000  src_vol=[832.45]  wet=1426 (non-src=1425)  dt=8.317579246177901
+[ Info:   Step 220: vol_sum=83142.0  src=injection @ 4f05dccc72800000  src_vol=[845.34]  wet=1504 (non-src=1503)  dt=8.4488949343851
+[ Info:   Step 230: vol_sum=87373.0  src=injection @ 4f05dccc72800000  src_vol=[847.78]  wet=1590 (non-src=1589)  dt=8.477624190459109
+[ Info:   Step 240: vol_sum=91609.0  src=injection @ 4f05dccc72800000  src_vol=[846.71]  wet=1668 (non-src=1667)  dt=8.466009371808347
+[ Info:   step=  250  t=1908.3s  dt=8.46s  wet=1754  max_depth=0.851m  domain_vol=95416.6m┬│  vol_removed=0.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 250: vol_sum=95840.0  src=injection @ 4f05dccc72800000  src_vol=[846.82]  wet=1754 (non-src=1753)  dt=8.476363724292861
+[ Info:   Step 260: vol_sum=100080.0  src=injection @ 4f05dccc72800000  src_vol=[847.02]  wet=1827 (non-src=1826)  dt=8.469220202655412
+[ Info:   Step 270: vol_sum=104320.0  src=injection @ 4f05dccc72800000  src_vol=[847.8]  wet=1914 (non-src=1913)  dt=8.477688442779366
+[ Info:   Step 280: vol_sum=108630.0  src=injection @ 4f05dccc72800000  src_vol=[870.49]  wet=1994 (non-src=1993)  dt=8.699078060610413
+[ Info:   Step 290: vol_sum=112980.0  src=injection @ 4f05dccc72800000  src_vol=[872.32]  wet=2086 (non-src=2085)  dt=8.723542416728977
+[ Info:   step=  300  t=2338.1s  dt=8.79s  wet=2165  max_depth=0.88m  domain_vol=116902.7m┬│  vol_removed=0.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 300: vol_sum=117340.0  src=injection @ 4f05dccc72800000  src_vol=[876.75]  wet=2165 (non-src=2164)  dt=8.787630672198386
+[ Info:   Step 310: vol_sum=121740.0  src=injection @ 4f05dccc72800000  src_vol=[879.95]  wet=2256 (non-src=2255)  dt=8.817351597243984
+[ Info:   Step 320: vol_sum=126140.0  src=injection @ 4f05dccc72800000  src_vol=[880.62]  wet=2340 (non-src=2339)  dt=8.80484896146358
+[ Info:   Step 330: vol_sum=130560.0  src=injection @ 4f05dccc72800000  src_vol=[882.79]  wet=2423 (non-src=2422)  dt=8.827127563774104
+[ Info:   Step 340: vol_sum=135020.0  src=injection @ 4f05dccc72800000  src_vol=[896.85]  wet=2514 (non-src=2513)  dt=8.969319830332568
+[ Info:   step=  350  t=2781.1s  dt=8.98s  wet=2596  max_depth=0.903m  domain_vol=139055.6m┬│  vol_removed=0.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 350: vol_sum=139500.0  src=injection @ 4f05dccc72800000  src_vol=[897.52]  wet=2596 (non-src=2595)  dt=8.97337758942313
+[ Info:   Step 360: vol_sum=143990.0  src=injection @ 4f05dccc72800000  src_vol=[896.89]  wet=2686 (non-src=2685)  dt=8.968133018778413
+[ Info:   Step 370: vol_sum=148470.0  src=injection @ 4f05dccc72800000  src_vol=[896.23]  wet=2779 (non-src=2778)  dt=8.961636525361257
+[ Info:   Step 380: vol_sum=152950.0  src=injection @ 4f05dccc72800000  src_vol=[896.18]  wet=2857 (non-src=2856)  dt=8.967972867738894
+[ Info:   Step 390: vol_sum=157440.0  src=injection @ 4f05dccc72800000  src_vol=[898.8]  wet=2953 (non-src=2952)  dt=9.01243643754471
+[ Info:   step=  400  t=3229.8s  dt=9.01s  wet=3045  max_depth=0.907m  domain_vol=161492.0m┬│  vol_removed=0.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 400: vol_sum=161940.0  src=injection @ 4f05dccc72800000  src_vol=[901.17]  wet=3045 (non-src=3044)  dt=9.010942170144313
+[ Info:   Step 410: vol_sum=166450.0  src=injection @ 4f05dccc72800000  src_vol=[901.63]  wet=3122 (non-src=3121)  dt=9.0154669860669
+[ Info:   Step 420: vol_sum=170970.0  src=injection @ 4f05dccc72800000  src_vol=[902.7]  wet=3213 (non-src=3212)  dt=9.026623324194697
+[ Info:   Step 430: vol_sum=175490.0  src=injection @ 4f05dccc72800000  src_vol=[905.47]  wet=3313 (non-src=3312)  dt=9.054647266453944
+[ Info:   Step 440: vol_sum=180000.0  src=injection @ 4f05dccc72800000  src_vol=[887.44]  wet=3394 (non-src=3393)  dt=8.683177152147437
+[ Info: Simulation finished at t=3600.0s  (441 steps)
+[ Info: HDF5 output: 58 frames ÔåÆ D:\FloodA5\test\square\square_res18_diamond.h5
+
+FloodA5 ÔÇö Run Summary
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Phase                          Wall time   % total
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Mesh load / generate              3.38 s     42.8%
+DEM sampling                      < 1 ms      0.0%
+SGS table build                   < 1 ms      0.0%
+Flow model init                   417 ms      5.3%
+Source / BC setup                   9 ms      0.1%
+Simulation                        4.07 s     51.6%
+HDF5 output (cumul.)              1.61 s     20.4%
+Visualiser keepalive              < 1 ms      0.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Total wall time                    7.9 s    100.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  Cells          : 4702
+  Steps          : 441  (108.3 steps/wall-s)
+  Sim speed      : 884.09 sim-hrs/wall-hr  (1.0 sim-hrs in 4.07 s)
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+
+Ôöî Info: FloodA5 model finished.
+Ôöö   Dates.now() = 2026-08-22T19:59:08.776

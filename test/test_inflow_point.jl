@@ -81,7 +81,8 @@ end
         1.0,                                            # gradient_correction_alpha
         zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
-        :edge)
+        :edge,
+        :legacy, nothing)   # face_flux_method, diamond_table (Phase C)
 
     t_s   = [0.0, 3600.0]
     Q_m3s = [5.0, 5.0]   # constant 5 m³/s
@@ -274,7 +275,8 @@ end
         1.0,                                            # gradient_correction_alpha
         zeros(Float64, n), zeros(Float64, n),          # qvec_u, qvec_v
         zeros(Int, N_SIDES, n), zeros(Float64, 10, n), # cell_edge_index, mom_weights
-        :edge)
+        :edge,
+        :legacy, nothing)   # face_flux_method, diamond_table (Phase C)
 
     src1 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [3.0, 3.0], "A")
     src2 = InflowPoint(2, "c1", 0.0, 0.0, [0.0, 100.0], [7.0, 7.0], "B")

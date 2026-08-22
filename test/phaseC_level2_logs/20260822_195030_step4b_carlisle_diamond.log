@@ -1,0 +1,1482 @@
+[ Info: A5Grid: CUDA GPU detected ÔÇö PIP sampling will run on GPU
+Ôöî Info: Starting FloodA5 model...
+Ôöö   Dates.now() = 2026-08-22T19:59:24.123
+[ Info: Arguments passed: ["--meshload", "D:\\FloodA5\\test\\carlisle\\carlisle_mesh18_standard.parquet", "--flow-model", "standard", "--rainfall", "50", "--sim-duration", "36000", "--gradient-correction", "on", "--face-flux-method", "diamond", "--output", "D:\\FloodA5\\test\\carlisle\\carlisle_diamond_res18.h5", "--output-interval", "600"]
+Ôöî Info: === A5 Flood Model ===
+Ôöö   Dates.now() = 2026-08-22T19:59:53.376
+[ Info: Vis mode    : none
+[ Info: Flow method : standard
+[ Info: Loading mesh from D:\FloodA5\test\carlisle\carlisle_mesh18_standard.parquet...
+[ Info: Loaded adjacency for 29902 cells from parquet neighbours column
+[ Info: Loaded mesh ÔÇö scalar: [cell_area, elevation], adjacency: 29902 cells
+[ Info: Mesh loaded in 5.89 s ÔÇö 29902 cells
+Ôöî Info: A5 Pentagon Mesh Summary
+Ôöé   Resolution   : 18
+Ôöé   Cell count   : 29902
+Ôöé   Lon range    : -2.9611 ÔåÆ -2.886
+Ôöé   Lat range    : 54.8831 ÔåÆ 54.9115
+Ôöé   Elevation    : 6.4 ÔÇô 41.4 m   (29869 valid, 33 NaN)
+Ôöé   SGS tables   : not built
+Ôöé   Static vars  : cell_area, elevation
+Ôöé   Array vars   : none
+Ôöö   Backend      : GPU (CUDA, threshold=500000)
+[ Info: Initialising flow model (standard) on 29902 cells...
+Ôöî Warning: 33 cells have NaN elevation and will be hydraulically inert (no flux on any adjacent edge). Indices: [881, 1039, 4193, 4427, 4563, 4874, 7519, 8411, 11176, 11805]
+Ôöö @ Main D:\FloodA5\FloodModel.jl:1556
+[ Info: Cell areas: min=492.6 max=492.6 mean=492.6 NaN=0 zero/small=0
+[ Info: Using pre-computed adjacency from mesh parquet...
+[ Info:   Adjacency ready in 0.1s (29902 cells)
+[ Info: Building edge list...
+[ Info: Edge list built: 74130 edges for 29902 cells (2.48 edges/cell)
+[ Info: Edge non-orthogonality (cos ╬©):  min=0.796  mean=0.913  max=1.0
+[ Info: Edge non-orthogonality (╬©, degrees):  min=0.0┬░  mean=23.2┬░  p95=37.2┬░  max=37.2┬░  (OpenFOAM: corrected-scheme-safe Ôëñ70┬░, limiting advised above)
+[ Info: Edge WLSQ correction vector |V╠é| (= sin ╬©):  mean=0.39  max=0.605  (0 = orthogonal/no correction, bounded in [0,1])
+[ Info: Q-centred collinear edges: ci=73886/74130  cj=73872/74130 found
+[ Info:   Edge list built in 0.3s
+[ Info: Mesh connectivity: fully connected (29902 cells, 1 component)
+[ Info: Building ghost edges (boundary BCs)...
+[ Info: Boundary cells: 748 / 29902 (2.5%)
+[ Info: Ghost edges: 1250 created for 748 boundary cells (default BC: ZeroGradient)
+[ Info: WLSQ gradient weights built in 1.015s ÔÇö 29902/29902 cells with a valid 2D gradient stencil
+[ Info: Cell-vector momentum weights built in 0.008s ÔÇö 29902/29902 cells with a valid 2D momentum stencil (momentum_model=edge: precomputed but inactive)
+[ Info: Diamond flux: vertex table built ÔÇö 45480 vertices (637 k=2 fallback, 503 k<=1 fallback, 0 ill-conditioned)
+[ Info: Diamond flux: 74128/74130 edges have a valid diamond record (1 no shared edge, 1 degenerate normal, 0 degenerate area ÔÇö these fall back to the legacy gradient-correction path automatically)
+[ Info: Diamond flux table built in 1.629s
+[ Info: Flow model ready in 3.3 s  (adjacency: 29902 cells, Manning n = 0.03, q_centre_theta = 0.9, gradient_correction = true, alpha = 1.0, momentum_model = edge, face_flux_method = diamond)
+[ Info: HDF5 output file created: D:\FloodA5\test\carlisle\carlisle_diamond_res18.h5
+[ Info: Starting simulation: duration=36000.0s  dt_max=60.0s  rainfall=50.0 mm/hr  sources=0  open_bc=1250
+[ Info: Pre-sim check: n_cells=29902  initial_vol_sum=0.0  rainfall_rate=1.388888888888889e-5  n_inflow=0  n_injection=0  n_rainpoints=0  ghost_edges=1250  open_bc=1250
+[ Info:   Step 0: vol_sum=12275.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=60.0
+[ Info: step_standard! call 1: NaN_vol=0  NaN_elev=33 NaN_area=0  zero_area=0 vol_sum=12270.0  max_water_depth=0.0008333
+[ Info:   cell[1]: vol=0.4105  depth=0.0008333  wse=19.6997
+[ Info:   cell[2]: vol=0.4105  depth=0.0008333  wse=14.2969
+[ Info:   cell[3]: vol=0.4105  depth=0.0008333  wse=15.2538
+[ Info:   cell[18221]: vol=0.4105  depth=0.0008333  wse=32.4749
+[ Info:   Step 1: vol_sum=24550.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=60.0
+[ Info: step_standard! call 2: NaN_vol=0  NaN_elev=33 NaN_area=0  zero_area=0 vol_sum=24550.0  max_water_depth=0.001667
+[ Info:   cell[1]: vol=0.821  depth=0.001667  wse=19.7005
+[ Info:   cell[2]: vol=0.821  depth=0.001667  wse=14.2978
+[ Info:   cell[3]: vol=0.821  depth=0.001667  wse=15.2546
+[ Info:   cell[18221]: vol=0.821  depth=0.001667  wse=32.4757
+[ Info:   Step 2: vol_sum=36806.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=60.0
+[ Info:   Step 3: vol_sum=49078.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=60.0
+[ Info:   Step 4: vol_sum=61165.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=59.24267261968228
+[ Info:   Step 5: vol_sum=71368.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=49.92153216810733
+[ Info:   Step 10: vol_sum=108080.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=30.1694512378564
+[ Info:   Step 20: vol_sum=154780.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=19.325043464039556
+[ Info:   Step 30: vol_sum=188850.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=15.516982170476755
+[ Info:   Step 40: vol_sum=217400.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=13.562033902472791
+[ Info:   step=   50  t=1189.1s  dt=12.48s  wet=29902  max_depth=0.515m  domain_vol=240268.8m┬│  vol_removed=3004.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 50: vol_sum=242800.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=12.367497135061798
+[ Info:   Step 60: vol_sum=266140.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=11.510652017595433
+[ Info:   Step 70: vol_sum=287920.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=10.858169890985469
+[ Info:   Step 80: vol_sum=308560.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=10.391585025429238
+[ Info:   Step 90: vol_sum=328250.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=9.971797541853606
+[ Info:   step=  100  t=1727.3s  dt=9.64s  wet=29902  max_depth=0.774m  domain_vol=345189.5m┬│  vol_removed=8185.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 100: vol_sum=347150.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=9.603383282841298
+[ Info:   Step 110: vol_sum=365320.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=9.2620091789523
+[ Info:   Step 120: vol_sum=382760.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.931040505857418
+[ Info:   Step 130: vol_sum=399640.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.69999524758905
+[ Info:   Step 140: vol_sum=416090.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.515455128744888
+[ Info:   step=  150  t=2171.6s  dt=8.35s  wet=29902  max_depth=1.066m  domain_vol=430478.4m┬│  vol_removed=13781.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 150: vol_sum=432180.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.339256173132508
+[ Info:   Step 160: vol_sum=447920.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.170420401656695
+[ Info:   Step 170: vol_sum=463370.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=8.02279669786994
+[ Info:   Step 180: vol_sum=478490.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.858469633861915
+[ Info:   Step 190: vol_sum=493290.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.698336958296174
+[ Info:   step=  200  t=2569.0s  dt=7.61s  wet=29902  max_depth=1.226m  domain_vol=506274.7m┬│  vol_removed=19298.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 200: vol_sum=507830.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.590338222099579
+[ Info:   Step 210: vol_sum=522140.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.476592269460966
+[ Info:   Step 220: vol_sum=536250.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.405957554039525
+[ Info:   Step 230: vol_sum=550160.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.289368676098929
+[ Info:   Step 240: vol_sum=563860.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.208386158298621
+[ Info:   step=  250  t=2936.8s  dt=7.15s  wet=29902  max_depth=1.307m  domain_vol=575939.5m┬│  vol_removed=24871.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 250: vol_sum=577400.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.12897137785959
+[ Info:   Step 260: vol_sum=590760.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=7.052718093427332
+[ Info:   Step 270: vol_sum=603960.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.992995094751818
+[ Info:   Step 280: vol_sum=617010.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.916355095732633
+[ Info:   Step 290: vol_sum=629910.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.841915309545768
+[ Info:   step=  300  t=3284.2s  dt=6.79s  wet=29902  max_depth=1.664m  domain_vol=641298.0m┬│  vol_removed=30588.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 300: vol_sum=642690.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.790278107451883
+[ Info:   Step 310: vol_sum=655330.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.70625837957063
+[ Info:   Step 320: vol_sum=667830.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.651920548779665
+[ Info:   Step 330: vol_sum=680210.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.580772381002767
+[ Info:   Step 340: vol_sum=692510.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.558902068902687
+[ Info:   step=  350  t=3615.8s  dt=6.51s  wet=29902  max_depth=1.61m  domain_vol=703426.6m┬│  vol_removed=36293.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 350: vol_sum=704760.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.503142181193631
+[ Info:   Step 360: vol_sum=716930.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.46864879349416
+[ Info:   Step 370: vol_sum=729030.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.416493802013598
+[ Info:   Step 380: vol_sum=741010.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.3527686652964235
+[ Info:   Step 390: vol_sum=752850.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.302636889701664
+[ Info:   step=  400  t=3935.3s  dt=6.27s  wet=29902  max_depth=1.796m  domain_vol=763348.6m┬│  vol_removed=41737.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 400: vol_sum=764630.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.256227240880089
+[ Info:   Step 410: vol_sum=776310.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.212727404779602
+[ Info:   Step 420: vol_sum=787890.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.163569304273501
+[ Info:   Step 430: vol_sum=799360.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.109185344624948
+[ Info:   Step 440: vol_sum=810710.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=6.064836457694909
+[ Info:   step=  450  t=4242.2s  dt=6.0s  wet=29902  max_depth=1.841m  domain_vol=820721.0m┬│  vol_removed=47159.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 450: vol_sum=821950.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.9971609809323185
+[ Info:   Step 460: vol_sum=833070.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.956690483391676
+[ Info:   Step 470: vol_sum=844070.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.904668712562741
+[ Info:   Step 480: vol_sum=855010.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.8818154230503215
+[ Info:   Step 490: vol_sum=865870.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.852871159335328
+[ Info:   step=  500  t=4537.3s  dt=5.82s  wet=29902  max_depth=2.033m  domain_vol=875485.3m┬│  vol_removed=52767.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 500: vol_sum=876670.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.806501392213878
+[ Info:   Step 510: vol_sum=887400.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.795775340947852
+[ Info:   Step 520: vol_sum=898060.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.753415538248878
+[ Info:   Step 530: vol_sum=908620.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.711556106055604
+[ Info:   Step 540: vol_sum=919110.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.6765740241902005
+[ Info:   step=  550  t=4824.2s  dt=5.65s  wet=29902  max_depth=2.239m  domain_vol=928361.0m┬│  vol_removed=58586.6m┬│  mb_err=0.0m┬│
+[ Info:   Step 550: vol_sum=929510.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.636046706277817
+[ Info:   Step 560: vol_sum=939840.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.607543842999157
+[ Info:   Step 570: vol_sum=950080.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.568479265258108
+[ Info:   Step 580: vol_sum=960260.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.5460383292752375
+[ Info:   Step 590: vol_sum=970370.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.514024774551391
+[ Info:   step=  600  t=5102.2s  dt=5.48s  wet=29902  max_depth=2.251m  domain_vol=979283.7m┬│  vol_removed=64530.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 600: vol_sum=980400.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.474978777026972
+[ Info:   Step 610: vol_sum=990380.0  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.443479240273868
+[ Info:   Step 620: vol_sum=1.0003e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.417426584248735
+[ Info:   Step 630: vol_sum=1.0101e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.3992605084254
+[ Info:   Step 640: vol_sum=1.0199e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.364426905149263
+[ Info:   step=  650  t=5372.7s  dt=5.35s  wet=29902  max_depth=2.32m  domain_vol=1.028562e6m┬│  vol_removed=70589.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 650: vol_sum=1.0297e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.340858824061265
+[ Info:   Step 660: vol_sum=1.0393e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.304239550034196
+[ Info:   Step 670: vol_sum=1.0489e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.2824283563421774
+[ Info:   Step 680: vol_sum=1.0585e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.2647735793318855
+[ Info:   Step 690: vol_sum=1.068e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.242715799363155
+[ Info:   step=  700  t=5636.8s  dt=5.23s  wet=29902  max_depth=2.404m  domain_vol=1.0763273e6m┬│  vol_removed=76854.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 700: vol_sum=1.0774e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.228982414429864
+[ Info:   Step 710: vol_sum=1.0868e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.21349851010117
+[ Info:   Step 720: vol_sum=1.0961e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.186545122336621
+[ Info:   Step 730: vol_sum=1.1054e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.165921727078325
+[ Info:   Step 740: vol_sum=1.1147e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.158190846838128
+[ Info:   step=  750  t=5895.9s  dt=5.14s  wet=29902  max_depth=2.375m  domain_vol=1.1228368e6m┬│  vol_removed=83364.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 750: vol_sum=1.1239e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.139312616937073
+[ Info:   Step 760: vol_sum=1.1331e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.122027852081906
+[ Info:   Step 770: vol_sum=1.1422e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.0983168694260925
+[ Info:   Step 780: vol_sum=1.1513e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.082012523045231
+[ Info:   Step 790: vol_sum=1.1604e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.066163325842723
+[ Info:   step=  800  t=6150.7s  dt=5.05s  wet=29902  max_depth=2.579m  domain_vol=1.1683368e6m┬│  vol_removed=89990.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 800: vol_sum=1.1694e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.050226756705711
+[ Info:   Step 810: vol_sum=1.1783e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.025571197219815
+[ Info:   Step 820: vol_sum=1.1873e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=5.006997550178141
+[ Info:   Step 830: vol_sum=1.1961e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.982057697310907
+[ Info:   Step 840: vol_sum=1.205e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.965868048387649
+[ Info:   step=  850  t=6400.6s  dt=4.95s  wet=29902  max_depth=2.568m  domain_vol=1.212736e6m┬│  vol_removed=96703.9m┬│  mb_err=-0.0m┬│
+[ Info:   Step 850: vol_sum=1.2137e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.941804526572337
+[ Info:   Step 860: vol_sum=1.2225e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.922852115445188
+[ Info:   Step 870: vol_sum=1.2312e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.906983972756802
+[ Info:   Step 880: vol_sum=1.2399e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.896211463589076
+[ Info:   Step 890: vol_sum=1.2485e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.865313207958173
+[ Info:   step=  900  t=6645.4s  dt=4.84s  wet=29902  max_depth=2.695m  domain_vol=1.2560691e6m┬│  vol_removed=103450.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 900: vol_sum=1.2571e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.848235744548188
+[ Info:   Step 910: vol_sum=1.2656e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.833998668564472
+[ Info:   Step 920: vol_sum=1.2741e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.81474320377048
+[ Info:   Step 930: vol_sum=1.2826e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.78983996225631
+[ Info:   Step 940: vol_sum=1.291e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.784787211598596
+[ Info:   step=  950  t=6885.6s  dt=4.76s  wet=29902  max_depth=2.861m  domain_vol=1.2984591e6m┬│  vol_removed=110208.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 950: vol_sum=1.2994e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.761143246510499
+[ Info:   Step 960: vol_sum=1.3078e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.751458384783841
+[ Info:   Step 970: vol_sum=1.3162e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.746226840134934
+[ Info:   Step 980: vol_sum=1.3245e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.7320168400201315
+[ Info:   Step 990: vol_sum=1.3328e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.71639392999764
+[ Info:   step= 1000  t=7122.4s  dt=4.7s  wet=29902  max_depth=3.005m  domain_vol=1.3401231e6m┬│  vol_removed=116988.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 1000: vol_sum=1.3411e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.708432711545842
+[ Info:   Step 1010: vol_sum=1.3493e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.684934682351336
+[ Info:   Step 1020: vol_sum=1.3576e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.675923959407387
+[ Info:   Step 1030: vol_sum=1.3658e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.65706806530489
+[ Info:   Step 1040: vol_sum=1.3739e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.652074249464359
+[ Info:   step= 1050  t=7355.9s  dt=4.64s  wet=29902  max_depth=3.162m  domain_vol=1.3811025e6m┬│  vol_removed=123773.6m┬│  mb_err=0.0m┬│
+[ Info:   Step 1050: vol_sum=1.382e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.626001405051399
+[ Info:   Step 1060: vol_sum=1.3902e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.621609341063807
+[ Info:   Step 1070: vol_sum=1.3982e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.591092454684203
+[ Info:   Step 1080: vol_sum=1.4063e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.585664078033593
+[ Info:   Step 1090: vol_sum=1.4142e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.560219063910332
+[ Info:   step= 1100  t=7585.5s  dt=4.55s  wet=29902  max_depth=3.286m  domain_vol=1.4212865e6m┬│  vol_removed=130560.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 1100: vol_sum=1.4222e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.549806015653704
+[ Info:   Step 1110: vol_sum=1.4302e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.536167880131517
+[ Info:   Step 1120: vol_sum=1.4381e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.531047603983296
+[ Info:   Step 1130: vol_sum=1.446e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.513652213567037
+[ Info:   Step 1140: vol_sum=1.4539e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.501975977140304
+[ Info:   step= 1150  t=7811.6s  dt=4.49s  wet=29902  max_depth=3.672m  domain_vol=1.4608056e6m┬│  vol_removed=137301.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 1150: vol_sum=1.4617e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.4820387956841445
+[ Info:   Step 1160: vol_sum=1.4695e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.473661638626718
+[ Info:   Step 1170: vol_sum=1.4773e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.447861807794587
+[ Info:   Step 1180: vol_sum=1.4851e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.427744939102186
+[ Info:   Step 1190: vol_sum=1.4928e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.4239489660306806
+[ Info:   step= 1200  t=8033.8s  dt=4.42s  wet=29902  max_depth=3.452m  domain_vol=1.4995801e6m┬│  vol_removed=143989.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1200: vol_sum=1.5005e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.417470849264086
+[ Info:   Step 1210: vol_sum=1.5082e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.403760775031836
+[ Info:   Step 1220: vol_sum=1.5159e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.412547831230827
+[ Info:   Step 1230: vol_sum=1.5235e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.401031630942854
+[ Info:   Step 1240: vol_sum=1.5312e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.391033543218678
+[ Info:   step= 1250  t=8253.8s  dt=4.39s  wet=29902  max_depth=3.361m  domain_vol=1.5379137e6m┬│  vol_removed=150667.4m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1250: vol_sum=1.5388e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.371404285234167
+[ Info:   Step 1260: vol_sum=1.5464e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.359177367736792
+[ Info:   Step 1270: vol_sum=1.554e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.35492184977928
+[ Info:   Step 1280: vol_sum=1.5616e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.347103109237752
+[ Info:   Step 1290: vol_sum=1.5691e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.342453059534658
+[ Info:   step= 1300  t=8471.4s  dt=4.32s  wet=29902  max_depth=3.699m  domain_vol=1.5757606e6m┬│  vol_removed=157337.1m┬│  mb_err=0.0m┬│
+[ Info:   Step 1300: vol_sum=1.5766e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.325994016816531
+[ Info:   Step 1310: vol_sum=1.5842e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.318779009155247
+[ Info:   Step 1320: vol_sum=1.5916e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.306582345769628
+[ Info:   Step 1330: vol_sum=1.5991e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.29654273288097
+[ Info:   Step 1340: vol_sum=1.6066e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.292174359340341
+[ Info:   step= 1350  t=8686.7s  dt=4.29s  wet=29902  max_depth=3.46m  domain_vol=1.6131422e6m┬│  vol_removed=164004.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 1350: vol_sum=1.614e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.288566874069657
+[ Info:   Step 1360: vol_sum=1.6215e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.278519862838775
+[ Info:   Step 1370: vol_sum=1.6289e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.275492759287002
+[ Info:   Step 1380: vol_sum=1.6363e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.265621744771187
+[ Info:   Step 1390: vol_sum=1.6437e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.258865377768331
+[ Info:   step= 1400  t=8900.2s  dt=4.25s  wet=29902  max_depth=3.473m  domain_vol=1.6501466e6m┬│  vol_removed=170680.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1400: vol_sum=1.651e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.245691785395597
+[ Info:   Step 1410: vol_sum=1.6584e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.236967960680195
+[ Info:   Step 1420: vol_sum=1.6657e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.22405433834351
+[ Info:   Step 1430: vol_sum=1.673e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.218492561365364
+[ Info:   Step 1440: vol_sum=1.6803e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.2130856284286375
+[ Info:   step= 1450  t=9111.3s  dt=4.2s  wet=29902  max_depth=3.793m  domain_vol=1.6866583e6m┬│  vol_removed=177348.9m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1450: vol_sum=1.6875e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.203984562584902
+[ Info:   Step 1460: vol_sum=1.6948e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.181903150754494
+[ Info:   Step 1470: vol_sum=1.702e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.181955106635476
+[ Info:   Step 1480: vol_sum=1.7092e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.17136289539017
+[ Info:   Step 1490: vol_sum=1.7164e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.165705425777158
+[ Info:   step= 1500  t=9320.2s  dt=4.16s  wet=29902  max_depth=3.891m  domain_vol=1.7227366e6m┬│  vol_removed=184006.4m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1500: vol_sum=1.7236e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.157538131326032
+[ Info:   Step 1510: vol_sum=1.7308e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.155528774509342
+[ Info:   Step 1520: vol_sum=1.7379e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.149234647382896
+[ Info:   Step 1530: vol_sum=1.7451e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.140985267736702
+[ Info:   Step 1540: vol_sum=1.7522e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.13222381889948
+[ Info:   step= 1550  t=9527.4s  dt=4.13s  wet=29902  max_depth=3.536m  domain_vol=1.7584662e6m┬│  vol_removed=190656.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1550: vol_sum=1.7593e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.128248149382197
+[ Info:   Step 1560: vol_sum=1.7664e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.124050643512689
+[ Info:   Step 1570: vol_sum=1.7735e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.119556429856427
+[ Info:   Step 1580: vol_sum=1.7806e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.106104096616991
+[ Info:   Step 1590: vol_sum=1.7876e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.099266241268975
+[ Info:   step= 1600  t=9732.7s  dt=4.09s  wet=29902  max_depth=3.921m  domain_vol=1.7938478e6m┬│  vol_removed=197290.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 1600: vol_sum=1.7947e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.084913433557455
+[ Info:   Step 1610: vol_sum=1.8017e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.0820305389314155
+[ Info:   Step 1620: vol_sum=1.8087e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.081342226277238
+[ Info:   Step 1630: vol_sum=1.8158e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.072891540891644
+[ Info:   Step 1640: vol_sum=1.8228e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.070090019538871
+[ Info:   step= 1650  t=9936.5s  dt=4.07s  wet=29902  max_depth=3.621m  domain_vol=1.8289238e6m┬│  vol_removed=203908.4m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1650: vol_sum=1.8298e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.0677853593746525
+[ Info:   Step 1660: vol_sum=1.8367e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.062454586239912
+[ Info:   Step 1670: vol_sum=1.8437e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.054213745934144
+[ Info:   Step 1680: vol_sum=1.8507e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.050641402511772
+[ Info:   Step 1690: vol_sum=1.8576e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.043701162713302
+[ Info:   step= 1700  t=10139.0s  dt=4.03s  wet=29902  max_depth=3.543m  domain_vol=1.8637519e6m┬│  vol_removed=210511.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1700: vol_sum=1.8646e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.033379295902554
+[ Info:   Step 1710: vol_sum=1.8715e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.025098465255557
+[ Info:   Step 1720: vol_sum=1.8784e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.021309506294613
+[ Info:   Step 1730: vol_sum=1.8853e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.020023518139668
+[ Info:   Step 1740: vol_sum=1.8922e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.017117654597
+[ Info:   step= 1750  t=10340.1s  dt=4.01s  wet=29902  max_depth=3.729m  domain_vol=1.8983048e6m┬│  vol_removed=217089.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 1750: vol_sum=1.8991e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.0065946376074715
+[ Info:   Step 1760: vol_sum=1.906e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.003264570959327
+[ Info:   Step 1770: vol_sum=1.9129e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.007179904318759
+[ Info:   Step 1780: vol_sum=1.9198e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=4.00443114759917
+[ Info:   Step 1790: vol_sum=1.9266e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9974078605129253
+[ Info:   step= 1800  t=10540.2s  dt=4.0s  wet=29902  max_depth=3.779m  domain_vol=1.9326715e6m┬│  vol_removed=223654.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1800: vol_sum=1.9335e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.996984959895689
+[ Info:   Step 1810: vol_sum=1.9403e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9868905483695936
+[ Info:   Step 1820: vol_sum=1.9472e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9849089668275575
+[ Info:   Step 1830: vol_sum=1.954e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9810996135799903
+[ Info:   Step 1840: vol_sum=1.9608e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9689346651748396
+[ Info:   step= 1850  t=10739.3s  dt=3.97s  wet=29902  max_depth=3.635m  domain_vol=1.9668523e6m┬│  vol_removed=230202.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1850: vol_sum=1.9677e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9706307481458722
+[ Info:   Step 1860: vol_sum=1.9745e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.959801792971598
+[ Info:   Step 1870: vol_sum=1.9813e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.961843403823102
+[ Info:   Step 1880: vol_sum=1.9881e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9551093462563442
+[ Info:   Step 1890: vol_sum=1.9949e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9548968498438724
+[ Info:   step= 1900  t=10937.2s  dt=3.95s  wet=29902  max_depth=4.16m  domain_vol=2.0008209e6m┬│  vol_removed=236728.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1900: vol_sum=2.0016e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.943743519654947
+[ Info:   Step 1910: vol_sum=2.0084e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.942581864766155
+[ Info:   Step 1920: vol_sum=2.0152e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.937100338011668
+[ Info:   Step 1930: vol_sum=2.0219e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.931423170713408
+[ Info:   Step 1940: vol_sum=2.0286e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9228531841213794
+[ Info:   step= 1950  t=11133.8s  dt=3.92s  wet=29902  max_depth=3.958m  domain_vol=2.0345464e6m┬│  vol_removed=243229.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 1950: vol_sum=2.0353e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9064439445959596
+[ Info:   Step 1960: vol_sum=2.0421e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9058929633460195
+[ Info:   Step 1970: vol_sum=2.0487e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.9070060802017115
+[ Info:   Step 1980: vol_sum=2.0554e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.896653292871518
+[ Info:   Step 1990: vol_sum=2.0621e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8951269079994817
+[ Info:   step= 2000  t=11328.8s  dt=3.88s  wet=29902  max_depth=3.946m  domain_vol=2.0679767e6m┬│  vol_removed=249690.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 2000: vol_sum=2.0688e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.883325687883185
+[ Info:   Step 2010: vol_sum=2.0754e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8756832078428913
+[ Info:   Step 2020: vol_sum=2.082e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.869209206262844
+[ Info:   Step 2030: vol_sum=2.0887e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.857933086295908
+[ Info:   Step 2040: vol_sum=2.0953e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8538282290702024
+[ Info:   step= 2050  t=11522.1s  dt=3.85s  wet=29902  max_depth=4.419m  domain_vol=2.1010992e6m┬│  vol_removed=256106.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2050: vol_sum=2.1019e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8492355225437125
+[ Info:   Step 2060: vol_sum=2.1085e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.832457290963472
+[ Info:   Step 2070: vol_sum=2.115e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8308684605489116
+[ Info:   Step 2080: vol_sum=2.1216e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.8240938914179874
+[ Info:   Step 2090: vol_sum=2.1281e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.815377323916525
+[ Info:   step= 2100  t=11713.5s  dt=3.81s  wet=29902  max_depth=3.944m  domain_vol=2.133889e6m┬│  vol_removed=262480.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2100: vol_sum=2.1347e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.812337501396165
+[ Info:   Step 2110: vol_sum=2.1412e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.80486603189531
+[ Info:   Step 2120: vol_sum=2.1477e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.795512875182028
+[ Info:   Step 2130: vol_sum=2.1542e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.786344609402741
+[ Info:   Step 2140: vol_sum=2.1607e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7887079389364753
+[ Info:   step= 2150  t=11903.3s  dt=3.78s  wet=29902  max_depth=4.019m  domain_vol=2.1663728e6m┬│  vol_removed=268815.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2150: vol_sum=2.1671e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7785728461492285
+[ Info:   Step 2160: vol_sum=2.1736e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7761092568001056
+[ Info:   Step 2170: vol_sum=2.1801e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.768582756738822
+[ Info:   Step 2180: vol_sum=2.1865e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7626945597088572
+[ Info:   Step 2190: vol_sum=2.1929e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7567697453473907
+[ Info:   step= 2200  t=12091.5s  dt=3.75s  wet=29902  max_depth=4.188m  domain_vol=2.1985963e6m┬│  vol_removed=275111.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2200: vol_sum=2.1994e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7514747284556558
+[ Info:   Step 2210: vol_sum=2.2058e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7418939684045642
+[ Info:   Step 2220: vol_sum=2.2122e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.737077115942982
+[ Info:   Step 2230: vol_sum=2.2186e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.733646654598901
+[ Info:   Step 2240: vol_sum=2.2249e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.723378467781648
+[ Info:   step= 2250  t=12278.2s  dt=3.72s  wet=29902  max_depth=4.346m  domain_vol=2.2305316e6m┬│  vol_removed=281362.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 2250: vol_sum=2.2313e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.714962049252554
+[ Info:   Step 2260: vol_sum=2.2376e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.7046434058804305
+[ Info:   Step 2270: vol_sum=2.244e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.6993558010045473
+[ Info:   Step 2280: vol_sum=2.2503e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.6915401365692526
+[ Info:   Step 2290: vol_sum=2.2566e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.684405898926198
+[ Info:   step= 2300  t=12463.0s  dt=3.68s  wet=29902  max_depth=3.901m  domain_vol=2.2621303e6m┬│  vol_removed=287566.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2300: vol_sum=2.2629e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.680383323144047
+[ Info:   Step 2310: vol_sum=2.2692e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.6671499811362893
+[ Info:   Step 2320: vol_sum=2.2754e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.6589084893691193
+[ Info:   Step 2330: vol_sum=2.2817e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.650712278430592
+[ Info:   Step 2340: vol_sum=2.2879e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.640798261602034
+[ Info:   step= 2350  t=12645.8s  dt=3.64s  wet=29902  max_depth=4.062m  domain_vol=2.2933789e6m┬│  vol_removed=293717.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2350: vol_sum=2.2941e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.636925692889494
+[ Info:   Step 2360: vol_sum=2.3003e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.6297679884992498
+[ Info:   Step 2370: vol_sum=2.3065e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.618138372397116
+[ Info:   Step 2380: vol_sum=2.3127e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.6087346799053868
+[ Info:   Step 2390: vol_sum=2.3189e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.6021996458048866
+[ Info:   step= 2400  t=12826.6s  dt=3.6s  wet=29901  max_depth=4.053m  domain_vol=2.3242727e6m┬│  vol_removed=299807.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 2400: vol_sum=2.325e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.591170552169354
+[ Info:   Step 2410: vol_sum=2.3311e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.5837026427212635
+[ Info:   Step 2420: vol_sum=2.3373e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.579290962558729
+[ Info:   Step 2430: vol_sum=2.3434e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.5704209666223283
+[ Info:   Step 2440: vol_sum=2.3495e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.561837279952074
+[ Info:   step= 2450  t=13005.3s  dt=3.56s  wet=29901  max_depth=4.109m  domain_vol=2.3547967e6m┬│  vol_removed=305840.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2450: vol_sum=2.3555e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.5525675466473907
+[ Info:   Step 2460: vol_sum=2.3616e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=3.54404104698716
+[ Info:   Step 2470: vol_sum=2.3676e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.5342925340948983
+[ Info:   Step 2480: vol_sum=2.3737e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.526753871950727
+[ Info:   Step 2490: vol_sum=2.3797e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.519234968319105
+[ Info:   step= 2500  t=13181.8s  dt=3.51s  wet=29902  max_depth=4.356m  domain_vol=2.3849537e6m┬│  vol_removed=311810.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 2500: vol_sum=2.3857e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.513634498692248
+[ Info:   Step 2510: vol_sum=2.3917e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.5054592681969705
+[ Info:   Step 2520: vol_sum=2.3976e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.497216243539103
+[ Info:   Step 2530: vol_sum=2.4036e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.488480865466621
+[ Info:   Step 2540: vol_sum=2.4095e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4789186560846
+[ Info:   step= 2550  t=13356.5s  dt=3.48s  wet=29902  max_depth=4.124m  domain_vol=2.4147674e6m┬│  vol_removed=317728.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2550: vol_sum=2.4155e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.473593139619306
+[ Info:   Step 2560: vol_sum=2.4214e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4658791409187057
+[ Info:   Step 2570: vol_sum=2.4273e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.462578220584843
+[ Info:   Step 2580: vol_sum=2.4332e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.456102747081813
+[ Info:   Step 2590: vol_sum=2.4391e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4453009087482855
+[ Info:   step= 2600  t=13529.4s  dt=3.44s  wet=29902  max_depth=4.129m  domain_vol=2.4442597e6m┬│  vol_removed=323603.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2600: vol_sum=2.445e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4389844437479598
+[ Info:   Step 2610: vol_sum=2.4508e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.435468373981318
+[ Info:   Step 2620: vol_sum=2.4567e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.424928117760064
+[ Info:   Step 2630: vol_sum=2.4625e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4142957718811737
+[ Info:   Step 2640: vol_sum=2.4683e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.4134088274590733
+[ Info:   step= 2650  t=13700.5s  dt=3.4s  wet=29902  max_depth=4.546m  domain_vol=2.4734402e6m┬│  vol_removed=329431.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 2650: vol_sum=2.4741e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.40367798233101
+[ Info:   Step 2660: vol_sum=2.4799e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.391204498264468
+[ Info:   Step 2670: vol_sum=2.4857e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3828504737437575
+[ Info:   Step 2680: vol_sum=2.4915e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3770353472726127
+[ Info:   Step 2690: vol_sum=2.4972e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.373200162786741
+[ Info:   step= 2700  t=13869.6s  dt=3.37s  wet=29902  max_depth=3.992m  domain_vol=2.502259e6m┬│  vol_removed=335204.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2700: vol_sum=2.5029e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.365204891009953
+[ Info:   Step 2710: vol_sum=2.5087e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3603178902750477
+[ Info:   Step 2720: vol_sum=2.5144e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.352071912749122
+[ Info:   Step 2730: vol_sum=2.5201e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3436815865130955
+[ Info:   Step 2740: vol_sum=2.5258e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3410778664305196
+[ Info:   step= 2750  t=14037.0s  dt=3.34s  wet=29902  max_depth=4.001m  domain_vol=2.5307804e6m┬│  vol_removed=340941.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2750: vol_sum=2.5315e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.332695084038941
+[ Info:   Step 2760: vol_sum=2.5371e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3267225646665017
+[ Info:   Step 2770: vol_sum=2.5428e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.3217583927239502
+[ Info:   Step 2780: vol_sum=2.5484e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.308480687047278
+[ Info:   Step 2790: vol_sum=2.5541e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.304893439910277
+[ Info:   step= 2800  t=14202.8s  dt=3.3s  wet=29902  max_depth=4.118m  domain_vol=2.5589979e6m┬│  vol_removed=346643.4m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2800: vol_sum=2.5597e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.297830553536391
+[ Info:   Step 2810: vol_sum=2.5653e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.292527252246615
+[ Info:   Step 2820: vol_sum=2.5709e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.286965601672908
+[ Info:   Step 2830: vol_sum=2.5764e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.2793463270132692
+[ Info:   Step 2840: vol_sum=2.582e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.276709965694524
+[ Info:   step= 2850  t=14367.0s  dt=3.26s  wet=29902  max_depth=4.138m  domain_vol=2.5869057e6m┬│  vol_removed=352325.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 2850: vol_sum=2.5876e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.26305559266145
+[ Info:   Step 2860: vol_sum=2.5931e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.25946447455085
+[ Info:   Step 2870: vol_sum=2.5986e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.2527729209411986
+[ Info:   Step 2880: vol_sum=2.6042e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.246076544755835
+[ Info:   Step 2890: vol_sum=2.6097e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.239408466992017
+[ Info:   step= 2900  t=14529.5s  dt=3.23s  wet=29902  max_depth=4.15m  domain_vol=2.6144826e6m┬│  vol_removed=357987.1m┬│  mb_err=0.0m┬│
+[ Info:   Step 2900: vol_sum=2.6151e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.2305124484872785
+[ Info:   Step 2910: vol_sum=2.6206e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.226039606954097
+[ Info:   Step 2920: vol_sum=2.6261e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.217674103682062
+[ Info:   Step 2930: vol_sum=2.6315e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.2105514247457245
+[ Info:   Step 2940: vol_sum=2.637e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.2041582619431535
+[ Info:   step= 2950  t=14690.3s  dt=3.2s  wet=29902  max_depth=4.162m  domain_vol=2.6417171e6m┬│  vol_removed=363642.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 2950: vol_sum=2.6424e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1981989840844642
+[ Info:   Step 2960: vol_sum=2.6478e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1926245561328273
+[ Info:   Step 2970: vol_sum=2.6532e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1872894814390387
+[ Info:   Step 2980: vol_sum=2.6585e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1767004994287102
+[ Info:   Step 2990: vol_sum=2.6639e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1747642217614094
+[ Info:   step= 3000  t=14849.5s  dt=3.17s  wet=29902  max_depth=4.173m  domain_vol=2.6686212e6m┬│  vol_removed=369309.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 3000: vol_sum=2.6693e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1657042052576707
+[ Info:   Step 3010: vol_sum=2.6746e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1592678162170533
+[ Info:   Step 3020: vol_sum=2.6799e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1515765817503927
+[ Info:   Step 3030: vol_sum=2.6852e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.14495420318462
+[ Info:   Step 3040: vol_sum=2.6905e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1376804096197004
+[ Info:   step= 3050  t=15006.9s  dt=3.13s  wet=29902  max_depth=4.183m  domain_vol=2.695157e6m┬│  vol_removed=374986.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3050: vol_sum=2.6958e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1322742836983126
+[ Info:   Step 3060: vol_sum=2.7011e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.1277534319139404
+[ Info:   Step 3070: vol_sum=2.7063e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.123248286001205
+[ Info:   Step 3080: vol_sum=2.7116e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.12042949003618
+[ Info:   Step 3090: vol_sum=2.7168e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.114971303305508
+[ Info:   step= 3100  t=15163.0s  dt=3.11s  wet=29902  max_depth=4.193m  domain_vol=2.721389e6m┬│  vol_removed=380686.6m┬│  mb_err=0.0m┬│
+[ Info:   Step 3100: vol_sum=2.722e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.110095141842913
+[ Info:   Step 3110: vol_sum=2.7272e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.105283792972043
+[ Info:   Step 3120: vol_sum=2.7324e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.096434025534965
+[ Info:   Step 3130: vol_sum=2.7376e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.0887256274711694
+[ Info:   Step 3140: vol_sum=2.7428e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=3.0869622474881417
+[ Info:   step= 3150  t=15317.8s  dt=3.08s  wet=29900  max_depth=4.202m  domain_vol=2.7473113e6m┬│  vol_removed=386420.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3150: vol_sum=2.7479e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0834079264113123
+[ Info:   Step 3160: vol_sum=2.7531e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0772704930151207
+[ Info:   Step 3170: vol_sum=2.7582e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.071323314094573
+[ Info:   Step 3180: vol_sum=2.7634e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.066312159033699
+[ Info:   Step 3190: vol_sum=2.7685e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.060541876899942
+[ Info:   step= 3200  t=15471.2s  dt=3.06s  wet=29900  max_depth=4.21m  domain_vol=2.7729428e6m┬│  vol_removed=392185.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3200: vol_sum=2.7736e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.057078142713062
+[ Info:   Step 3210: vol_sum=2.7787e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0551743156372435
+[ Info:   Step 3220: vol_sum=2.7838e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0524719701491883
+[ Info:   Step 3230: vol_sum=2.7888e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0463401660824827
+[ Info:   Step 3240: vol_sum=2.7939e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.043457815672309
+[ Info:   step= 3250  t=15623.7s  dt=3.04s  wet=29900  max_depth=4.218m  domain_vol=2.7983314e6m┬│  vol_removed=397990.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3250: vol_sum=2.799e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.039016704587909
+[ Info:   Step 3260: vol_sum=2.804e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.034279088662862
+[ Info:   Step 3270: vol_sum=2.809e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.02842878186208
+[ Info:   Step 3280: vol_sum=2.8141e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.024050028228138
+[ Info:   Step 3290: vol_sum=2.8191e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.020881132423622
+[ Info:   step= 3300  t=15775.1s  dt=3.02s  wet=29900  max_depth=4.226m  domain_vol=2.8234481e6m┬│  vol_removed=403838.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3300: vol_sum=2.8241e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.016583813134489
+[ Info:   Step 3310: vol_sum=2.8291e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.0105042365763692
+[ Info:   Step 3320: vol_sum=2.834e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=3.004678896094262
+[ Info:   Step 3330: vol_sum=2.839e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9993096388509213
+[ Info:   Step 3340: vol_sum=2.8439e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9973075604235078
+[ Info:   step= 3350  t=15925.2s  dt=2.99s  wet=29900  max_depth=4.233m  domain_vol=2.8482766e6m┬│  vol_removed=409736.9m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3350: vol_sum=2.8489e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.993703677461808
+[ Info:   Step 3360: vol_sum=2.8538e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.988722741411452
+[ Info:   Step 3370: vol_sum=2.8587e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9863906620389913
+[ Info:   Step 3380: vol_sum=2.8637e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9820031037674535
+[ Info:   Step 3390: vol_sum=2.8686e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9775894296828267
+[ Info:   step= 3400  t=16074.4s  dt=2.97s  wet=29900  max_depth=4.24m  domain_vol=2.8728401e6m┬│  vol_removed=415696.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3400: vol_sum=2.8734e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9748574647941917
+[ Info:   Step 3410: vol_sum=2.8783e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.970915902204494
+[ Info:   Step 3420: vol_sum=2.8832e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.968026025317183
+[ Info:   Step 3430: vol_sum=2.8881e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.964765922458612
+[ Info:   Step 3440: vol_sum=2.8929e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.961185934544059
+[ Info:   step= 3450  t=16222.8s  dt=2.96s  wet=29900  max_depth=4.246m  domain_vol=2.8971451e6m┬│  vol_removed=421733.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3450: vol_sum=2.8978e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.957692151910795
+[ Info:   Step 3460: vol_sum=2.9026e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9540432000971992
+[ Info:   Step 3470: vol_sum=2.9074e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9505388069396576
+[ Info:   Step 3480: vol_sum=2.9122e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9489804164792632
+[ Info:   Step 3490: vol_sum=2.917e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9477586694741875
+[ Info:   step= 3500  t=16370.3s  dt=2.94s  wet=29900  max_depth=4.253m  domain_vol=2.9212007e6m┬│  vol_removed=427858.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 3500: vol_sum=2.9218e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9421259312108927
+[ Info:   Step 3510: vol_sum=2.9266e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.936708278502579
+[ Info:   Step 3520: vol_sum=2.9313e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9356028423724596
+[ Info:   Step 3530: vol_sum=2.9361e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.931203801603277
+[ Info:   Step 3540: vol_sum=2.9408e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9272317152420304
+[ Info:   step= 3550  t=16516.9s  dt=2.93s  wet=29900  max_depth=4.259m  domain_vol=2.9449836e6m┬│  vol_removed=434080.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 3550: vol_sum=2.9456e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.925183711667492
+[ Info:   Step 3560: vol_sum=2.9503e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.92198233466817
+[ Info:   Step 3570: vol_sum=2.955e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.918283118970718
+[ Info:   Step 3580: vol_sum=2.9597e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9150145678295654
+[ Info:   Step 3590: vol_sum=2.9644e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9108591415871805
+[ Info:   step= 3600  t=16662.8s  dt=2.91s  wet=29900  max_depth=4.265m  domain_vol=2.9684949e6m┬│  vol_removed=440407.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 3600: vol_sum=2.9691e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9087390052478477
+[ Info:   Step 3610: vol_sum=2.9738e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9035295092631745
+[ Info:   Step 3620: vol_sum=2.9784e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.9017797659445987
+[ Info:   Step 3630: vol_sum=2.9831e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.900753266855266
+[ Info:   Step 3640: vol_sum=2.9877e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8942069434325206
+[ Info:   step= 3650  t=16807.8s  dt=2.89s  wet=29900  max_depth=4.271m  domain_vol=2.9917226e6m┬│  vol_removed=446845.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3650: vol_sum=2.9923e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.888460166242518
+[ Info:   Step 3660: vol_sum=2.9969e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8890995493587406
+[ Info:   Step 3670: vol_sum=3.0015e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.88074341589147
+[ Info:   Step 3680: vol_sum=3.0061e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8783755033596354
+[ Info:   Step 3690: vol_sum=3.0107e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.877682305582395
+[ Info:   step= 3700  t=16951.8s  dt=2.87s  wet=29900  max_depth=4.277m  domain_vol=3.0146384e6m┬│  vol_removed=453389.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 3700: vol_sum=3.0152e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8690213353917153
+[ Info:   Step 3710: vol_sum=3.0198e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.866506517273137
+[ Info:   Step 3720: vol_sum=3.0243e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8638745876287977
+[ Info:   Step 3730: vol_sum=3.0288e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.86035902252258
+[ Info:   Step 3740: vol_sum=3.0333e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8565689089141624
+[ Info:   step= 3750  t=17094.9s  dt=2.85s  wet=29900  max_depth=4.283m  domain_vol=3.0372725e6m┬│  vol_removed=460032.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3750: vol_sum=3.0379e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8540453390779836
+[ Info:   Step 3760: vol_sum=3.0424e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8509055584113465
+[ Info:   Step 3770: vol_sum=3.0468e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8493212300011006
+[ Info:   Step 3780: vol_sum=3.0513e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8443446256149465
+[ Info:   Step 3790: vol_sum=3.0558e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.844101031351561
+[ Info:   step= 3800  t=17237.3s  dt=2.84s  wet=29900  max_depth=4.289m  domain_vol=3.05965e6m┬│  vol_removed=466782.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3800: vol_sum=3.0602e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8401515814233713
+[ Info:   Step 3810: vol_sum=3.0647e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.836417970586148
+[ Info:   Step 3820: vol_sum=3.0691e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8325029516297264
+[ Info:   Step 3830: vol_sum=3.0735e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8287501106494304
+[ Info:   Step 3840: vol_sum=3.0779e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8252847447797222
+[ Info:   step= 3850  t=17378.8s  dt=2.82s  wet=29900  max_depth=4.294m  domain_vol=3.0817477e6m┬│  vol_removed=473643.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3850: vol_sum=3.0823e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8227265719859527
+[ Info:   Step 3860: vol_sum=3.0867e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8200122015821605
+[ Info:   Step 3870: vol_sum=3.0911e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8179882188243317
+[ Info:   Step 3880: vol_sum=3.0955e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.817750275541949
+[ Info:   Step 3890: vol_sum=3.0998e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.814157474236458
+[ Info:   step= 3900  t=17519.7s  dt=2.81s  wet=29900  max_depth=4.299m  domain_vol=3.1035846e6m┬│  vol_removed=480624.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 3900: vol_sum=3.1042e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.812021437977624
+[ Info:   Step 3910: vol_sum=3.1085e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.806828096143536
+[ Info:   Step 3920: vol_sum=3.1128e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.8053567715025407
+[ Info:   Step 3930: vol_sum=3.1171e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.801919743325255
+[ Info:   Step 3940: vol_sum=3.1214e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.798241478903794
+[ Info:   step= 3950  t=17659.9s  dt=2.79s  wet=29900  max_depth=4.304m  domain_vol=3.1251583e6m┬│  vol_removed=487726.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 3950: vol_sum=3.1257e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.795357261585492
+[ Info:   Step 3960: vol_sum=3.13e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.792046008973265
+[ Info:   Step 3970: vol_sum=3.1343e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7902384520754473
+[ Info:   Step 3980: vol_sum=3.1385e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7876836116380272
+[ Info:   Step 3990: vol_sum=3.1428e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7838782113073375
+[ Info:   step= 4000  t=17799.3s  dt=2.78s  wet=29900  max_depth=4.309m  domain_vol=3.1464591e6m┬│  vol_removed=494951.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4000: vol_sum=3.147e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7833346290167054
+[ Info:   Step 4010: vol_sum=3.1513e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7767329104060154
+[ Info:   Step 4020: vol_sum=3.1555e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7767184831446694
+[ Info:   Step 4030: vol_sum=3.1597e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7750242572572708
+[ Info:   Step 4040: vol_sum=3.1639e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.769376823606565
+[ Info:   step= 4050  t=17938.0s  dt=2.77s  wet=29900  max_depth=4.314m  domain_vol=3.1675093e6m┬│  vol_removed=502286.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4050: vol_sum=3.1681e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7671437253671867
+[ Info:   Step 4060: vol_sum=3.1723e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7642178598543485
+[ Info:   Step 4070: vol_sum=3.1764e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7603396125761734
+[ Info:   Step 4080: vol_sum=3.1806e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.757223097100682
+[ Info:   Step 4090: vol_sum=3.1847e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7545379769092913
+[ Info:   step= 4100  t=18076.0s  dt=2.75s  wet=29900  max_depth=4.319m  domain_vol=3.1883208e6m┬│  vol_removed=509696.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 4100: vol_sum=3.1889e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7497390495921974
+[ Info:   Step 4110: vol_sum=3.193e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.746191803749858
+[ Info:   Step 4120: vol_sum=3.1971e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.744253832478011
+[ Info:   Step 4130: vol_sum=3.2013e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7402952421750015
+[ Info:   Step 4140: vol_sum=3.2054e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7376888830969395
+[ Info:   step= 4150  t=18213.1s  dt=2.73s  wet=29900  max_depth=4.323m  domain_vol=3.208908e6m┬│  vol_removed=517161.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4150: vol_sum=3.2095e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7344945164619108
+[ Info:   Step 4160: vol_sum=3.2136e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7315263946982835
+[ Info:   Step 4170: vol_sum=3.2176e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7291297484651
+[ Info:   Step 4180: vol_sum=3.2217e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.7264634860914825
+[ Info:   Step 4190: vol_sum=3.2258e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.72239339147178
+[ Info:   step= 4200  t=18349.5s  dt=2.72s  wet=29901  max_depth=4.327m  domain_vol=3.229257e6m┬│  vol_removed=524712.0m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4200: vol_sum=3.2298e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.719042466908763
+[ Info:   Step 4210: vol_sum=3.2338e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.718545793228365
+[ Info:   Step 4220: vol_sum=3.2379e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.715870285257206
+[ Info:   Step 4230: vol_sum=3.2419e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.7132254460474363
+[ Info:   Step 4240: vol_sum=3.2459e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.7105380752532264
+[ Info:   step= 4250  t=18485.2s  dt=2.71s  wet=29901  max_depth=4.331m  domain_vol=3.2493648e6m┬│  vol_removed=532370.2m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4250: vol_sum=3.2499e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.707886043034397
+[ Info:   Step 4260: vol_sum=3.2539e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.705253033987794
+[ Info:   Step 4270: vol_sum=3.2579e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.70277190577849
+[ Info:   Step 4280: vol_sum=3.2619e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.70100903291885
+[ Info:   Step 4290: vol_sum=3.2659e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.698681486168975
+[ Info:   step= 4300  t=18620.3s  dt=2.7s  wet=29901  max_depth=4.335m  domain_vol=3.2692667e6m┬│  vol_removed=540107.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 4300: vol_sum=3.2698e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6959311213734267
+[ Info:   Step 4310: vol_sum=3.2738e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.693170928029315
+[ Info:   Step 4320: vol_sum=3.2777e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6908759985253137
+[ Info:   Step 4330: vol_sum=3.2817e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6881251183010937
+[ Info:   Step 4340: vol_sum=3.2856e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6853892390008354
+[ Info:   step= 4350  t=18754.8s  dt=2.68s  wet=29901  max_depth=4.339m  domain_vol=3.2889489e6m┬│  vol_removed=547937.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 4350: vol_sum=3.2895e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6830334295153233
+[ Info:   Step 4360: vol_sum=3.2934e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.680638099737249
+[ Info:   Step 4370: vol_sum=3.2973e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.679106868455425
+[ Info:   Step 4380: vol_sum=3.3012e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6791632801409015
+[ Info:   Step 4390: vol_sum=3.3051e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6779219801482608
+[ Info:   step= 4400  t=18888.8s  dt=2.68s  wet=29901  max_depth=4.343m  domain_vol=3.3084469e6m┬│  vol_removed=555845.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4400: vol_sum=3.309e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.675370572316155
+[ Info:   Step 4410: vol_sum=3.3129e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6727908768171638
+[ Info:   Step 4420: vol_sum=3.3167e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6702793576905313
+[ Info:   Step 4430: vol_sum=3.3206e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.667734301430101
+[ Info:   Step 4440: vol_sum=3.3245e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6652350885264164
+[ Info:   step= 4450  t=19022.2s  dt=2.66s  wet=29901  max_depth=4.346m  domain_vol=3.3277648e6m┬│  vol_removed=563831.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 4450: vol_sum=3.3283e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.663495510198138
+[ Info:   Step 4460: vol_sum=3.3321e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.661829245818561
+[ Info:   Step 4470: vol_sum=3.336e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.660180776651481
+[ Info:   Step 4480: vol_sum=3.3398e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.657814874437286
+[ Info:   Step 4490: vol_sum=3.3436e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.655384990864552
+[ Info:   step= 4500  t=19155.1s  dt=2.65s  wet=29901  max_depth=4.35m  domain_vol=3.346894e6m┬│  vol_removed=571897.4m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4500: vol_sum=3.3474e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.652339859980308
+[ Info:   Step 4510: vol_sum=3.3512e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6495233477429614
+[ Info:   Step 4520: vol_sum=3.355e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6468154395040826
+[ Info:   Step 4530: vol_sum=3.3588e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.645147885699066
+[ Info:   Step 4540: vol_sum=3.3626e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6430827249523055
+[ Info:   step= 4550  t=19287.5s  dt=2.64s  wet=29901  max_depth=4.353m  domain_vol=3.3658076e6m┬│  vol_removed=580052.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 4550: vol_sum=3.3663e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6405275317293952
+[ Info:   Step 4560: vol_sum=3.3701e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.639306237026502
+[ Info:   Step 4570: vol_sum=3.3739e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6371424691672587
+[ Info:   Step 4580: vol_sum=3.3776e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6347790529459565
+[ Info:   Step 4590: vol_sum=3.3813e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.632153382046262
+[ Info:   step= 4600  t=19419.3s  dt=2.63s  wet=29901  max_depth=4.356m  domain_vol=3.3845212e6m┬│  vol_removed=588301.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4600: vol_sum=3.3851e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6298713811445182
+[ Info:   Step 4610: vol_sum=3.3888e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.628680665186012
+[ Info:   Step 4620: vol_sum=3.3925e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.625380066250493
+[ Info:   Step 4630: vol_sum=3.3962e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.622708153356551
+[ Info:   Step 4640: vol_sum=3.3999e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.6219356959195887
+[ Info:   step= 4650  t=19550.5s  dt=2.62s  wet=29902  max_depth=4.359m  domain_vol=3.4030289e6m┬│  vol_removed=596640.9m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4650: vol_sum=3.4036e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.6189440811279514
+[ Info:   Step 4660: vol_sum=3.4072e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.617182265944671
+[ Info:   Step 4670: vol_sum=3.4109e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.6155027007115663
+[ Info:   Step 4680: vol_sum=3.4146e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.6136976370161458
+[ Info:   Step 4690: vol_sum=3.4182e6  src=  src_vol=Any[]  wet=29902 (non-src=29902)  dt=2.6118088401423174
+[ Info:   step= 4700  t=19681.2s  dt=2.61s  wet=29901  max_depth=4.37m  domain_vol=3.4213412e6m┬│  vol_removed=605073.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4700: vol_sum=3.4219e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.609457311727463
+[ Info:   Step 4710: vol_sum=3.4255e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6076938357884942
+[ Info:   Step 4720: vol_sum=3.4291e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6056642329456396
+[ Info:   Step 4730: vol_sum=3.4328e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.6036297042248666
+[ Info:   Step 4740: vol_sum=3.4364e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.602077778643847
+[ Info:   step= 4750  t=19811.5s  dt=2.6s  wet=29901  max_depth=4.392m  domain_vol=3.4394523e6m┬│  vol_removed=613607.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 4750: vol_sum=3.44e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.600520702174546
+[ Info:   Step 4760: vol_sum=3.4436e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.59800323793038
+[ Info:   Step 4770: vol_sum=3.4472e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.596601969353407
+[ Info:   Step 4780: vol_sum=3.4508e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5945171789911816
+[ Info:   Step 4790: vol_sum=3.4543e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5924758155508973
+[ Info:   step= 4800  t=19941.2s  dt=2.59s  wet=29901  max_depth=4.415m  domain_vol=3.4573825e6m┬│  vol_removed=622227.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4800: vol_sum=3.4579e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.590658901406588
+[ Info:   Step 4810: vol_sum=3.4615e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5889139523965374
+[ Info:   Step 4820: vol_sum=3.465e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.586509898835647
+[ Info:   Step 4830: vol_sum=3.4686e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.585275484061203
+[ Info:   Step 4840: vol_sum=3.4721e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.583170886052148
+[ Info:   step= 4850  t=20070.5s  dt=2.58s  wet=29901  max_depth=4.438m  domain_vol=3.4751453e6m┬│  vol_removed=630917.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 4850: vol_sum=3.4757e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5808862120330245
+[ Info:   Step 4860: vol_sum=3.4792e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5792363367454434
+[ Info:   Step 4870: vol_sum=3.4827e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5773777621304133
+[ Info:   Step 4880: vol_sum=3.4863e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.575532287897079
+[ Info:   Step 4890: vol_sum=3.4898e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5737735307873315
+[ Info:   step= 4900  t=20199.4s  dt=2.57s  wet=29901  max_depth=4.46m  domain_vol=3.4927729e6m┬│  vol_removed=639645.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4900: vol_sum=3.4933e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.572200911509217
+[ Info:   Step 4910: vol_sum=3.4968e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5702571872235707
+[ Info:   Step 4920: vol_sum=3.5003e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.568446932424525
+[ Info:   Step 4930: vol_sum=3.5038e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.566854080749309
+[ Info:   Step 4940: vol_sum=3.5073e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5653429232027283
+[ Info:   step= 4950  t=20327.8s  dt=2.56s  wet=29901  max_depth=4.487m  domain_vol=3.5102751e6m┬│  vol_removed=648410.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 4950: vol_sum=3.5108e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5636210082236226
+[ Info:   Step 4960: vol_sum=3.5143e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5618703840425225
+[ Info:   Step 4970: vol_sum=3.5178e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5601704449692875
+[ Info:   Step 4980: vol_sum=3.5212e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.558901947144092
+[ Info:   Step 4990: vol_sum=3.5247e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5575371628987034
+[ Info:   step= 5000  t=20455.7s  dt=2.56s  wet=29901  max_depth=4.514m  domain_vol=3.5276345e6m┬│  vol_removed=657234.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5000: vol_sum=3.5282e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5559487279636186
+[ Info:   Step 5010: vol_sum=3.5316e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.554354103981603
+[ Info:   Step 5020: vol_sum=3.5351e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5528320904532316
+[ Info:   Step 5030: vol_sum=3.5385e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.551658762339383
+[ Info:   Step 5040: vol_sum=3.5419e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5504909479501996
+[ Info:   step= 5050  t=20583.4s  dt=2.55s  wet=29901  max_depth=4.54m  domain_vol=3.5448478e6m┬│  vol_removed=666130.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 5050: vol_sum=3.5454e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.549208289171389
+[ Info:   Step 5060: vol_sum=3.5488e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5476153623980307
+[ Info:   Step 5070: vol_sum=3.5522e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.546030647089246
+[ Info:   Step 5080: vol_sum=3.5556e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5444450444882802
+[ Info:   Step 5090: vol_sum=3.559e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.542881183274377
+[ Info:   step= 5100  t=20710.6s  dt=2.54s  wet=29901  max_depth=4.566m  domain_vol=3.5619192e6m┬│  vol_removed=675095.6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5100: vol_sum=3.5624e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5413316449592886
+[ Info:   Step 5110: vol_sum=3.5658e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5397689094902005
+[ Info:   Step 5120: vol_sum=3.5692e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5382204005623237
+[ Info:   Step 5130: vol_sum=3.5726e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5378363657674465
+[ Info:   Step 5140: vol_sum=3.576e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5375681721661443
+[ Info:   step= 5150  t=20837.6s  dt=2.54s  wet=29901  max_depth=4.591m  domain_vol=3.5788464e6m┬│  vol_removed=684134.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5150: vol_sum=3.5794e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.536174474616819
+[ Info:   Step 5160: vol_sum=3.5827e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5347990770407653
+[ Info:   Step 5170: vol_sum=3.5861e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5334446986295087
+[ Info:   Step 5180: vol_sum=3.5895e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.53211767673065
+[ Info:   Step 5190: vol_sum=3.5928e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5308197575643456
+[ Info:   step= 5200  t=20964.2s  dt=2.53s  wet=29901  max_depth=4.617m  domain_vol=3.5956468e6m┬│  vol_removed=693243.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 5200: vol_sum=3.5962e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.529548539730746
+[ Info:   Step 5210: vol_sum=3.5995e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5282880333701496
+[ Info:   Step 5220: vol_sum=3.6029e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5270306161485023
+[ Info:   Step 5230: vol_sum=3.6062e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5257640054814
+[ Info:   Step 5240: vol_sum=3.6095e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.524493630947923
+[ Info:   step= 5250  t=21090.5s  dt=2.52s  wet=29901  max_depth=4.643m  domain_vol=3.6123315e6m┬│  vol_removed=702401.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 5250: vol_sum=3.6128e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5232219205956454
+[ Info:   Step 5260: vol_sum=3.6162e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5219598250551276
+[ Info:   Step 5270: vol_sum=3.6195e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.520698720001477
+[ Info:   Step 5280: vol_sum=3.6228e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5194542819681676
+[ Info:   Step 5290: vol_sum=3.6261e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5182306962754906
+[ Info:   step= 5300  t=21216.5s  dt=2.52s  wet=29901  max_depth=4.669m  domain_vol=3.6288922e6m┬│  vol_removed=711620.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 5300: vol_sum=3.6294e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5170254991686436
+[ Info:   Step 5310: vol_sum=3.6327e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5157678957254506
+[ Info:   Step 5320: vol_sum=3.636e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5146263810479472
+[ Info:   Step 5330: vol_sum=3.6393e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.513461735894627
+[ Info:   Step 5340: vol_sum=3.6426e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5122899235374034
+[ Info:   step= 5350  t=21342.2s  dt=2.51s  wet=29901  max_depth=4.694m  domain_vol=3.6453226e6m┬│  vol_removed=720906.1m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5350: vol_sum=3.6458e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.510656348133043
+[ Info:   Step 5360: vol_sum=3.6491e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5093927266880494
+[ Info:   Step 5370: vol_sum=3.6524e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5084515809689427
+[ Info:   Step 5380: vol_sum=3.6556e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5069851955321982
+[ Info:   Step 5390: vol_sum=3.6589e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.5055135636757977
+[ Info:   step= 5400  t=21467.6s  dt=2.5s  wet=29901  max_depth=4.719m  domain_vol=3.6616225e6m┬│  vol_removed=730256.5m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5400: vol_sum=3.6621e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.504075695939664
+[ Info:   Step 5410: vol_sum=3.6654e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.502631697211992
+[ Info:   Step 5420: vol_sum=3.6686e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.501462794362545
+[ Info:   Step 5430: vol_sum=3.6719e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.500381842747893
+[ Info:   Step 5440: vol_sum=3.6751e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4993123805852426
+[ Info:   step= 5450  t=21592.7s  dt=2.5s  wet=29901  max_depth=4.739m  domain_vol=3.6778016e6m┬│  vol_removed=739660.8m┬│  mb_err=-0.0m┬│
+[ Info:   Step 5450: vol_sum=3.6783e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4982480652256487
+[ Info:   Step 5460: vol_sum=3.6815e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4971952740684276
+[ Info:   Step 5470: vol_sum=3.6847e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.496086808443976
+[ Info:   Step 5480: vol_sum=3.688e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4948257017014117
+[ Info:   Step 5490: vol_sum=3.6912e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4938281986670057
+[ Info:   step= 5500  t=21717.4s  dt=2.49s  wet=29901  max_depth=4.754m  domain_vol=3.6938562e6m┬│  vol_removed=749133.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 5500: vol_sum=3.6944e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.492932934003535
+[ Info:   Step 5510: vol_sum=3.6976e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4920368249440994
+[ Info:   Step 5520: vol_sum=3.7008e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.49113193866716
+[ Info:   Step 5530: vol_sum=3.7039e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.490198846942445
+[ Info:   Step 5540: vol_sum=3.7071e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4892903305375484
+[ Info:   step= 5550  t=21842.0s  dt=2.49s  wet=29901  max_depth=4.777m  domain_vol=3.7097954e6m┬│  vol_removed=758671.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 5550: vol_sum=3.7103e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.488392374159632
+[ Info:   Step 5560: vol_sum=3.7135e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4874919666591757
+[ Info:   Step 5570: vol_sum=3.7167e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4865797306105817
+[ Info:   Step 5580: vol_sum=3.7198e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4854529066184137
+[ Info:   Step 5590: vol_sum=3.723e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.484298720350157
+[ Info:   step= 5600  t=21966.3s  dt=2.48s  wet=29901  max_depth=4.798m  domain_vol=3.7256351e6m┬│  vol_removed=768261.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 5600: vol_sum=3.7261e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.483512802194471
+[ Info:   Step 5610: vol_sum=3.7293e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4827311949484363
+[ Info:   Step 5620: vol_sum=3.7324e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.481906245389361
+[ Info:   Step 5630: vol_sum=3.7356e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4809496471539476
+[ Info:   Step 5640: vol_sum=3.7387e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.479909414583869
+[ Info:   step= 5650  t=22090.3s  dt=2.48s  wet=29901  max_depth=4.819m  domain_vol=3.7413665e6m┬│  vol_removed=777912.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 5650: vol_sum=3.7419e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4787926333144314
+[ Info:   Step 5660: vol_sum=3.745e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4776642658682912
+[ Info:   Step 5670: vol_sum=3.7481e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4763936143310206
+[ Info:   Step 5680: vol_sum=3.7513e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4752084063631843
+[ Info:   Step 5690: vol_sum=3.7544e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.473989747095881
+[ Info:   step= 5700  t=22214.1s  dt=2.47s  wet=29901  max_depth=4.839m  domain_vol=3.7569914e6m┬│  vol_removed=787613.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 5700: vol_sum=3.7575e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.472690838366822
+[ Info:   Step 5710: vol_sum=3.7606e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.471913618167089
+[ Info:   Step 5720: vol_sum=3.7637e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.471047255274725
+[ Info:   Step 5730: vol_sum=3.7668e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4703080113269253
+[ Info:   Step 5740: vol_sum=3.7699e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4695874351715483
+[ Info:   step= 5750  t=22337.7s  dt=2.47s  wet=29901  max_depth=4.859m  domain_vol=3.7725332e6m┬│  vol_removed=797345.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 5750: vol_sum=3.773e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4688706414625674
+[ Info:   Step 5760: vol_sum=3.7761e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.46801184672175
+[ Info:   Step 5770: vol_sum=3.7792e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4670369025126817
+[ Info:   Step 5780: vol_sum=3.7823e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4660498179027917
+[ Info:   Step 5790: vol_sum=3.7854e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.465070450770043
+[ Info:   step= 5800  t=22461.0s  dt=2.46s  wet=29901  max_depth=4.879m  domain_vol=3.7879871e6m┬│  vol_removed=807122.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 5800: vol_sum=3.7885e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4640975474691524
+[ Info:   Step 5810: vol_sum=3.7916e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.463054702867698
+[ Info:   Step 5820: vol_sum=3.7946e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.462023507827509
+[ Info:   Step 5830: vol_sum=3.7977e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4609948492739053
+[ Info:   Step 5840: vol_sum=3.8008e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4599777149481614
+[ Info:   step= 5850  t=22584.1s  dt=2.46s  wet=29901  max_depth=4.898m  domain_vol=3.803349e6m┬│  vol_removed=816940.1m┬│  mb_err=0.0m┬│
+[ Info:   Step 5850: vol_sum=3.8039e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4589442081726736
+[ Info:   Step 5860: vol_sum=3.8069e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4579014511637958
+[ Info:   Step 5870: vol_sum=3.81e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.456967426187886
+[ Info:   Step 5880: vol_sum=3.813e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.456211546604986
+[ Info:   Step 5890: vol_sum=3.8161e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.455459579930695
+[ Info:   step= 5900  t=22706.9s  dt=2.45s  wet=29901  max_depth=4.918m  domain_vol=3.818632e6m┬│  vol_removed=826787.0m┬│  mb_err=0.0m┬│
+[ Info:   Step 5900: vol_sum=3.8191e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4547073348207524
+[ Info:   Step 5910: vol_sum=3.8222e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.453924677021398
+[ Info:   Step 5920: vol_sum=3.8252e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4530232357857793
+[ Info:   Step 5930: vol_sum=3.8283e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.452134500268968
+[ Info:   Step 5940: vol_sum=3.8313e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4512480388466833
+[ Info:   step= 5950  t=22829.5s  dt=2.45s  wet=29900  max_depth=4.937m  domain_vol=3.8338268e6m┬│  vol_removed=836680.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 5950: vol_sum=3.8343e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4503585019095326
+[ Info:   Step 5960: vol_sum=3.8374e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.449459908052678
+[ Info:   Step 5970: vol_sum=3.8404e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.44856148446063
+[ Info:   Step 5980: vol_sum=3.8434e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4477086413643208
+[ Info:   Step 5990: vol_sum=3.8464e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.446982684953611
+[ Info:   step= 6000  t=22952.0s  dt=2.45s  wet=29900  max_depth=4.955m  domain_vol=3.8489346e6m┬│  vol_removed=846615.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 6000: vol_sum=3.8494e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4462605512061235
+[ Info:   Step 6010: vol_sum=3.8524e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.445542674146964
+[ Info:   Step 6020: vol_sum=3.8555e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4448464667751084
+[ Info:   Step 6030: vol_sum=3.8585e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4441500342653875
+[ Info:   Step 6040: vol_sum=3.8615e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4434520086181744
+[ Info:   step= 6050  t=23074.2s  dt=2.44s  wet=29901  max_depth=4.974m  domain_vol=3.8639679e6m┬│  vol_removed=856587.8m┬│  mb_err=0.0m┬│
+[ Info:   Step 6050: vol_sum=3.8645e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4427570201180355
+[ Info:   Step 6060: vol_sum=3.8675e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4419414069280423
+[ Info:   Step 6070: vol_sum=3.8705e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4411036640401638
+[ Info:   Step 6080: vol_sum=3.8734e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4403840291019936
+[ Info:   Step 6090: vol_sum=3.8764e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4395462184911323
+[ Info:   step= 6100  t=23196.2s  dt=2.44s  wet=29901  max_depth=4.992m  domain_vol=3.8789123e6m┬│  vol_removed=866610.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 6100: vol_sum=3.8794e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.438666819128091
+[ Info:   Step 6110: vol_sum=3.8824e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.437285667300237
+[ Info:   Step 6120: vol_sum=3.8854e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4362537190162046
+[ Info:   Step 6130: vol_sum=3.8883e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4356621893326746
+[ Info:   Step 6140: vol_sum=3.8913e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4346796567658426
+[ Info:   step= 6150  t=23318.0s  dt=2.43s  wet=29901  max_depth=5.01m  domain_vol=3.893768e6m┬│  vol_removed=876673.6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6150: vol_sum=3.8943e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.433811187075152
+[ Info:   Step 6160: vol_sum=3.8972e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.433072516125603
+[ Info:   Step 6170: vol_sum=3.9002e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4323270303255318
+[ Info:   Step 6180: vol_sum=3.9031e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.431627404415893
+[ Info:   Step 6190: vol_sum=3.9061e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.430985455964961
+[ Info:   step= 6200  t=23439.6s  dt=2.43s  wet=29901  max_depth=5.028m  domain_vol=3.9085408e6m┬│  vol_removed=886778.5m┬│  mb_err=0.0m┬│
+[ Info:   Step 6200: vol_sum=3.909e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.430340115856687
+[ Info:   Step 6210: vol_sum=3.912e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4296990072133777
+[ Info:   Step 6220: vol_sum=3.9149e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.429059326133162
+[ Info:   Step 6230: vol_sum=3.9179e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4284170427558287
+[ Info:   Step 6240: vol_sum=3.9208e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4277822498604804
+[ Info:   step= 6250  t=23561.1s  dt=2.43s  wet=29901  max_depth=5.045m  domain_vol=3.9232267e6m┬│  vol_removed=896936.7m┬│  mb_err=0.0m┬│
+[ Info:   Step 6250: vol_sum=3.9237e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4271468291249505
+[ Info:   Step 6260: vol_sum=3.9267e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.426431833524285
+[ Info:   Step 6270: vol_sum=3.9296e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4255001612646816
+[ Info:   Step 6280: vol_sum=3.9325e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.424795209152208
+[ Info:   Step 6290: vol_sum=3.9354e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.424140022264136
+[ Info:   step= 6300  t=23682.3s  dt=2.42s  wet=29901  max_depth=5.063m  domain_vol=3.9378326e6m┬│  vol_removed=907139.1m┬│  mb_err=0.0m┬│
+[ Info:   Step 6300: vol_sum=3.9383e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.4234847587168953
+[ Info:   Step 6310: vol_sum=3.9412e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4228327137498953
+[ Info:   Step 6320: vol_sum=3.9441e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.422179621131527
+[ Info:   Step 6330: vol_sum=3.9471e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4215273900747514
+[ Info:   Step 6340: vol_sum=3.9499e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4208789192443243
+[ Info:   step= 6350  t=23803.4s  dt=2.42s  wet=29900  max_depth=5.08m  domain_vol=3.9523537e6m┬│  vol_removed=917391.7m┬│  mb_err=-0.0m┬│
+[ Info:   Step 6350: vol_sum=3.9528e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4202261987901497
+[ Info:   Step 6360: vol_sum=3.9557e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4195722708475524
+[ Info:   Step 6370: vol_sum=3.9586e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.418920218791056
+[ Info:   Step 6380: vol_sum=3.9615e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4182711428145844
+[ Info:   Step 6390: vol_sum=3.9644e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.417566649201249
+[ Info:   step= 6400  t=23924.4s  dt=2.42s  wet=29900  max_depth=5.096m  domain_vol=3.9667876e6m┬│  vol_removed=927697.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 6400: vol_sum=3.9673e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4168861587277397
+[ Info:   Step 6410: vol_sum=3.9702e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4163042970833293
+[ Info:   Step 6420: vol_sum=3.973e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.415680555525173
+[ Info:   Step 6430: vol_sum=3.9759e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4150395267199185
+[ Info:   Step 6440: vol_sum=3.9788e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.414404008448391
+[ Info:   step= 6450  t=24045.1s  dt=2.41s  wet=29900  max_depth=5.112m  domain_vol=3.9811463e6m┬│  vol_removed=938046.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 6450: vol_sum=3.9816e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.413768973066146
+[ Info:   Step 6460: vol_sum=3.9845e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4131333355389755
+[ Info:   Step 6470: vol_sum=3.9874e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.412505376817957
+[ Info:   Step 6480: vol_sum=3.9902e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.411739011767855
+[ Info:   Step 6490: vol_sum=3.9931e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.410923281444725
+[ Info:   step= 6500  t=24165.7s  dt=2.41s  wet=29900  max_depth=5.126m  domain_vol=3.995416e6m┬│  vol_removed=948450.2m┬│  mb_err=0.0m┬│
+[ Info:   Step 6500: vol_sum=3.9959e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4101560346007638
+[ Info:   Step 6510: vol_sum=3.9988e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.409541678560369
+[ Info:   Step 6520: vol_sum=4.0016e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4089342796438764
+[ Info:   Step 6530: vol_sum=4.0044e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.408328806332102
+[ Info:   Step 6540: vol_sum=4.0073e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.407729126897121
+[ Info:   step= 6550  t=24286.2s  dt=2.41s  wet=29900  max_depth=5.141m  domain_vol=4.0096073e6m┬│  vol_removed=958897.3m┬│  mb_err=0.0m┬│
+[ Info:   Step 6550: vol_sum=4.0101e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4071266040334782
+[ Info:   Step 6560: vol_sum=4.0129e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.406522272676388
+[ Info:   Step 6570: vol_sum=4.0158e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4059251888014748
+[ Info:   Step 6580: vol_sum=4.0186e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.40513244352632
+[ Info:   Step 6590: vol_sum=4.0214e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4042814887590045
+[ Info:   step= 6600  t=24406.4s  dt=2.4s  wet=29900  max_depth=5.156m  domain_vol=4.0237205e6m┬│  vol_removed=969389.9m┬│  mb_err=0.0m┬│
+[ Info:   Step 6600: vol_sum=4.0242e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4034386633692124
+[ Info:   Step 6610: vol_sum=4.027e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4025990326093303
+[ Info:   Step 6620: vol_sum=4.0298e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4018911688940885
+[ Info:   Step 6630: vol_sum=4.0326e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4013194444304404
+[ Info:   Step 6640: vol_sum=4.0354e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.4007420373007404
+[ Info:   step= 6650  t=24526.5s  dt=2.4s  wet=29900  max_depth=5.17m  domain_vol=4.0377467e6m┬│  vol_removed=979930.6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6650: vol_sum=4.0382e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3999226567505216
+[ Info:   Step 6660: vol_sum=4.041e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3993156333669967
+[ Info:   Step 6670: vol_sum=4.0438e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.398725122103384
+[ Info:   Step 6680: vol_sum=4.0466e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3981350977291545
+[ Info:   Step 6690: vol_sum=4.0494e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3975499698780784
+[ Info:   step= 6700  t=24646.4s  dt=2.4s  wet=29901  max_depth=5.184m  domain_vol=4.051705e6m┬│  vol_removed=990506.4m┬│  mb_err=0.0m┬│
+[ Info:   Step 6700: vol_sum=4.0522e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3969667980107503
+[ Info:   Step 6710: vol_sum=4.055e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3963862055315612
+[ Info:   Step 6720: vol_sum=4.0578e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3958106982543756
+[ Info:   Step 6730: vol_sum=4.0605e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.395242953225623
+[ Info:   Step 6740: vol_sum=4.0633e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.394676799341155
+[ Info:   step= 6750  t=24766.2s  dt=2.39s  wet=29901  max_depth=5.198m  domain_vol=4.0655856e6m┬│  vol_removed=1.0011302e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6750: vol_sum=4.0661e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3941121174796383
+[ Info:   Step 6760: vol_sum=4.0688e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3935513297144606
+[ Info:   Step 6770: vol_sum=4.0716e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.392990293206075
+[ Info:   Step 6780: vol_sum=4.0744e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.392431655657177
+[ Info:   Step 6790: vol_sum=4.0771e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3918739296558873
+[ Info:   step= 6800  t=24885.9s  dt=2.39s  wet=29901  max_depth=5.211m  domain_vol=4.0793963e6m┬│  vol_removed=1.011795e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6800: vol_sum=4.0799e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.391319033327726
+[ Info:   Step 6810: vol_sum=4.0826e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3907638870985886
+[ Info:   Step 6820: vol_sum=4.0854e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.390210693818617
+[ Info:   Step 6830: vol_sum=4.0881e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.389661018949762
+[ Info:   Step 6840: vol_sum=4.0909e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3891140619639586
+[ Info:   step= 6850  t=25005.4s  dt=2.39s  wet=29901  max_depth=5.224m  domain_vol=4.0931408e6m┬│  vol_removed=1.0224977e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6850: vol_sum=4.0936e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.388569945986593
+[ Info:   Step 6860: vol_sum=4.0964e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.388025967559629
+[ Info:   Step 6870: vol_sum=4.0991e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.387483714995032
+[ Info:   Step 6880: vol_sum=4.1018e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.386941034242991
+[ Info:   Step 6890: vol_sum=4.1046e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3863993713336438
+[ Info:   step= 6900  t=25124.7s  dt=2.39s  wet=29901  max_depth=5.236m  domain_vol=4.1068115e6m┬│  vol_removed=1.0332463e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6900: vol_sum=4.1073e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.385860483765662
+[ Info:   Step 6910: vol_sum=4.11e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3853214257532294
+[ Info:   Step 6920: vol_sum=4.1128e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3847836085705123
+[ Info:   Step 6930: vol_sum=4.1155e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.384247320065286
+[ Info:   Step 6940: vol_sum=4.1182e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3837170689265457
+[ Info:   step= 6950  t=25244.0s  dt=2.38s  wet=29901  max_depth=5.248m  domain_vol=4.1204233e6m┬│  vol_removed=1.0440262e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 6950: vol_sum=4.1209e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.383251297141529
+[ Info:   Step 6960: vol_sum=4.1236e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3826738450523015
+[ Info:   Step 6970: vol_sum=4.1263e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3821567908289474
+[ Info:   Step 6980: vol_sum=4.129e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3815997148498513
+[ Info:   Step 6990: vol_sum=4.1317e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3809198905034132
+[ Info:   step= 7000  t=25363.0s  dt=2.38s  wet=29901  max_depth=5.26m  domain_vol=4.1339682e6m┬│  vol_removed=1.0548455e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7000: vol_sum=4.1345e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.380248522150102
+[ Info:   Step 7010: vol_sum=4.1372e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3795730883458797
+[ Info:   Step 7020: vol_sum=4.1399e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3789068666118167
+[ Info:   Step 7030: vol_sum=4.1426e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.378245047234175
+[ Info:   Step 7040: vol_sum=4.1452e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3775993374104054
+[ Info:   step= 7050  t=25482.0s  dt=2.38s  wet=29901  max_depth=5.271m  domain_vol=4.1474511e6m┬│  vol_removed=1.0656937e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7050: vol_sum=4.1479e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3769587270088444
+[ Info:   Step 7060: vol_sum=4.1506e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3763287500246677
+[ Info:   Step 7070: vol_sum=4.1533e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3757090046102944
+[ Info:   Step 7080: vol_sum=4.156e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.375096464803854
+[ Info:   Step 7090: vol_sum=4.1587e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.374493959965062
+[ Info:   step= 7100  t=25600.7s  dt=2.37s  wet=29901  max_depth=5.282m  domain_vol=4.160873e6m┬│  vol_removed=1.0765703e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7100: vol_sum=4.1614e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3738931028130867
+[ Info:   Step 7110: vol_sum=4.164e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3733020490982266
+[ Info:   Step 7120: vol_sum=4.1667e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.372716528717445
+[ Info:   Step 7130: vol_sum=4.1694e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3721349105330383
+[ Info:   Step 7140: vol_sum=4.172e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.371565336026385
+[ Info:   step= 7150  t=25719.4s  dt=2.37s  wet=29901  max_depth=5.292m  domain_vol=4.1742264e6m┬│  vol_removed=1.0874851e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7150: vol_sum=4.1747e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3710149905838813
+[ Info:   Step 7160: vol_sum=4.1774e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.370499127366436
+[ Info:   Step 7170: vol_sum=4.18e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3699990922261134
+[ Info:   Step 7180: vol_sum=4.1827e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3695353961215724
+[ Info:   Step 7190: vol_sum=4.1854e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.369056187127894
+[ Info:   step= 7200  t=25837.9s  dt=2.37s  wet=29900  max_depth=5.302m  domain_vol=4.1875235e6m┬│  vol_removed=1.0984288e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7200: vol_sum=4.188e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.368557195895425
+[ Info:   Step 7210: vol_sum=4.1907e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3680419135485558
+[ Info:   Step 7220: vol_sum=4.1933e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.367526702873358
+[ Info:   Step 7230: vol_sum=4.196e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.367010497529138
+[ Info:   Step 7240: vol_sum=4.1986e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3664930062340006
+[ Info:   step= 7250  t=25956.2s  dt=2.37s  wet=29901  max_depth=5.311m  domain_vol=4.2007496e6m┬│  vol_removed=1.109418e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7250: vol_sum=4.2012e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3659775630936752
+[ Info:   Step 7260: vol_sum=4.2039e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.365464266222499
+[ Info:   Step 7270: vol_sum=4.2065e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.364952047362829
+[ Info:   Step 7280: vol_sum=4.2091e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.364446041495904
+[ Info:   Step 7290: vol_sum=4.2118e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.363942057192589
+[ Info:   step= 7300  t=26074.5s  dt=2.36s  wet=29901  max_depth=5.32m  domain_vol=4.2139147e6m┬│  vol_removed=1.1204419e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7300: vol_sum=4.2144e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.363438643127493
+[ Info:   Step 7310: vol_sum=4.217e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3629413547897955
+[ Info:   Step 7320: vol_sum=4.2196e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3624476135760313
+[ Info:   Step 7330: vol_sum=4.2223e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3619560554719365
+[ Info:   Step 7340: vol_sum=4.2249e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3614760140948245
+[ Info:   step= 7350  t=26192.6s  dt=2.36s  wet=29901  max_depth=5.329m  domain_vol=4.2270163e6m┬│  vol_removed=1.1315037e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7350: vol_sum=4.2275e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3610019130634505
+[ Info:   Step 7360: vol_sum=4.2301e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3605200400719144
+[ Info:   Step 7370: vol_sum=4.2327e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3600268986772255
+[ Info:   Step 7380: vol_sum=4.2353e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.359534067959336
+[ Info:   Step 7390: vol_sum=4.2379e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3590494409386347
+[ Info:   step= 7400  t=26310.6s  dt=2.36s  wet=29901  max_depth=5.338m  domain_vol=4.2400539e6m┬│  vol_removed=1.1426048e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7400: vol_sum=4.2405e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3585704247431045
+[ Info:   Step 7410: vol_sum=4.2431e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3581017582974457
+[ Info:   Step 7420: vol_sum=4.2457e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3576117358040367
+[ Info:   Step 7430: vol_sum=4.2483e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3571138387711237
+[ Info:   Step 7440: vol_sum=4.2509e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3565998831285415
+[ Info:   step= 7450  t=26428.4s  dt=2.36s  wet=29901  max_depth=5.347m  domain_vol=4.2530337e6m┬│  vol_removed=1.1537388e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7450: vol_sum=4.2535e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.356087007856459
+[ Info:   Step 7460: vol_sum=4.2561e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.35557962855539
+[ Info:   Step 7470: vol_sum=4.2587e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3550899886785093
+[ Info:   Step 7480: vol_sum=4.2613e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.354652529360647
+[ Info:   Step 7490: vol_sum=4.2638e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.354422477771796
+[ Info:   step= 7500  t=26546.2s  dt=2.35s  wet=29899  max_depth=5.355m  domain_vol=4.265941e6m┬│  vol_removed=1.1649209e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7500: vol_sum=4.2664e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3541939965468615
+[ Info:   Step 7510: vol_sum=4.269e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3539682131404436
+[ Info:   Step 7520: vol_sum=4.2716e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.353744356405989
+[ Info:   Step 7530: vol_sum=4.2741e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.353466990527349
+[ Info:   Step 7540: vol_sum=4.2767e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.35299255370207
+[ Info:   step= 7550  t=26663.9s  dt=2.35s  wet=29899  max_depth=5.363m  domain_vol=4.2787976e6m┬│  vol_removed=1.1761387e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7550: vol_sum=4.2793e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.352520083078282
+[ Info:   Step 7560: vol_sum=4.2818e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3520524405070558
+[ Info:   Step 7570: vol_sum=4.2844e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3515868615074056
+[ Info:   Step 7580: vol_sum=4.287e6  src=  src_vol=Any[]  wet=29898 (non-src=29898)  dt=2.3511239754793745
+[ Info:   Step 7590: vol_sum=4.2895e6  src=  src_vol=Any[]  wet=29898 (non-src=29898)  dt=2.3508972877919327
+[ Info:   step= 7600  t=26781.4s  dt=2.35s  wet=29899  max_depth=5.372m  domain_vol=4.2915838e6m┬│  vol_removed=1.1874059e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7600: vol_sum=4.2921e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.350684001785449
+[ Info:   Step 7610: vol_sum=4.2946e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.3504722288745
+[ Info:   Step 7620: vol_sum=4.2972e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.350261926879677
+[ Info:   Step 7630: vol_sum=4.2997e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.349945029934163
+[ Info:   Step 7640: vol_sum=4.3023e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3494687554160105
+[ Info:   step= 7650  t=26898.9s  dt=2.35s  wet=29900  max_depth=5.38m  domain_vol=4.3043176e6m┬│  vol_removed=1.1987107e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7650: vol_sum=4.3048e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3489918540438297
+[ Info:   Step 7660: vol_sum=4.3073e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3487500978914935
+[ Info:   Step 7670: vol_sum=4.3099e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3483707087440715
+[ Info:   Step 7680: vol_sum=4.3124e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3479405679574863
+[ Info:   Step 7690: vol_sum=4.3149e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.347499968784878
+[ Info:   step= 7700  t=27016.3s  dt=2.35s  wet=29900  max_depth=5.389m  domain_vol=4.3169888e6m┬│  vol_removed=1.2100587e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7700: vol_sum=4.3175e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.347078349236466
+[ Info:   Step 7710: vol_sum=4.32e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3466475042413832
+[ Info:   Step 7720: vol_sum=4.3225e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3462198478381375
+[ Info:   Step 7730: vol_sum=4.325e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3457924182054875
+[ Info:   Step 7740: vol_sum=4.3276e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3453506276000877
+[ Info:   step= 7750  t=27133.6s  dt=2.34s  wet=29900  max_depth=5.397m  domain_vol=4.3296011e6m┬│  vol_removed=1.2214441e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7750: vol_sum=4.3301e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3449150457140626
+[ Info:   Step 7760: vol_sum=4.3326e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.3444638576711387
+[ Info:   Step 7770: vol_sum=4.3351e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.344030878978651
+[ Info:   Step 7780: vol_sum=4.3376e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3435970973899716
+[ Info:   Step 7790: vol_sum=4.3401e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.343156205088416
+[ Info:   step= 7800  t=27250.8s  dt=2.34s  wet=29901  max_depth=5.406m  domain_vol=4.3421583e6m┬│  vol_removed=1.2328622e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7800: vol_sum=4.3426e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3427299429744766
+[ Info:   Step 7810: vol_sum=4.3451e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.342367294934458
+[ Info:   Step 7820: vol_sum=4.3476e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3421916544547097
+[ Info:   Step 7830: vol_sum=4.3501e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.342016935012718
+[ Info:   Step 7840: vol_sum=4.3526e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3416370403673232
+[ Info:   step= 7850  t=27367.9s  dt=2.34s  wet=29901  max_depth=5.415m  domain_vol=4.3546576e6m┬│  vol_removed=1.2443199e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7850: vol_sum=4.3551e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3412088570520453
+[ Info:   Step 7860: vol_sum=4.3576e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.340772675766258
+[ Info:   Step 7870: vol_sum=4.3601e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.340340661628735
+[ Info:   Step 7880: vol_sum=4.3626e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.339956619551679
+[ Info:   Step 7890: vol_sum=4.3651e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.339655572977972
+[ Info:   step= 7900  t=27484.9s  dt=2.34s  wet=29901  max_depth=5.424m  domain_vol=4.3671138e6m┬│  vol_removed=1.255802e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7900: vol_sum=4.3676e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3393541517900744
+[ Info:   Step 7910: vol_sum=4.3701e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.339052556489208
+[ Info:   Step 7920: vol_sum=4.3726e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3387509101961914
+[ Info:   Step 7930: vol_sum=4.375e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3384493793791368
+[ Info:   Step 7940: vol_sum=4.3775e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3380290151556524
+[ Info:   step= 7950  t=27601.9s  dt=2.34s  wet=29901  max_depth=5.432m  domain_vol=4.3795144e6m┬│  vol_removed=1.2673228e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 7950: vol_sum=4.38e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.337618788871916
+[ Info:   Step 7960: vol_sum=4.3825e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.33720948589083
+[ Info:   Step 7970: vol_sum=4.3849e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3367985194146055
+[ Info:   Step 7980: vol_sum=4.3874e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3365670245002224
+[ Info:   Step 7990: vol_sum=4.3899e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.336189021430333
+[ Info:   step= 8000  t=27718.7s  dt=2.34s  wet=29901  max_depth=5.441m  domain_vol=4.3918728e6m┬│  vol_removed=1.2788667e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8000: vol_sum=4.3924e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.335697863218016
+[ Info:   Step 8010: vol_sum=4.3948e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3352066173479664
+[ Info:   Step 8020: vol_sum=4.3973e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3347709864085715
+[ Info:   Step 8030: vol_sum=4.3997e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.334378521009028
+[ Info:   Step 8040: vol_sum=4.4022e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3339850948797856
+[ Info:   step= 8050  t=27835.4s  dt=2.33s  wet=29901  max_depth=5.45m  domain_vol=4.4041774e6m┬│  vol_removed=1.2904432e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8050: vol_sum=4.4047e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.333653816788498
+[ Info:   Step 8060: vol_sum=4.4071e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3334131454024862
+[ Info:   Step 8070: vol_sum=4.4096e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3330103980695376
+[ Info:   Step 8080: vol_sum=4.412e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3325148915066833
+[ Info:   Step 8090: vol_sum=4.4145e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.332036741620783
+[ Info:   step= 8100  t=27952.1s  dt=2.33s  wet=29901  max_depth=5.459m  domain_vol=4.4164392e6m┬│  vol_removed=1.3020434e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8100: vol_sum=4.4169e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3317641448953372
+[ Info:   Step 8110: vol_sum=4.4194e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3315639819589005
+[ Info:   Step 8120: vol_sum=4.4218e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3312007326274826
+[ Info:   Step 8130: vol_sum=4.4243e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.33083519218631
+[ Info:   Step 8140: vol_sum=4.4267e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3304493727971702
+[ Info:   step= 8150  t=28068.6s  dt=2.33s  wet=29901  max_depth=5.468m  domain_vol=4.4286576e6m┬│  vol_removed=1.313669e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8150: vol_sum=4.4291e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.329958675600853
+[ Info:   Step 8160: vol_sum=4.4316e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3295841269993005
+[ Info:   Step 8170: vol_sum=4.434e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.329309398102242
+[ Info:   Step 8180: vol_sum=4.4364e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3290116514958688
+[ Info:   Step 8190: vol_sum=4.4389e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.328647306663995
+[ Info:   step= 8200  t=28185.1s  dt=2.33s  wet=29901  max_depth=5.477m  domain_vol=4.4408304e6m┬│  vol_removed=1.3253212e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8200: vol_sum=4.4413e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.32828305512208
+[ Info:   Step 8210: vol_sum=4.4437e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3279218555292966
+[ Info:   Step 8220: vol_sum=4.4462e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.327560427029479
+[ Info:   Step 8230: vol_sum=4.4486e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3271987450941034
+[ Info:   Step 8240: vol_sum=4.451e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3268394336497535
+[ Info:   step= 8250  t=28301.5s  dt=2.33s  wet=29901  max_depth=5.486m  domain_vol=4.4529657e6m┬│  vol_removed=1.3369931e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8250: vol_sum=4.4534e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3264835959360224
+[ Info:   Step 8260: vol_sum=4.4559e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.326123906063273
+[ Info:   Step 8270: vol_sum=4.4583e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3257678337163266
+[ Info:   Step 8280: vol_sum=4.4607e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.325421750088726
+[ Info:   Step 8290: vol_sum=4.4631e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3251237554642588
+[ Info:   step= 8300  t=28417.7s  dt=2.32s  wet=29901  max_depth=5.494m  domain_vol=4.4650519e6m┬│  vol_removed=1.348696e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8300: vol_sum=4.4655e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.324822070067679
+[ Info:   Step 8310: vol_sum=4.4679e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3245247105908993
+[ Info:   Step 8320: vol_sum=4.4704e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.324233227655393
+[ Info:   Step 8330: vol_sum=4.4728e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3239351792531653
+[ Info:   Step 8340: vol_sum=4.4752e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3236428075636377
+[ Info:   step= 8350  t=28533.9s  dt=2.32s  wet=29901  max_depth=5.503m  domain_vol=4.4771066e6m┬│  vol_removed=1.3604147e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8350: vol_sum=4.4776e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3233557187136262
+[ Info:   Step 8360: vol_sum=4.48e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3230630741564027
+[ Info:   Step 8370: vol_sum=4.4824e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.322737302853286
+[ Info:   Step 8380: vol_sum=4.4848e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3223787690247812
+[ Info:   Step 8390: vol_sum=4.4872e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.322024816576539
+[ Info:   step= 8400  t=28650.1s  dt=2.32s  wet=29901  max_depth=5.513m  domain_vol=4.4891133e6m┬│  vol_removed=1.3721656e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8400: vol_sum=4.4896e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.321676410781091
+[ Info:   Step 8410: vol_sum=4.492e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3213207990569935
+[ Info:   Step 8420: vol_sum=4.4944e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3209713313491216
+[ Info:   Step 8430: vol_sum=4.4968e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.320627141520686
+[ Info:   Step 8440: vol_sum=4.4992e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.320275887142333
+[ Info:   step= 8450  t=28766.1s  dt=2.32s  wet=29901  max_depth=5.522m  domain_vol=4.5010856e6m┬│  vol_removed=1.3839332e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8450: vol_sum=4.5016e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3199287596829437
+[ Info:   Step 8460: vol_sum=4.5039e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.319586563654123
+[ Info:   Step 8470: vol_sum=4.5063e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3192409455117025
+[ Info:   Step 8480: vol_sum=4.5087e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.318896323269685
+[ Info:   Step 8490: vol_sum=4.5111e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.318555676222746
+[ Info:   step= 8500  t=28882.1s  dt=2.32s  wet=29901  max_depth=5.531m  domain_vol=4.5130115e6m┬│  vol_removed=1.3957294e6m┬│  mb_err=0.0m┬│
+[ Info:   Step 8500: vol_sum=4.5135e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.318217539623837
+[ Info:   Step 8510: vol_sum=4.5159e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.317876063098063
+[ Info:   Step 8520: vol_sum=4.5182e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3175376134673127
+[ Info:   Step 8530: vol_sum=4.5206e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3172039276866623
+[ Info:   Step 8540: vol_sum=4.523e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3168675950805477
+[ Info:   step= 8550  t=28997.9s  dt=2.32s  wet=29901  max_depth=5.54m  domain_vol=4.5249015e6m┬│  vol_removed=1.4075442e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8550: vol_sum=4.5254e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3165335910453777
+[ Info:   Step 8560: vol_sum=4.5277e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3162038079812195
+[ Info:   Step 8570: vol_sum=4.5301e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3158745432031376
+[ Info:   Step 8580: vol_sum=4.5325e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3155442938857487
+[ Info:   Step 8590: vol_sum=4.5349e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.315218246123821
+[ Info:   step= 8600  t=29113.7s  dt=2.31s  wet=29901  max_depth=5.549m  domain_vol=4.5367503e6m┬│  vol_removed=1.4193832e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8600: vol_sum=4.5372e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3148945964927727
+[ Info:   Step 8610: vol_sum=4.5396e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.314569250245247
+[ Info:   Step 8620: vol_sum=4.542e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.314244163571044
+[ Info:   Step 8630: vol_sum=4.5443e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.313923744497972
+[ Info:   Step 8640: vol_sum=4.5467e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.313602228611952
+[ Info:   step= 8650  t=29229.4s  dt=2.31s  wet=29901  max_depth=5.559m  domain_vol=4.5485614e6m┬│  vol_removed=1.4312432e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8650: vol_sum=4.549e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.313282529557366
+[ Info:   Step 8660: vol_sum=4.5514e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3129762552126802
+[ Info:   Step 8670: vol_sum=4.5538e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.312670965232926
+[ Info:   Step 8680: vol_sum=4.5561e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3123737588332185
+[ Info:   Step 8690: vol_sum=4.5585e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.312071524985349
+[ Info:   step= 8700  t=29345.1s  dt=2.31s  wet=29901  max_depth=5.569m  domain_vol=4.5603362e6m┬│  vol_removed=1.4431236e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8700: vol_sum=4.5608e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3117836469256074
+[ Info:   Step 8710: vol_sum=4.5632e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.311562460995102
+[ Info:   Step 8720: vol_sum=4.5655e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3112558761664497
+[ Info:   Step 8730: vol_sum=4.5679e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.310955042226361
+[ Info:   Step 8740: vol_sum=4.5702e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.310654435470323
+[ Info:   step= 8750  t=29460.6s  dt=2.31s  wet=29901  max_depth=5.578m  domain_vol=4.5720721e6m┬│  vol_removed=1.4550282e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8750: vol_sum=4.5725e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3103530181319756
+[ Info:   Step 8760: vol_sum=4.5749e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.310052802397598
+[ Info:   Step 8770: vol_sum=4.5772e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.309872961967541
+[ Info:   Step 8780: vol_sum=4.5796e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3097663653994944
+[ Info:   Step 8790: vol_sum=4.5819e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3096560586429256
+[ Info:   step= 8800  t=29576.1s  dt=2.31s  wet=29901  max_depth=5.588m  domain_vol=4.5837775e6m┬│  vol_removed=1.4669506e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8800: vol_sum=4.5842e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3095384110875403
+[ Info:   Step 8810: vol_sum=4.5866e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.309404317702795
+[ Info:   Step 8820: vol_sum=4.5889e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.309308388631977
+[ Info:   Step 8830: vol_sum=4.5913e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3091933395584445
+[ Info:   Step 8840: vol_sum=4.5936e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3090702538158747
+[ Info:   step= 8850  t=29691.6s  dt=2.31s  wet=29901  max_depth=5.597m  domain_vol=4.595447e6m┬│  vol_removed=1.4789026e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8850: vol_sum=4.5959e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.308942903577191
+[ Info:   Step 8860: vol_sum=4.5983e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.308847095009449
+[ Info:   Step 8870: vol_sum=4.6006e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.308731186333414
+[ Info:   Step 8880: vol_sum=4.6029e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3083554397465167
+[ Info:   Step 8890: vol_sum=4.6052e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3078704427492545
+[ Info:   step= 8900  t=29807.0s  dt=2.31s  wet=29901  max_depth=5.606m  domain_vol=4.6070912e6m┬│  vol_removed=1.4908717e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8900: vol_sum=4.6076e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.307754005690513
+[ Info:   Step 8910: vol_sum=4.6099e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3076545221741585
+[ Info:   Step 8920: vol_sum=4.6122e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3075449675098954
+[ Info:   Step 8930: vol_sum=4.6145e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3074342983401523
+[ Info:   Step 8940: vol_sum=4.6169e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3073419465081257
+[ Info:   step= 8950  t=29922.4s  dt=2.31s  wet=29901  max_depth=5.615m  domain_vol=4.6186943e6m┬│  vol_removed=1.5028722e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 8950: vol_sum=4.6192e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.30721202011457
+[ Info:   Step 8960: vol_sum=4.6215e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.306947175319407
+[ Info:   Step 8970: vol_sum=4.6238e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3064568430960644
+[ Info:   Step 8980: vol_sum=4.6261e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3059390010275376
+[ Info:   Step 8990: vol_sum=4.6284e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3054223510393497
+[ Info:   step= 9000  t=30037.7s  dt=2.3s  wet=29901  max_depth=5.624m  domain_vol=4.6302692e6m┬│  vol_removed=1.5148875e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9000: vol_sum=4.6307e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.304945129285589
+[ Info:   Step 9010: vol_sum=4.633e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.304820049240073
+[ Info:   Step 9020: vol_sum=4.6354e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3046737575094904
+[ Info:   Step 9030: vol_sum=4.6377e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3045105975936635
+[ Info:   Step 9040: vol_sum=4.64e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3043523803558785
+[ Info:   step= 9050  t=30152.9s  dt=2.3s  wet=29901  max_depth=5.633m  domain_vol=4.6417992e6m┬│  vol_removed=1.5269314e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9050: vol_sum=4.6423e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3042297748354095
+[ Info:   Step 9060: vol_sum=4.6446e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.304088207768357
+[ Info:   Step 9070: vol_sum=4.6469e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3039231164719904
+[ Info:   Step 9080: vol_sum=4.6492e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.303775735469991
+[ Info:   Step 9090: vol_sum=4.6515e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.303590759507805
+[ Info:   step= 9100  t=30268.1s  dt=2.3s  wet=29901  max_depth=5.642m  domain_vol=4.6533057e6m┬│  vol_removed=1.5389912e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9100: vol_sum=4.6538e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3033383175111672
+[ Info:   Step 9110: vol_sum=4.6561e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.303083659339634
+[ Info:   Step 9120: vol_sum=4.6584e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3028383725070154
+[ Info:   Step 9130: vol_sum=4.6607e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.302584003665994
+[ Info:   Step 9140: vol_sum=4.663e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.302337411068668
+[ Info:   step= 9150  t=30383.2s  dt=2.3s  wet=29901  max_depth=5.65m  domain_vol=4.6647713e6m┬│  vol_removed=1.5510802e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9150: vol_sum=4.6652e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.302084822256778
+[ Info:   Step 9160: vol_sum=4.6675e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3018363959965846
+[ Info:   Step 9170: vol_sum=4.6698e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.301600095305699
+[ Info:   Step 9180: vol_sum=4.6721e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3013495003137803
+[ Info:   Step 9190: vol_sum=4.6744e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.301108198157027
+[ Info:   step= 9200  t=30498.3s  dt=2.3s  wet=29901  max_depth=5.659m  domain_vol=4.6762088e6m┬│  vol_removed=1.5631849e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9200: vol_sum=4.6767e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3008645960435556
+[ Info:   Step 9210: vol_sum=4.679e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.300626146758385
+[ Info:   Step 9220: vol_sum=4.6812e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.300419787266432
+[ Info:   Step 9230: vol_sum=4.6835e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.300328021622143
+[ Info:   Step 9240: vol_sum=4.6858e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.3002366591581525
+[ Info:   step= 9250  t=30613.3s  dt=2.3s  wet=29901  max_depth=5.668m  domain_vol=4.6876067e6m┬│  vol_removed=1.5753182e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9250: vol_sum=4.6881e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.300144231970865
+[ Info:   Step 9260: vol_sum=4.6904e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.300051065962845
+[ Info:   Step 9270: vol_sum=4.6926e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.299959058906211
+[ Info:   Step 9280: vol_sum=4.6949e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2998674433598025
+[ Info:   Step 9290: vol_sum=4.6972e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.299774635257474
+[ Info:   step= 9300  t=30728.3s  dt=2.3s  wet=29901  max_depth=5.677m  domain_vol=4.6989776e6m┬│  vol_removed=1.5874733e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9300: vol_sum=4.6994e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.299571666034679
+[ Info:   Step 9310: vol_sum=4.7017e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2992995204642495
+[ Info:   Step 9320: vol_sum=4.704e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2990266282192846
+[ Info:   Step 9330: vol_sum=4.7063e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.298753459846646
+[ Info:   Step 9340: vol_sum=4.7085e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2984768411935663
+[ Info:   step= 9350  t=30843.3s  dt=2.3s  wet=29901  max_depth=5.686m  domain_vol=4.7103104e6m┬│  vol_removed=1.5996562e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9350: vol_sum=4.7108e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.298199783002352
+[ Info:   Step 9360: vol_sum=4.713e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.297920866277371
+[ Info:   Step 9370: vol_sum=4.7153e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2976405758402945
+[ Info:   Step 9380: vol_sum=4.7176e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2973559300545685
+[ Info:   Step 9390: vol_sum=4.7198e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2970683687043008
+[ Info:   step= 9400  t=30958.1s  dt=2.3s  wet=29901  max_depth=5.695m  domain_vol=4.7216097e6m┬│  vol_removed=1.6118583e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9400: vol_sum=4.7221e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2967808202347366
+[ Info:   Step 9410: vol_sum=4.7243e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2964917450841393
+[ Info:   Step 9420: vol_sum=4.7266e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2962014637242083
+[ Info:   Step 9430: vol_sum=4.7288e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2959098723666753
+[ Info:   Step 9440: vol_sum=4.7311e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2956166910314733
+[ Info:   step= 9450  t=31072.9s  dt=2.3s  wet=29901  max_depth=5.704m  domain_vol=4.7328704e6m┬│  vol_removed=1.6240843e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9450: vol_sum=4.7333e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.295324849887274
+[ Info:   Step 9460: vol_sum=4.7356e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2950297782669487
+[ Info:   Step 9470: vol_sum=4.7378e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.294739551306795
+[ Info:   Step 9480: vol_sum=4.7401e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.294465448852889
+[ Info:   Step 9490: vol_sum=4.7423e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2942528829303552
+[ Info:   step= 9500  t=31187.7s  dt=2.29s  wet=29901  max_depth=5.714m  domain_vol=4.7440973e6m┬│  vol_removed=1.6363295e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9500: vol_sum=4.7446e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.293973678849462
+[ Info:   Step 9510: vol_sum=4.7468e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.293576062127365
+[ Info:   Step 9520: vol_sum=4.749e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2932822329023916
+[ Info:   Step 9530: vol_sum=4.7513e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.292987334053503
+[ Info:   Step 9540: vol_sum=4.7535e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.292694924550199
+[ Info:   step= 9550  t=31302.3s  dt=2.29s  wet=29901  max_depth=5.722m  domain_vol=4.7552874e6m┬│  vol_removed=1.6485964e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9550: vol_sum=4.7558e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.292397416996608
+[ Info:   Step 9560: vol_sum=4.758e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.292102409313193
+[ Info:   Step 9570: vol_sum=4.7602e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.291804369063544
+[ Info:   Step 9580: vol_sum=4.7625e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2915087790733186
+[ Info:   Step 9590: vol_sum=4.7647e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.291211508285842
+[ Info:   step= 9600  t=31416.9s  dt=2.29s  wet=29901  max_depth=5.731m  domain_vol=4.7664423e6m┬│  vol_removed=1.6608831e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9600: vol_sum=4.7669e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2909107913884337
+[ Info:   Step 9610: vol_sum=4.7691e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2906168647065406
+[ Info:   Step 9620: vol_sum=4.7714e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.290313471546756
+[ Info:   Step 9630: vol_sum=4.7736e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2900217466131734
+[ Info:   Step 9640: vol_sum=4.7758e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2897211760527036
+[ Info:   step= 9650  t=31531.4s  dt=2.29s  wet=29901  max_depth=5.74m  domain_vol=4.7775625e6m┬│  vol_removed=1.6731894e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9650: vol_sum=4.778e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2894298993191837
+[ Info:   Step 9660: vol_sum=4.7803e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2891331939809403
+[ Info:   Step 9670: vol_sum=4.7825e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.288837508339344
+[ Info:   Step 9680: vol_sum=4.7847e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2885445435286216
+[ Info:   Step 9690: vol_sum=4.7869e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.288239142503028
+[ Info:   step= 9700  t=31645.9s  dt=2.29s  wet=29901  max_depth=5.749m  domain_vol=4.7886485e6m┬│  vol_removed=1.6855147e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9700: vol_sum=4.7891e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2879599427764417
+[ Info:   Step 9710: vol_sum=4.7913e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2876591209014094
+[ Info:   Step 9720: vol_sum=4.7935e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2873840375053898
+[ Info:   Step 9730: vol_sum=4.7958e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2870871095637773
+[ Info:   Step 9740: vol_sum=4.798e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.286920583005634
+[ Info:   step= 9750  t=31760.2s  dt=2.29s  wet=29901  max_depth=5.757m  domain_vol=4.7997041e6m┬│  vol_removed=1.697856e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9750: vol_sum=4.8002e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.286755978981883
+[ Info:   Step 9760: vol_sum=4.8024e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2865920377421727
+[ Info:   Step 9770: vol_sum=4.8046e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2863675639576977
+[ Info:   Step 9780: vol_sum=4.8068e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2860755238572708
+[ Info:   Step 9790: vol_sum=4.809e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2858277990785556
+[ Info:   step= 9800  t=31874.5s  dt=2.29s  wet=29901  max_depth=5.766m  domain_vol=4.810727e6m┬│  vol_removed=1.7102191e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9800: vol_sum=4.8112e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2856325727623883
+[ Info:   Step 9810: vol_sum=4.8134e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.285437506534298
+[ Info:   Step 9820: vol_sum=4.8156e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2852438349589006
+[ Info:   Step 9830: vol_sum=4.8178e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2850628501623054
+[ Info:   Step 9840: vol_sum=4.82e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.284862056512923
+[ Info:   step= 9850  t=31988.8s  dt=2.28s  wet=29901  max_depth=5.774m  domain_vol=4.8217235e6m┬│  vol_removed=1.7225978e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9850: vol_sum=4.8222e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.28467350794643
+[ Info:   Step 9860: vol_sum=4.8244e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2844793297631956
+[ Info:   Step 9870: vol_sum=4.8266e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2842881712187793
+[ Info:   Step 9880: vol_sum=4.8288e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.284096934024652
+[ Info:   Step 9890: vol_sum=4.831e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.283922831730258
+[ Info:   step= 9900  t=32103.0s  dt=2.28s  wet=29901  max_depth=5.783m  domain_vol=4.8326871e6m┬│  vol_removed=1.7349995e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9900: vol_sum=4.8332e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.283798472016021
+[ Info:   Step 9910: vol_sum=4.8353e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2836720701239845
+[ Info:   Step 9920: vol_sum=4.8375e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.283541418035193
+[ Info:   Step 9930: vol_sum=4.8397e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2834083703073786
+[ Info:   Step 9940: vol_sum=4.8419e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2832821311039697
+[ Info:   step= 9950  t=32217.2s  dt=2.28s  wet=29901  max_depth=5.792m  domain_vol=4.8436261e6m┬│  vol_removed=1.7474184e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 9950: vol_sum=4.8441e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.283158951915547
+[ Info:   Step 9960: vol_sum=4.8463e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.283029308342732
+[ Info:   Step 9970: vol_sum=4.8485e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.282811223495221
+[ Info:   Step 9980: vol_sum=4.8506e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.282528541642506
+[ Info:   Step 9990: vol_sum=4.8528e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2822456392288464
+[ Info:   step=10000  t=32331.3s  dt=2.28s  wet=29901  max_depth=5.799m  domain_vol=4.8545293e6m┬│  vol_removed=1.7598647e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10000: vol_sum=4.855e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2819621762381694
+[ Info:   Step 10010: vol_sum=4.8572e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2818153798823264
+[ Info:   Step 10020: vol_sum=4.8594e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2816695817504384
+[ Info:   Step 10030: vol_sum=4.8615e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.281523000955386
+[ Info:   Step 10040: vol_sum=4.8637e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.281247503679508
+[ Info:   step=10050  t=32445.4s  dt=2.28s  wet=29901  max_depth=5.808m  domain_vol=4.8654041e6m┬│  vol_removed=1.7723284e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10050: vol_sum=4.8659e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.281077460257945
+[ Info:   Step 10060: vol_sum=4.868e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.280917272477723
+[ Info:   Step 10070: vol_sum=4.8702e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.28075591640765
+[ Info:   Step 10080: vol_sum=4.8724e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2805933561156593
+[ Info:   Step 10090: vol_sum=4.8745e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2804323105968534
+[ Info:   step=10100  t=32559.4s  dt=2.28s  wet=29901  max_depth=5.816m  domain_vol=4.8762397e6m┬│  vol_removed=1.7848221e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10100: vol_sum=4.8767e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.280272004933298
+[ Info:   Step 10110: vol_sum=4.8789e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.280119494365233
+[ Info:   Step 10120: vol_sum=4.881e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.27995959951675
+[ Info:   Step 10130: vol_sum=4.8832e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.279797404445108
+[ Info:   Step 10140: vol_sum=4.8854e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2796398547316667
+[ Info:   step=10150  t=32673.4s  dt=2.28s  wet=29901  max_depth=5.824m  domain_vol=4.8870481e6m┬│  vol_removed=1.7973348e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10150: vol_sum=4.8875e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2794800015189596
+[ Info:   Step 10160: vol_sum=4.8897e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2793211152873103
+[ Info:   Step 10170: vol_sum=4.8918e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.279161836348071
+[ Info:   Step 10180: vol_sum=4.894e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.279002891153581
+[ Info:   Step 10190: vol_sum=4.8961e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.278858469751827
+[ Info:   step=10200  t=32787.4s  dt=2.28s  wet=29901  max_depth=5.832m  domain_vol=4.8978161e6m┬│  vol_removed=1.8098799e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10200: vol_sum=4.8983e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2786925113998437
+[ Info:   Step 10210: vol_sum=4.9004e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.278535995174424
+[ Info:   Step 10220: vol_sum=4.9026e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.278378561453346
+[ Info:   Step 10230: vol_sum=4.9047e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2782754166531745
+[ Info:   Step 10240: vol_sum=4.9069e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2781884278419415
+[ Info:   step=10250  t=32901.3s  dt=2.28s  wet=29901  max_depth=5.84m  domain_vol=4.9085572e6m┬│  vol_removed=1.8224443e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10250: vol_sum=4.909e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.278075086038977
+[ Info:   Step 10260: vol_sum=4.9112e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2779468647432046
+[ Info:   Step 10270: vol_sum=4.9133e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.277837793869759
+[ Info:   Step 10280: vol_sum=4.9154e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2777749571810815
+[ Info:   Step 10290: vol_sum=4.9176e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2776713237540864
+[ Info:   step=10300  t=33015.2s  dt=2.28s  wet=29901  max_depth=5.849m  domain_vol=4.9192574e6m┬│  vol_removed=1.8350441e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10300: vol_sum=4.9197e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2775393813294285
+[ Info:   Step 10310: vol_sum=4.9219e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.27742199969102
+[ Info:   Step 10320: vol_sum=4.924e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2773308631464455
+[ Info:   Step 10330: vol_sum=4.9261e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.27725119030988
+[ Info:   Step 10340: vol_sum=4.9283e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2771384037736118
+[ Info:   step=10350  t=33129.1s  dt=2.28s  wet=29901  max_depth=5.855m  domain_vol=4.9299326e6m┬│  vol_removed=1.8476634e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10350: vol_sum=4.9304e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.277011614877783
+[ Info:   Step 10360: vol_sum=4.9325e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.276883692318262
+[ Info:   Step 10370: vol_sum=4.9347e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2767487344838213
+[ Info:   Step 10380: vol_sum=4.9368e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.276641623926637
+[ Info:   Step 10390: vol_sum=4.9389e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2765027478150266
+[ Info:   step=10400  t=33242.9s  dt=2.28s  wet=29900  max_depth=5.864m  domain_vol=4.9405654e6m┬│  vol_removed=1.8603193e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10400: vol_sum=4.941e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.276396257381777
+[ Info:   Step 10410: vol_sum=4.9432e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2762894879678925
+[ Info:   Step 10420: vol_sum=4.9453e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2761800402799146
+[ Info:   Step 10430: vol_sum=4.9474e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.275916845342731
+[ Info:   Step 10440: vol_sum=4.9495e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.275779676922005
+[ Info:   step=10450  t=33356.7s  dt=2.28s  wet=29900  max_depth=5.871m  domain_vol=4.9511715e6m┬│  vol_removed=1.872995e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10450: vol_sum=4.9516e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.275632223571009
+[ Info:   Step 10460: vol_sum=4.9538e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2753198865406694
+[ Info:   Step 10470: vol_sum=4.9559e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.275106094327952
+[ Info:   Step 10480: vol_sum=4.958e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2749718282680695
+[ Info:   Step 10490: vol_sum=4.9601e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2748563423031585
+[ Info:   step=10500  t=33470.4s  dt=2.27s  wet=29900  max_depth=5.88m  domain_vol=4.9617342e6m┬│  vol_removed=1.8857045e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10500: vol_sum=4.9622e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2747575443887276
+[ Info:   Step 10510: vol_sum=4.9643e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2746801548237556
+[ Info:   Step 10520: vol_sum=4.9664e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.274573856477239
+[ Info:   Step 10530: vol_sum=4.9685e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2744351486233034
+[ Info:   Step 10540: vol_sum=4.9706e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.274327679141342
+[ Info:   step=10550  t=33584.2s  dt=2.27s  wet=29900  max_depth=5.887m  domain_vol=4.9722718e6m┬│  vol_removed=1.898433e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10550: vol_sum=4.9727e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.274256637108329
+[ Info:   Step 10560: vol_sum=4.9748e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2741495747145177
+[ Info:   Step 10570: vol_sum=4.9769e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.274015497309223
+[ Info:   Step 10580: vol_sum=4.979e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2738802500587454
+[ Info:   Step 10590: vol_sum=4.9811e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2737466597017257
+[ Info:   step=10600  t=33697.9s  dt=2.27s  wet=29900  max_depth=5.894m  domain_vol=4.9827707e6m┬│  vol_removed=1.9111946e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10600: vol_sum=4.9832e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.27367837434594
+[ Info:   Step 10610: vol_sum=4.9853e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.273567362578274
+[ Info:   Step 10620: vol_sum=4.9874e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2734425910416403
+[ Info:   Step 10630: vol_sum=4.9895e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2733202052667614
+[ Info:   Step 10640: vol_sum=4.9916e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2732158282244
+[ Info:   step=10650  t=33811.5s  dt=2.27s  wet=29900  max_depth=5.902m  domain_vol=4.9932443e6m┬│  vol_removed=1.9239757e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10650: vol_sum=4.9937e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2730890861496724
+[ Info:   Step 10660: vol_sum=4.9958e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2729305546066807
+[ Info:   Step 10670: vol_sum=4.9979e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.272772393547024
+[ Info:   Step 10680: vol_sum=5.0e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2726148045508356
+[ Info:   Step 10690: vol_sum=5.0021e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.272457665064621
+[ Info:   step=10700  t=33925.2s  dt=2.27s  wet=29900  max_depth=5.909m  domain_vol=5.0036791e6m┬│  vol_removed=1.9367886e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10700: vol_sum=5.0041e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2723008824678748
+[ Info:   Step 10710: vol_sum=5.0062e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2721501295036686
+[ Info:   Step 10720: vol_sum=5.0083e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.27199991039854
+[ Info:   Step 10730: vol_sum=5.0104e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.271872976504723
+[ Info:   Step 10740: vol_sum=5.0125e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.271737864261918
+[ Info:   step=10750  t=34038.8s  dt=2.27s  wet=29900  max_depth=5.917m  domain_vol=5.0140861e6m┬│  vol_removed=1.9496215e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10750: vol_sum=5.0146e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2716037407451486
+[ Info:   Step 10760: vol_sum=5.0166e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.271468797631469
+[ Info:   Step 10770: vol_sum=5.0187e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.271296042177367
+[ Info:   Step 10780: vol_sum=5.0208e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.271063201455412
+[ Info:   Step 10790: vol_sum=5.0228e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2709096955101886
+[ Info:   step=10800  t=34152.3s  dt=2.27s  wet=29900  max_depth=5.924m  domain_vol=5.0244543e6m┬│  vol_removed=1.9624856e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10800: vol_sum=5.0249e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.270756383626049
+[ Info:   Step 10810: vol_sum=5.027e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2706048253600244
+[ Info:   Step 10820: vol_sum=5.0291e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.270465422177027
+[ Info:   Step 10830: vol_sum=5.0311e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.270304915018446
+[ Info:   Step 10840: vol_sum=5.0332e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.270152044561717
+[ Info:   step=10850  t=34265.8s  dt=2.27s  wet=29900  max_depth=5.931m  domain_vol=5.0347935e6m┬│  vol_removed=1.9753703e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10850: vol_sum=5.0353e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.269997389633085
+[ Info:   Step 10860: vol_sum=5.0373e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2698441667606413
+[ Info:   Step 10870: vol_sum=5.0394e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.269651113772856
+[ Info:   Step 10880: vol_sum=5.0414e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.269448537422596
+[ Info:   Step 10890: vol_sum=5.0435e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.269106480999024
+[ Info:   step=10900  t=34379.3s  dt=2.27s  wet=29900  max_depth=5.939m  domain_vol=5.0450934e6m┬│  vol_removed=1.9882855e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10900: vol_sum=5.0456e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.268895761547227
+[ Info:   Step 10910: vol_sum=5.0476e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2687054658983543
+[ Info:   Step 10920: vol_sum=5.0497e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2685828365459306
+[ Info:   Step 10930: vol_sum=5.0517e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2684729153685854
+[ Info:   Step 10940: vol_sum=5.0538e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2684037425163055
+[ Info:   step=10950  t=34492.8s  dt=2.27s  wet=29900  max_depth=5.945m  domain_vol=5.0553614e6m┬│  vol_removed=2.0012226e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 10950: vol_sum=5.0558e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2682908387583014
+[ Info:   Step 10960: vol_sum=5.0579e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2681670922723844
+[ Info:   Step 10970: vol_sum=5.0599e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.26804320170098
+[ Info:   Step 10980: vol_sum=5.062e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2679335933190874
+[ Info:   Step 10990: vol_sum=5.064e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.267862076649406
+[ Info:   step=11000  t=34606.2s  dt=2.27s  wet=29900  max_depth=5.953m  domain_vol=5.0655942e6m┬│  vol_removed=2.0141895e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11000: vol_sum=5.0661e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2677354346850325
+[ Info:   Step 11010: vol_sum=5.0681e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.267585794769774
+[ Info:   Step 11020: vol_sum=5.0701e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.267436397423881
+[ Info:   Step 11030: vol_sum=5.0722e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2672869007835943
+[ Info:   Step 11040: vol_sum=5.0742e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.267152610521199
+[ Info:   step=11050  t=34719.5s  dt=2.27s  wet=29900  max_depth=5.959m  domain_vol=5.0757975e6m┬│  vol_removed=2.0271793e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11050: vol_sum=5.0763e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.266996538946458
+[ Info:   Step 11060: vol_sum=5.0783e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2667478163628982
+[ Info:   Step 11070: vol_sum=5.0803e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.266454638646803
+[ Info:   Step 11080: vol_sum=5.0824e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2661628382563754
+[ Info:   Step 11090: vol_sum=5.0844e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2658725503567587
+[ Info:   step=11100  t=34832.8s  dt=2.27s  wet=29900  max_depth=5.966m  domain_vol=5.085963e6m┬│  vol_removed=2.0401963e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11100: vol_sum=5.0864e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2656983108580837
+[ Info:   Step 11110: vol_sum=5.0885e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.265560025461823
+[ Info:   Step 11120: vol_sum=5.0905e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2654220497371367
+[ Info:   Step 11130: vol_sum=5.0925e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2652854041299726
+[ Info:   Step 11140: vol_sum=5.0945e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2651485410606607
+[ Info:   step=11150  t=34946.1s  dt=2.27s  wet=29900  max_depth=5.973m  domain_vol=5.0960979e6m┬│  vol_removed=2.0532339e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11150: vol_sum=5.0966e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.265011082595249
+[ Info:   Step 11160: vol_sum=5.0986e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2648331795881425
+[ Info:   Step 11170: vol_sum=5.1006e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.264569617581268
+[ Info:   Step 11180: vol_sum=5.1026e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.264419344906153
+[ Info:   Step 11190: vol_sum=5.1046e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2642832853716626
+[ Info:   step=11200  t=35059.3s  dt=2.26s  wet=29900  max_depth=5.979m  domain_vol=5.1061975e6m┬│  vol_removed=2.0662984e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11200: vol_sum=5.1067e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2639752593715414
+[ Info:   Step 11210: vol_sum=5.1087e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2636575254752254
+[ Info:   Step 11220: vol_sum=5.1107e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2633428751784797
+[ Info:   Step 11230: vol_sum=5.1127e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2630265831554013
+[ Info:   Step 11240: vol_sum=5.1147e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.262712230251333
+[ Info:   step=11250  t=35172.5s  dt=2.26s  wet=29900  max_depth=5.986m  domain_vol=5.1162644e6m┬│  vol_removed=2.0793819e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11250: vol_sum=5.1167e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.26239844306554
+[ Info:   Step 11260: vol_sum=5.1187e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2620870741844366
+[ Info:   Step 11270: vol_sum=5.1207e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.261779167027997
+[ Info:   Step 11280: vol_sum=5.1227e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2615004682552087
+[ Info:   Step 11290: vol_sum=5.1248e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2613827484003934
+[ Info:   step=11300  t=35285.6s  dt=2.26s  wet=29900  max_depth=5.992m  domain_vol=5.1262926e6m┬│  vol_removed=2.0924891e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11300: vol_sum=5.1268e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.261279667882917
+[ Info:   Step 11310: vol_sum=5.1288e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2611714112450465
+[ Info:   Step 11320: vol_sum=5.1308e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2610475609281817
+[ Info:   Step 11330: vol_sum=5.1328e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2609161241914775
+[ Info:   Step 11340: vol_sum=5.1348e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2607943875144514
+[ Info:   step=11350  t=35398.6s  dt=2.26s  wet=29900  max_depth=5.999m  domain_vol=5.136293e6m┬│  vol_removed=2.1056164e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11350: vol_sum=5.1368e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2605112770568616
+[ Info:   Step 11360: vol_sum=5.1387e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.260264093933481
+[ Info:   Step 11370: vol_sum=5.1407e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2601210542479913
+[ Info:   Step 11380: vol_sum=5.1427e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.259985406862456
+[ Info:   Step 11390: vol_sum=5.1447e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.259851692882553
+[ Info:   step=11400  t=35511.6s  dt=2.26s  wet=29900  max_depth=6.005m  domain_vol=5.1462589e6m┬│  vol_removed=2.1187689e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11400: vol_sum=5.1467e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2597183562077836
+[ Info:   Step 11410: vol_sum=5.1487e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2595845256276696
+[ Info:   Step 11420: vol_sum=5.1507e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.2594511249179257
+[ Info:   Step 11430: vol_sum=5.1527e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.259317906351987
+[ Info:   Step 11440: vol_sum=5.1547e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.259184547295071
+[ Info:   step=11450  t=35624.6s  dt=2.26s  wet=29899  max_depth=6.012m  domain_vol=5.1561977e6m┬│  vol_removed=2.1319416e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11450: vol_sum=5.1567e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.2590516544546526
+[ Info:   Step 11460: vol_sum=5.1586e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.2589189936177934
+[ Info:   Step 11470: vol_sum=5.1606e6  src=  src_vol=Any[]  wet=29899 (non-src=29899)  dt=2.258786424403429
+[ Info:   Step 11480: vol_sum=5.1626e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.258555206304146
+[ Info:   Step 11490: vol_sum=5.1646e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2584136528552254
+[ Info:   step=11500  t=35737.5s  dt=2.26s  wet=29900  max_depth=6.018m  domain_vol=5.1661024e6m┬│  vol_removed=2.1451412e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11500: vol_sum=5.1666e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2582722654202185
+[ Info:   Step 11510: vol_sum=5.1685e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2581311665737323
+[ Info:   Step 11520: vol_sum=5.1705e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2578834485853805
+[ Info:   Step 11530: vol_sum=5.1725e6  src=  src_vol=Any[]  wet=29900 (non-src=29900)  dt=2.2575691507452906
+[ Info:   Step 11540: vol_sum=5.1745e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2574318283727965
+[ Info:   step=11550  t=35850.4s  dt=2.26s  wet=29901  max_depth=6.024m  domain_vol=5.1759792e6m┬│  vol_removed=2.1583593e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11550: vol_sum=5.1764e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2572948061118994
+[ Info:   Step 11560: vol_sum=5.1784e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2571582173988274
+[ Info:   Step 11570: vol_sum=5.1804e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2570216853477474
+[ Info:   Step 11580: vol_sum=5.1824e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.256885089623594
+[ Info:   Step 11590: vol_sum=5.1843e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2567482829203844
+[ Info:   step=11600  t=35963.3s  dt=2.26s  wet=29901  max_depth=6.031m  domain_vol=5.1858213e6m┬│  vol_removed=2.1716038e6m┬│  mb_err=-0.0m┬│
+[ Info:   Step 11600: vol_sum=5.1863e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.2566117141114383
+[ Info:   Step 11610: vol_sum=5.1883e6  src=  src_vol=Any[]  wet=29901 (non-src=29901)  dt=2.256475319481742
+[ Info: Simulation finished at t=36000.0s  (11617 steps)
+[ Info: HDF5 output: 61 frames ÔåÆ D:\FloodA5\test\carlisle\carlisle_diamond_res18.h5
+
+FloodA5 ÔÇö Run Summary
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Phase                          Wall time   % total
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Mesh load / generate              5.89 s      3.5%
+DEM sampling                      < 1 ms      0.0%
+SGS table build                   < 1 ms      0.0%
+Flow model init                    3.3 s      2.0%
+Source / BC setup                  17 ms      0.0%
+Simulation                        2m 40s     94.6%
+HDF5 output (cumul.)              2.88 s      1.7%
+Visualiser keepalive              < 1 ms      0.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Total wall time                   2m 49s    100.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  Cells          : 29902
+  Steps          : 11617  (72.5 steps/wall-s)
+  Sim speed      : 224.8 sim-hrs/wall-hr  (10.0 sim-hrs in 2m 40s)
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+
+Ôöî Info: FloodA5 model finished.
+Ôöö   Dates.now() = 2026-08-22T20:02:42.744

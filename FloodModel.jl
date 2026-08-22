@@ -386,6 +386,30 @@ mutable struct FlowState
     mom_weights    :: Matrix{Float64}
     # :edge (legacy, default) or :cell (Stage 2). Set via --momentum-model.
     momentum_model :: Symbol
+    # ── Diamond face-flux method (Phase C, directional-bias-reformulation) ──
+    # Selects how dWSE_n is constructed when gradient_correction is true:
+    #   :legacy  (default) — existing c·(wse_ci-wse_cj) − alpha·L·(∇WSE_f·V̂)
+    #                         WLSQ+skew formula (step_standard! Phase A, as-is)
+    #   :diamond            — B2/B3 diamond face-normal derivative, computed
+    #                         directly per edge (mesh/DiamondFlux.jl); the
+    #                         actual architectural fix per
+    #                         FloodA5_DirectionalBias_ReformulationPlan_v4.md
+    #                         §0.1 — no cell-averaged-then-projected gradient.
+    # Set via --face-flux-method. Independent of momentum_model and
+    # gradient_correction_alpha (both still apply to the :legacy path only;
+    # the diamond path has no alpha — B1 §3.3 proved the full V̂ term is
+    # exact, not a tunable correction).
+    face_flux_method :: Symbol
+    # diamond_table: DiamondFluxTable when face_flux_method == :diamond,
+    # `nothing` otherwise (including for :legacy — the table is NOT built
+    # unconditionally, unlike wlsq_weights, since it is meaningfully more
+    # expensive to construct — vertex-table Dict build — and per-edge
+    # `valid[e]` is edge-specific, not a cheap always-safe placeholder like
+    # a zero-filled matrix). Typed `Any` to avoid a forward type-reference
+    # from FlowState (defined early in this file) to DiamondFluxTable
+    # (defined in mesh/DiamondFlux.jl, included later) — same pattern
+    # already used for `sgs_tables`/`ghost_edges`/`ghost_cell_bc`.
+    diamond_table :: Any
 end
 
 # ---------------------------------------------------------------------------
@@ -1509,7 +1533,8 @@ function initialise_flow_model(mesh::A5Mesh,
                                 q_centre_theta            :: Float64 = 0.9,
                                 gradient_correction       :: Bool    = true,
                                 gradient_correction_alpha :: Float64 = 1.0,
-                                momentum_model            :: Symbol  = :edge)::FlowState
+                                momentum_model            :: Symbol  = :edge,
+                                face_flux_method          :: Symbol  = :legacy)::FlowState
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1697,6 +1722,21 @@ function initialise_flow_model(mesh::A5Mesh,
           (momentum_model == :cell ? " (momentum_model=cell: active)" :
                                     " (momentum_model=edge: precomputed but inactive)")
 
+    # ── Diamond face-flux table (Phase C, directional-bias-reformulation) ──
+    # Built only when explicitly requested — unlike wlsq_weights, this is
+    # not cheap enough (vertex-table Dict construction) to build
+    # unconditionally on every run. `nothing` when face_flux_method ==
+    # :legacy, matching the existing "safe placeholder when unused" pattern.
+    # See mesh/DiamondFlux.jl and FloodA5_PhaseB_Complete_PhaseC_Handoff.md.
+    diamond_table = if face_flux_method === :diamond
+        t_dia = time()
+        dt_table = build_diamond_flux_table(mesh.cells, edges)
+        @info "Diamond flux table built in $(round(time()-t_dia, digits=3))s"
+        dt_table
+    else
+        nothing
+    end
+
     return FlowState(
         ids,
         zeros(Float64, n),
@@ -1727,6 +1767,8 @@ function initialise_flow_model(mesh::A5Mesh,
         cell_edge_index,
         mom_weights,
         momentum_model,
+        face_flux_method,
+        diamond_table,
     )
 end
 
@@ -1748,6 +1790,7 @@ initialise_flow_model(mesh::A5Mesh) = initialise_flow_model(mesh, StandardFlow()
 # ENV note: this include contains only definitions — no top-level execution.
 
 include(joinpath(@__DIR__, "surfacewater", "flow2d.jl"))
+include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 
 
 """
@@ -2245,11 +2288,38 @@ function step_standard!(state::FlowState, dt::Float64)
             # is trivially mirror-symmetric by the same construction) and
             # with the real-mesh planar-symmetry dt sweep before flipping
             # gradient_correction's default.
-            gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
-            gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = edges.cos_theta[e] * (wse_ci - wse_cj) -
-                       state.gradient_correction_alpha * edges.L[e] * Vhat_dot
+            #
+            # ── Diamond face-flux method (Phase C, directional-bias- ─────
+            # reformulation, see mesh/DiamondFlux.jl and
+            # FloodA5_PhaseB_Complete_PhaseC_Handoff.md). When
+            # face_flux_method == :diamond, dWSE_n is instead constructed
+            # directly per edge from the B2/B3 diamond face-normal
+            # derivative — no cell-averaged-then-projected gradient (gx_f/
+            # gy_f below) is involved for that edge at all. This is NOT a
+            # new flux kernel: FloodA5_PhaseB_B1_FaceFluxEquation.md §3.3
+            # proves dWSE_n = -L·g_n is exact for ANY exact gradient
+            # source, so the diamond gradient plugs directly into the same
+            # _bates_flux_limited_corrected call below.
+            #
+            # Falls back to the legacy WLSQ+skew construction (unchanged,
+            # below) whenever face_flux_method == :legacy, OR when
+            # face_flux_method == :diamond but this specific edge's
+            # diamond record is invalid (diamond_dWSE_n returns NaN — see
+            # DiamondFluxTable's docstring for when this occurs; expected
+            # to be extremely rare, ~1 edge in 74,000 on the Carlisle
+            # mesh in the Phase B empirical verification).
+            dWSE_n = NaN
+            if state.face_flux_method === :diamond && state.diamond_table !== nothing
+                dWSE_n = diamond_dWSE_n(state.diamond_table, e, wse_ci, wse_cj,
+                                         wse_all, edges.L[e])
+            end
+            if isnan(dWSE_n)
+                gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
+                gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
+                Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
+                dWSE_n   = edges.cos_theta[e] * (wse_ci - wse_cj) -
+                           state.gradient_correction_alpha * edges.L[e] * Vhat_dot
+            end
             h_flow = max(wse_ci, wse_cj) - edges.sill[e]
 
             Q, q_stored = _bates_flux_limited_corrected(
@@ -2882,6 +2952,7 @@ function run_flood_model(;
     gradient_correction       :: Bool    = true,
     gradient_correction_alpha :: Float64 = 1.0,
     momentum_model            :: Symbol  = :edge,
+    face_flux_method          :: Symbol  = :legacy,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -3094,14 +3165,16 @@ function run_flood_model(;
                                         q_centre_theta            = q_centre_theta,
                                         gradient_correction       = gradient_correction,
                                         gradient_correction_alpha = gradient_correction_alpha,
-                                        momentum_model            = momentum_model)
+                                        momentum_model            = momentum_model,
+                                        face_flux_method          = face_flux_method)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n), q_centre_theta = $(q_centre_theta), " *
           "gradient_correction = $(gradient_correction), " *
           "alpha = $(gradient_correction_alpha), " *
-          "momentum_model = $(momentum_model))"
+          "momentum_model = $(momentum_model), " *
+          "face_flux_method = $(face_flux_method))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3402,6 +3475,26 @@ Flow model options:
                             _manning_flux_ra) — uncorrected; retained for
                             A/B benchmarking against the corrected scheme.
                      See FloodA5_NonOrthogonal_Correction_Plan.md.
+  --face-flux-method legacy|diamond
+                     Selects how dWSE_n (the corrected driving head) is
+                     constructed when --gradient-correction is on. Only
+                     meaningful together with --gradient-correction on.
+                       legacy   (default) existing cell-centred WLSQ
+                                gradient, face-averaged then skewness-
+                                corrected — the flow-direction-fixes
+                                formula.
+                       diamond  B2/B3 diamond face-normal derivative,
+                                computed directly per edge from the two
+                                adjacent cells and the edge's own two
+                                shared vertices — no cell-averaged-then-
+                                projected gradient. The architectural fix
+                                from the directional-bias-reformulation
+                                plan (Phase C). Falls back to the legacy
+                                formula automatically on any individual
+                                edge whose diamond record is degenerate
+                                (expected to be extremely rare).
+                     See FloodA5_DirectionalBias_ReformulationPlan_v4.md
+                     and FloodA5_PhaseB_Complete_PhaseC_Handoff.md.
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
@@ -3781,6 +3874,7 @@ function main(args=String[])
     gradient_correction_val,       args = _pop_flag(args, "--gradient-correction")
     gradient_correction_alpha_val, args = _pop_flag(args, "--gradient-correction-alpha")
     momentum_model_val,            args = _pop_flag(args, "--momentum-model")
+    face_flux_method_val,          args = _pop_flag(args, "--face-flux-method")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -3836,6 +3930,26 @@ function main(args=String[])
             print_help(1)
         end
         a
+    end
+
+    # --face-flux-method legacy|diamond  (default: legacy — existing WLSQ+
+    # skew dWSE_n construction, unchanged behaviour). Only meaningful when
+    # --gradient-correction is on; a diamond selection with gradient
+    # correction off is accepted (it's simply a no-op, same as any other
+    # gradient-correction-dependent flag combination) rather than erroring,
+    # to avoid an awkward flag-ordering dependency in scripted A/B runs.
+    # See mesh/DiamondFlux.jl and
+    # FloodA5_PhaseB_Complete_PhaseC_Handoff.md (Phase C, Level 2).
+    face_flux_method = if face_flux_method_val === nothing
+        :legacy
+    elseif face_flux_method_val in ("legacy", "Legacy")
+        :legacy
+    elseif face_flux_method_val in ("diamond", "Diamond")
+        :diamond
+    else
+        println("ERROR: --face-flux-method requires 'legacy' or 'diamond' " *
+                "(got '$face_flux_method_val')\n")
+        print_help(1)
     end
 
     flow_method ∉ (:sgs, :standard) &&
@@ -3973,6 +4087,7 @@ function main(args=String[])
         gradient_correction       = gradient_correction,
         gradient_correction_alpha = gradient_correction_alpha,
         momentum_model            = momentum_model,
+        face_flux_method          = face_flux_method,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,

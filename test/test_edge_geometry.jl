@@ -598,7 +598,8 @@ function _minimal_state(; n_cells::Int,
                            q_centre_theta::Float64=0.9,
                            gradient_correction::Bool=false,
                            gradient_correction_alpha::Float64=1.0,
-                           momentum_model::Symbol=:edge)
+                           momentum_model::Symbol=:edge,
+                           face_flux_method::Symbol=:legacy)
     adj_matrix = zeros(Int, 5, n_cells)   # not used by step functions in these tests
 
     cell_edge_index = zeros(Int, N_SIDES, n_cells)
@@ -629,6 +630,7 @@ function _minimal_state(; n_cells::Int,
         zeros(Float64, n_cells), zeros(Float64, n_cells),   # qvec_u, qvec_v
         cell_edge_index, mom_weights,
         momentum_model,
+        face_flux_method, nothing,   # face_flux_method, diamond_table (Phase C)
     )
 end
 

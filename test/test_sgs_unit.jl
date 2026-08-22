@@ -188,6 +188,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
             zeros(Float64, n_cells), zeros(Float64, n_cells),   # qvec_u, qvec_v
             cell_edge_index, mom_weights,
             :edge,              # momentum_model — SGS path is :edge only
+            :legacy, nothing,   # face_flux_method, diamond_table (Phase C;
+                                 # step_sgs! doesn't read these yet)
         )
     end
 
