@@ -67,6 +67,7 @@ for i in 1:n
 end
 qhead = 1
 while qhead <= length(queue)
+    global qhead
     ci = queue[qhead]; qhead += 1
     d = hop_dist[ci]
     d >= max_hops && continue
