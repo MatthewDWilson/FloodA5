@@ -1,4 +1,8 @@
 .vscode/*
+.vscode/*
+.CondaPkg/
+__pycache__/
+Manifest.toml
 savedversions/
 test/**/*.h5
 test/**/*.parquet

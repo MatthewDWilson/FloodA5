@@ -112,6 +112,7 @@ hopdist_live   = Int[]
 n_live = 0
 
 for e in 1:ne
+    global n_live
     ci, cj = edges.cell_i[e], edges.cell_j[e]
     wse_ci, wse_cj = wse_all[ci], wse_all[cj]
     isfinite(wse_ci) && isfinite(wse_cj) || continue
