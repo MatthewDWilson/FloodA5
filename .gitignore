@@ -1,5 +1,4 @@
 .vscode/*
-.vscode/*
 .CondaPkg/
 __pycache__/
 Manifest.toml
