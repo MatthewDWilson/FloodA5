@@ -208,3 +208,35 @@ julia --threads auto --project=. FloodModel.jl `
     --output test/carlisle/carlisle_standard_res20_corrected.h5 `
     --output-interval 3600 `
     --gradient-correction on
+
+
+# Mesh resolution 18, standard flow (Diamond fix August 2026):
+julia --threads auto --project=. FloodModel.jl `
+    --meshload test/carlisle/carlisle_mesh18_standard.parquet `
+    --flow-model standard `
+    --inflow-bci test/carlisle/carlisle.bci `
+    --bc-epsg 27700 `
+    --manning-n 0.03 `
+    --sim-duration 432000 `
+    --dt-max 2 `
+    --face-flux-method diamond `
+    --momentum-model cell `
+    --output test/carlisle/carlisle_standard_res18_diamond_cellmom.h5 `
+    --output-interval 3600 `
+    --gradient-correction on
+
+# Mesh resolution 20, standard flow (Diamond fix August 2026):
+julia --threads auto --project=. FloodModel.jl `
+    --meshload test/carlisle/carlisle_mesh20_standard.parquet `
+    --flow-model standard `
+    --inflow-bci test/carlisle/carlisle.bci `
+    --bc-epsg 27700 `
+    --manning-n 0.03 `
+    --sim-duration 432000 `
+    --dt-max 2 `
+    --face-flux-method diamond `
+    --momentum-model cell `
+    --output test/carlisle/carlisle_standard_res20_diamond_cellmom.h5 `
+    --output-interval 3600 `
+    --gradient-correction on
+

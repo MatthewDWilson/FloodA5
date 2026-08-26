@@ -184,8 +184,8 @@ if (Test-PathOrSkip $squareMesh "Step 2: diamond table smoke test") {
 # =============================================================================
 Write-Section "Step 3: Planar-symmetry hypothesis test (diamond, dt_max=$DtMax)"
 
-$planarMesh    = Join-Path $RepoRoot "test\planar_embankment\planar_mesh18_std.parquet"
-$baselineH5    = Join-Path $RepoRoot "test\planar_embankment\planar_res18_std_baseline.h5"
+$planarMesh    = Join-Path $RepoRoot "test\planar_embankment\planar_mesh18_std_smooth.parquet"
+$baselineH5    = Join-Path $RepoRoot "test\planar_embankment\planar_slope_tests\flooda5_A01_baseline.h5"
 $diamondOutDir = Join-Path $RepoRoot "test\planar_embankment"
 $diamondH5     = Join-Path $diamondOutDir "planar_res18_diamond_dtmax$($DtMax).h5"
 $symmetryTest  = Join-Path $RepoRoot "test\test_planar_symmetry.jl"

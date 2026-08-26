@@ -14,3 +14,6 @@ zipfiles/
 test/planar_embankment/planar_embankment_dem.tif
 # Synthetic DEM test — generated files
 test/synthetic_dem/synthetic_dem.tif
+test/**/*.png
+testanimation/
+
