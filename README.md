@@ -1,5 +1,6 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
 ![Status: In Development](https://img.shields.io/badge/Status-Experimental-red)
+![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -16,11 +17,16 @@ Note: this model is still in an experimental phase and should not be used in pro
 Key characteristics:
 
 - **Uniform five-connectivity** — every interior cell has exactly five edge-sharing
-  neighbours. A5 pentagon edges are not perpendicular to the cell-centre-to-cell-centre
-  vector (non-orthogonality angle ~16–38°); FloodA5 corrects the resulting flow-direction
-  bias using weighted least-squares gradient reconstruction at every edge, every timestep.
-  On a square grid a circular flood front becomes a diamond; on the corrected A5 grid
-  it remains circular.
+  neighbours, eliminating the axis-aligned bias of a rectangular grid in principle.
+  In practice, A5 pentagon edges are not perpendicular to the cell-centre-to-cell-centre
+  vector (non-orthogonality angle ~16–38°), and the default Bates (2010) formulation —
+  derived for an orthogonal Cartesian grid — shows a measurable residual directional
+  bias as a result. **Three opt-in, experimental corrections are implemented and
+  under active validation** (a non-orthogonal gradient correction, a face-local
+  "diamond" reconstruction, and a cell-vector momentum representation); none is yet
+  the default, and none fully eliminates the bias on its own. See
+  [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §7–§8 for the full picture, current
+  recommendation, and open questions.
 - **Sub-Grid Sampling (SGS)** — hypsometric volume curves built from LiDAR allow
   partial wetting of cells and accurate routing through channels narrower than a cell.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
@@ -37,10 +43,31 @@ Key characteristics:
 | Document | Contents |
 |---|---|
 | [docs/METHODS.md](docs/METHODS.md) | Physics: A5 grid, SGS, Bates formulation, R-A flux, boundary conditions |
+| [docs/HYDRAULICS.md](docs/HYDRAULICS.md) | Full flux-kernel derivations, stability limiters, and the current state of the directional-bias correction work (opt-in flags, what's validated, what isn't) |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Full CLI reference, workflow walkthrough, worked examples |
 | [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md) | GeoParquet schema, HDF5 layout, `.bci`/`.bdy` format |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, extension points, developer orientation |
-| [docs/TEST_CASES.md](docs/TEST_CASES.md) | Square domain and Carlisle 2005 flood test cases |
+| [docs/A5_QUIRKS.md](docs/A5_QUIRKS.md) | A5-specific gotchas: dual sublattice, ID padding, mesh-generation thread safety |
+| [docs/TEST_CASES.md](docs/TEST_CASES.md) | Square domain, planar-slope, and Carlisle 2005 flood test cases |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [VERSIONING.md](VERSIONING.md) | This project's versioning policy |
+
+**Not included in this public release:** the project's session-by-session
+development history — implementation plans, debugging handovers, and
+detailed experimental records, including negative results and reversed
+decisions — is retained internally to support continued development and is
+available on request. The documents above summarise the current state of
+the model; they don't duplicate that history, but do point to it where it's
+relevant (e.g. `HYDRAULICS.md`'s directional-bias sections).
+
+**Current defaults:** the model runs with the original, uncorrected Bates
+(2010) formulation unless you explicitly opt in to the directional-bias
+corrections above (`--gradient-correction`, `--face-flux-method`,
+`--momentum-model` — standard-flow solver only, see
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md) §4.3a). This is deliberate: the
+corrections have real, measured benefit but are not yet validated on a
+real DEM and at least one combination is known to make the bias worse
+under some conditions. See [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §8.
 
 ---
 
@@ -127,7 +154,7 @@ appropriate to your domain and available DEM resolution.
 
 | Level | Approx. cell area | Cell spacing | Typical use |
 |-------|-------------------|--------------|-------------|
-| 10 | ~50 km² | ~7 km | Large catchment |
+| 10 | ~32.4 km² | ~5.7 km | Large catchment |
 | 12 | ~2 km² | ~1.4 km | Medium catchment |
 | 14 | ~13 ha | ~355 m | Urban / detailed |
 | 16 | ~8,000 m² | ~89 m | Small-scale urban |
@@ -153,13 +180,19 @@ useful for initial exploration or validation without a DEM.
 
 Both solvers use the Bates et al. (2010) inertial formulation with:
 - Wave-speed CFL timestep (Courant number 0.7)
-- Froude limiter (Fr ≤ 0.8)
-- Q-centred spatial momentum smoothing (θ = 0.9)
-- Consistent momentum state (q_prev matches actual transferred flux)
-- **WLSQ non-orthogonal gradient correction** — reconstructs the face-normal
-  pressure gradient via weighted least-squares at each edge, eliminating the
-  systematic flow-direction bias caused by A5's non-orthogonal edge geometry
-  (see [docs/METHODS.md §5.4](docs/METHODS.md))
+- Froude limiter (Fr ≤ 0.8) and a per-edge volume limiter
+- Q-centred spatial momentum smoothing (θ = 0.9, standard flow)
+- Consistent momentum state (`q_prev` matches actual transferred flux, both solvers)
+
+**Directional-bias correction (standard flow only, opt-in, off by default):**
+three independent corrections for the flow-direction bias caused by A5's
+non-orthogonal edge geometry are implemented and under active validation —
+a WLSQ gradient correction, a face-local "diamond" reconstruction, and a
+cell-vector momentum representation. None is enabled by default and none is
+used by the SGS solver. See
+[docs/HYDRAULICS.md §7–§8](docs/HYDRAULICS.md) for the full picture,
+current best-evidenced experimental configuration, and open items, and
+[docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md) for the CLI flags.
 
 See [docs/METHODS.md](docs/METHODS.md) for full details.
 
@@ -233,10 +266,98 @@ julia --project=. test/test_point_spread.jl \
 # Inflow and boundary condition tests
 julia --threads auto --project=. test/test_inflow_point.jl
 julia --threads auto --project=. test/test_open_boundary.jl
+
+# Cell-vector momentum and diamond face-flux unit tests (directional-bias-reformulation)
+julia --threads auto --project=. test/test_cell_momentum.jl
+julia --threads auto --project=. test/test_mirror_symmetry.jl
+julia --threads auto --project=. test/test_analytical_gradient_threeway.jl
 ```
 
-> **Note:** mesh generation must use `--threads 1` due to a thread-safety
-> constraint in the Python bridge. Simulation runs are safe with any thread count.
+> **Note:** `--threads 1` is the recommended default for mesh generation
+> (`--meshgen`), due to a known interaction between Julia's garbage
+> collector and the Python/GDAL bridge used for DEM sampling and mesh
+> pre-processing. `--threads auto` mesh generation has run successfully in
+> practice, but the failure mode this guards against is intermittent and
+> mesh-size-dependent, so a clean run isn't a guarantee at every scale — if
+> mesh generation ever crashes with a low-level fault (not a normal Julia
+> error), retry with `--threads 1`. Simulation runs (`--meshload`) are
+> unaffected either way and always safe with any thread count. See
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §6 for the full explanation.
+
+---
+
+## Development Roadmap
+
+FloodA5 is under active development. The list below reflects the areas of
+future work identified through the project's testing and development history
+so far — it is not a commitment or a timeline, and items may be reordered,
+combined, or dropped as understanding improves.
+
+**Physics and correctness**
+- Further testing and correction of the flow-direction bias described in
+  [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §7–§8, including investigation of
+  how the Froude/volume stability limiters interact with the directional-bias
+  corrections (currently the leading suspect for the bias that remains even
+  with correction enabled)
+- Extending the directional-bias corrections (or an SGS-appropriate
+  equivalent) to the SGS solver, which none of them currently touch
+- Making the open-boundary (ghost-edge) flux calculation consistent with
+  whichever interior flux method is selected, rather than always using the
+  uncorrected kernel at domain edges
+- Additional SGS methodology development, including further validation of
+  the hydraulic-radius (R-A) flux kernel and extending sub-grid sampling to
+  more general channel/culvert geometries
+- An independent, minimal Riemann-solver (e.g. HLL) reference implementation
+  on the same A5 mesh, to benchmark the reduced-complexity Bates/Manning
+  formulation against full shallow-water physics on cases where the two are
+  expected to agree closely
+- Analytical benchmarks not yet run against the corrected flux kernels:
+  Thacker (1981) planar-surface oscillation, circular dam-break (also the
+  key demonstration case for A5's rotational-symmetry advantage over a
+  rectangular grid)
+
+**Visualisation**
+- Continued development of the CesiumJS (or a similar) web-based viewer —
+  current known issues include a frame-update flash and inconsistent
+  `simcomplete` signalling for live updates (see
+  [docs/METHODS.md](docs/METHODS.md))
+
+**Longer-term**
+- Multi-resolution adaptive mesh refinement (Phase 3 in the project's
+  internal roadmap) — several current data structures (`EdgeList` ordering,
+  `adj_matrix` retained alongside the edge list, per-cell area storage) were
+  deliberately designed with this in mind, but no refinement logic exists yet
+- Additional boundary condition types: fixed/time-varying water-surface
+  elevation (tidal) boundaries — the `.bci` `HFIX`/`HVAR` codes are already
+  parsed but not yet implemented (see
+  [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md)) — plus spatially distributed
+  rainfall, infiltration, and evaporation sources
+  and additional hydrograph input formats (WaterML 2.0, CF-NetCDF)
+- NetCDF/UGRID output alongside the existing HDF5 format
+- GPU-accelerated flux solver kernel (GPU acceleration currently applies only
+  to SGS mesh pre-processing, not the simulation loop)
+- Ensemble and calibration tooling (Manning's n sweeps, skill scores such as
+  NSE, KGE, F2 against observed flood outlines)
+- LiDAR DEM ingestion and validation for a real-world New Zealand catchment,
+  as a companion to the Carlisle (UK) validation case
+
+This project also retains a detailed internal development history —
+including several investigations that did not lead anywhere directly useful,
+and are recorded as such — which is available on request for anyone
+continuing work in these areas.
+
+---
+
+## Acknowledgements
+
+FloodA5's development has been a close collaboration between the project's
+lead developer and Claude (Anthropic), used throughout as a coding and
+research assistant — including implementation, debugging, code review, test
+design, and the technical documentation in this repository. In the interests
+of transparency, this is noted here explicitly rather than left unstated.
+Scientific and engineering judgement, direction, and validation of results
+against real-world data and domain knowledge remain the responsibility of
+the project's human author(s).
 
 ---
 
@@ -259,7 +380,7 @@ Apache 2.0 — matching the A5 DGGS library licence.
 
 ## Citation
 
-If you use FloodA5in research, please cite the accompanying paper (in preparation).
+If you use FloodA5 in research, please cite the accompanying paper (in preparation).
 Details will be added here on publication.
 
 ---

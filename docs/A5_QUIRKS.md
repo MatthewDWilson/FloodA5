@@ -52,8 +52,8 @@ _norm_id(id::String) = A5Grid._to_hex(parse(UInt64, id, base=16))
 
 This normalisation is applied:
 - At the start of `initialise_flow_model` for all IDs from `mesh.cells`
-- Inside `_build_adjacency_grid_disk`, `_build_adjacency_matrix!`, `_build_edge_list`
-- In Python: `a5_bridge.py` writes IDs via `cell.id.hex()` padded to 16 chars
+- Inside `_build_adjacency_shared_vertices`, `_build_adjacency_matrix!`, `_build_edge_list`
+- In Python: `a5_bridge.py`'s `_cell_int_to_hex()` helper (`f"{int(cell_id) & 0xFFFFFFFFFFFFFFFF:016x}"`) formats every cell ID this way before it's written to the mesh output
 
 **Rule:** Never compare cell IDs without normalising both sides first.
 
@@ -146,7 +146,12 @@ At adjacent resolution levels, A5 cells obey a strict parent–child relationshi
 
 This property is exploited in Phase 3 (AMR) for conservative refinement: a coarse cell can be split into 5 fine cells, conserving volume, and reassembled without re-meshing.
 
-**Implication for current code:** `_edge_cos_theta` and `_edge_length_m` are already designed to accept cell pairs at different resolution levels (they take raw boundary arrays and centre coordinates). No interface change is needed for Phase 3.
+**Implication for current code:** `_edge_geometry` (which computes the
+non-orthogonality cosine and the tangential correction vector in one pass —
+see `HYDRAULICS.md` §7.1) is already designed to accept cell pairs at
+different resolution levels; it takes raw boundary arrays and centre
+coordinates, not a shared-resolution assumption. No interface change is
+needed for Phase 3.
 
 ---
 
@@ -169,7 +174,7 @@ All coordinates are in **EPSG:4326** (WGS84 geographic, lon/lat in degrees). The
 Area and distance computations use haversine/geodetic formulas:
 - `_haversine_m(lon1, lat1, lon2, lat2)` — great-circle distance
 - `_polygon_area_m2(boundary)` — Shoelace formula on an equirectangular projection centred on the polygon centroid (< 0.1% error at A5 res 14)
-- `_edge_cos_theta` — local equirectangular projection centred on the edge midpoint (< 0.05% error at res 14)
+- `_edge_geometry` — local equirectangular projection centred on the shared edge, computing both the non-orthogonality cosine and the tangential correction vector in a single pass (< 0.05% error at res 14; see `HYDRAULICS.md` §7.1 for what these quantities are used for)
 
 This avoids the need for projected CRS selection, which would introduce distortion over large or high-latitude domains.
 
@@ -182,7 +187,7 @@ Several design decisions in the current single-resolution code anticipate Phase 
 | Feature | Current state | Phase 3 relevance |
 |---------|--------------|-------------------|
 | `EdgeList.cell_i < cell_j` ordering | Enforced | Works for mixed-resolution cells as long as indices are consistent |
-| `_edge_cos_theta` accepts raw boundaries | Already takes raw arrays | Can handle coarse/fine boundary pairs |
+| `_edge_geometry` accepts raw boundaries | Already takes raw arrays | Can handle coarse/fine boundary pairs |
 | `adj_matrix` retained alongside EdgeList | Yes | Needed for refinement trigger queries (wet/dry front detection) |
 | `sgs_cell_area` stored in parquet | Yes | Cell area needed for conservative volume redistribution at refinement |
 | `FlowState.sgs_tables` is `Vector{Any}` | Placeholder | Will become `Vector{Union{SGSTable, Nothing}}` in Phase 3 |

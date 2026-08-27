@@ -281,97 +281,105 @@ cell's volume can leave via all five edges in a single timestep.
 
 ---
 
-### 5.4 Non-orthogonal gradient correction
+### 5.4 Directional bias and its correction — current status
 
 A5 pentagon edges are generally not perpendicular to the centre-to-centre vector
-**d**. Without correction, the face-normal pressure gradient — the term driving
-flux in eq. (1) — is approximated along **d** rather than along the true face
-normal **n̂**. On A5 cells, where the angle between **d** and **n̂** (the
-non-orthogonality angle θ) ranges from ~16° to ~38° (mean ~23°), this produces
-a systematic directional bias: point-source flood fronts are elongated rather
-than circular, and flow on a planar slope deviates significantly from the
-analytically expected downslope direction.
+**d**. Uncorrected, the face-normal driving term in eq. (1) is approximated
+along **d** rather than along the true face normal **n̂**. On A5 cells the
+angle between **d** and **n̂** (the non-orthogonality angle θ) ranges from
+~16° to ~38° (mean ~23°), and this produces a measurable systematic
+directional bias: point-source flood fronts are elongated rather than
+circular, and flow on a planar slope deviates from the analytically expected
+downslope direction.
 
-FloodA5 corrects this using **weighted least-squares (WLSQ) cell-centre gradient
-reconstruction**, following the approach of Jasak (1996) and Moukalled et al.
-(2016) for non-orthogonal finite-volume meshes.
+**This is an active area of work with three independent, opt-in corrections
+implemented and validated to different degrees. None is the default flow
+path.** The uncorrected legacy Bates (2010) kernel — `_bates_flux` /
+`_manning_flux_ra`, `cos θ`-scaled `L_eff`, per-edge scalar momentum — remains
+the default for **both** the standard and SGS solvers. This is a change from
+earlier project documentation, which at one point recorded gradient
+correction as "enabled by default"; that was corrected once several sessions
+of real-mesh testing (see `HYDRAULICS.md` §7.1) showed the picture was more complicated
+than initially thought, and the default was reverted to `off` pending further
+validation. **Only the standard-flow solver (`--flow-model standard`) is
+affected by any of the flags below — the SGS solver does not use any of
+them, regardless of setting.**
 
-#### Gradient reconstruction
+Full derivations, proofs, and the complete experimental record (including
+the dead ends) live in `HYDRAULICS.md` §5–§8. That document also notes where
+a fuller, session-by-session account is kept in the project's internal
+development history, for anyone doing further work in this area. This
+section gives the current summary only.
 
-At each timestep, before the flux loop, a 2D WSE gradient vector
-∇WSE_i = (∂WSE/∂x, ∂WSE/∂y) is reconstructed for every cell _i_ by solving:
+#### Correction 1 — WLSQ gradient + skewness term (`--face-flux-method legacy`)
 
-```
-minimise Σ_k w_k [(WSE_jk − WSE_i) − ∇WSE_i · (x_jk − x_i)]²
-```
+A weighted least-squares (WLSQ) gradient is reconstructed once per cell per
+timestep from its neighbours' WSE values, averaged onto each face, and
+decomposed into an orthogonal term (direct two-cell WSE difference) plus a
+tangential correction scaled by `--gradient-correction-alpha`. This was the
+first correction implemented and is described in full in `HYDRAULICS.md` §7.1.
 
-over all mesh neighbours j₁, …, j₅. The inverse-distance weights `w_k = 1/|x_k − x_i|²`
-down-weight distant neighbours. The solution (a 2×2 weighted normal equation system)
-depends only on cell geometry and is pre-computed once at model initialisation as a
-`(2 × 5)` projection matrix per cell (`wlsq_weights`). The per-timestep gradient
-computation is then a single matrix–vector multiply per cell — O(5 × n_cells), negligible
-compared to the flux loop.
+**Known limitation, found during multi-session real-mesh testing:** the
+single per-cell gradient is shared across all five of that cell's
+differently-oriented faces, and — at `alpha=1` (full correction), combined
+with per-edge momentum storage — was found to overshoot into a *mirrored*
+directional bias under sustained ponding, with a response to timestep size
+that is not simply "improves as dt→0" (see `HYDRAULICS.md` §7.1 for the
+detailed evidence). `alpha=0` (orthogonal term only) is smaller in effect but
+stable and non-flipping, and is the better-supported setting if this
+correction is used at all.
 
-#### Corrected driving head
+#### Correction 2 — Diamond face-flux reconstruction (`--face-flux-method diamond`)
 
-At each edge `e = (i, j)`, the standard `ΔWSE / L` gradient term is replaced by the
-non-orthogonal corrected value:
+A face-local reconstruction that builds a bespoke gradient for each edge
+directly from that edge's own two adjacent cell centres and its own two
+shared vertices — no cell-averaged gradient shared across faces. Proven
+exact for linear WSE fields (algebraic proof plus real-mesh confirmation to
+machine precision on 98.8% of edges; see `HYDRAULICS.md` §7). Selected via
+`--face-flux-method diamond` together with `--gradient-correction on`.
 
-```
-dWSE_n = c·(WSE_i − WSE_j) − L·(∇WSE_f · V̂)
-```
+#### Correction 3 — Cell-vector momentum (`--momentum-model cell`)
 
-where:
-- `c = d̂·n̂ = cos θ` (always ≥ 0 after orienting n̂ toward j)
-- `∇WSE_f = ½(∇WSE_i + ∇WSE_j)` (face-centre gradient by linear interpolation)
-- `V̂ = n̂ − c·d̂` (the tangential component of the face normal — the skewness
-  direction; pre-computed per edge as `skew_x`, `skew_y` in the `EdgeList`)
-- `L` is the centre-to-centre distance
+Independent of both correction terms above: replaces the five independent
+per-edge momentum scalars with a single 2D discharge vector per cell,
+reconstructed each step from all five face fluxes (Perot-style WLSQ),
+projected onto each face normal to supply `q_prev`. Empirically **the
+stronger of the levers tested** — in controlled planar-slope benchmarks it
+closed more of the measured bias on its own than either gradient correction
+alone. See `HYDRAULICS.md` §7.3.
 
-The first term `c·(WSE_i − WSE_j)` is the projection of the raw WSE difference
-onto the face normal; the second term `L·(∇WSE_f · V̂)` corrects for the lateral
-offset between the face midpoint and the point where **d** crosses the face. Together
-they reconstruct the face-normal gradient without the directional bias of the
-uncorrected scheme. For orthogonal edges, `V̂ = 0` and `c = 1`, so the formula
-reduces exactly to the standard `WSE_i − WSE_j`, confirming backward compatibility.
+#### Current empirical picture (planar-slope closed-domain benchmark)
 
-This replaces `dWSE / L_eff` in eq. (1) and eq. (2), and `L` is used as-is (no
-`cos θ` scaling). The same `_bates_flux_corrected` and `_manning_flux_ra_corrected`
-kernels are used for standard and SGS solvers respectively.
+| Configuration | N/S volume asymmetry, `\|asym\|` | Notes |
+|---|---|---|
+| Uncorrected (default) | 0.866–0.916 | Baseline |
+| `--gradient-correction on --gradient-correction-alpha 0.0` | ~0.85 | Small, stable, never flips |
+| `--gradient-correction on --gradient-correction-alpha 1.0` | flips sign, transient minimum near 0 | Larger effect, not production-safe as-is |
+| `--face-flux-method diamond --momentum-model cell` | ~0.61 | Best result found to date; still non-zero |
 
-#### Validated improvement
-
-On A5 meshes at resolution 16 (mean θ ≈ 23°, max θ ≈ 38°):
-
-| Test | Metric | Before correction | After correction |
-|---|---|---|---|
-| Point-spread (flat domain, point source) | Polsby–Popper circularity | 0.938 | **0.980** |
-| Point-spread | Directional front-radius CV | 0.137 | **0.055** |
-| Planar slope (0.1% E–W slope) | N/S volume asymmetry at 2 h | 0.254 | **0.066** |
-
-The non-orthogonality range on A5 meshes (max 38°) is well within the OpenFOAM
-"corrected scheme safe" envelope (≤70°), so no additional limiting of the correction
-term is required.
+None of these fully eliminate the bias. The most likely remaining cause,
+per `HYDRAULICS.md` §8, is the constitutive relationship between stored
+momentum and face flux (inherited from Bates 2010, derived for a
+2-flux-direction Cartesian cell, not re-derived for a 5-face polygon) —
+this is the subject of ongoing work, not a closed problem.
 
 #### Computational cost
 
-The correction adds one O(5 × n_cells) gradient reconstruction pass per timestep — a single multiply-accumulate loop over the neighbour structure, cheaper than the edge flux loop (O(2.4 × n_cells) edges but with heavier per-edge arithmetic). In practice the overhead is modest and solver-dependent:
-
-| Solver | Mesh | Overhead vs uncorrected |
-|---|---|---|
-| Standard | res-16, 1,958 cells | +15% simulation wall time |
-| Standard | res-18, 29,902 cells | +30% simulation wall time |
-| SGS | res-16, 1,958 cells | +11% simulation wall time |
-| SGS | res-18, 29,902 cells | +4% simulation wall time |
-
-The larger fractional overhead for the standard solver at res-18 reflects the fact that the corrected run takes slightly more steps (the correction shifts the effective CFL slightly), not a per-step cost difference. For the SGS solver the hypsometric table lookups dominate per-step cost, making the gradient pass negligible at both resolutions. All figures from Carlisle domain simulations (10 h, 50 mm/hr), validated 2026-07-02.
+Gradient correction (either method) adds one O(5 × n_cells) reconstruction
+pass per timestep on top of the flux loop; overhead of +11–30% wall time
+(depending on resolution) was measured in earlier testing against a shared
+kernel that was, at the time, also used by the SGS solver. That shared-kernel
+arrangement has since been superseded — SGS does not use gradient correction
+in the present codebase (§9.4 of `HYDRAULICS.md`) — so these figures are
+retained here for historical reference only, not as a current cost estimate.
 
 #### CLI control
 
-Gradient correction is enabled by default. It can be disabled for benchmarking
-or comparison via `--gradient-correction off`. The `--q-centre-theta` flag (default
-0.9) adjusts the Q-centred momentum smoothing weight (set to 1.0 to disable
-momentum smoothing entirely while retaining gradient correction).
+All of `--gradient-correction`, `--gradient-correction-alpha`,
+`--face-flux-method`, and `--momentum-model` default to the legacy,
+uncorrected behaviour. See `USER_GUIDE.md` §4.3a for the full flag reference,
+and `HYDRAULICS.md` §8 for the current recommended experimental
+configuration and its caveats.
 
 ---
 

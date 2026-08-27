@@ -17,10 +17,6 @@
 #     julia --project=. visualisation/view_h5_output.jl sim.h5 \
 #         --time 7200 --var depth
 #
-#   Interactive map at a specified figure resolution:
-#     julia --project=. visualisation/view_h5_output.jl sim.h5 \
-#         --resolution 1600x900
-#
 #   Export animation frames:
 #     julia --project=. visualisation/view_h5_output.jl sim.h5 \
 #         --animate \
@@ -29,22 +25,38 @@
 #         --var depth \
 #         --output-dir testanimation
 #
-#   Export animation using local East-North metre coordinates:
+#   Animation using local East/North metre coordinates:
 #     julia --project=. visualisation/view_h5_output.jl sim.h5 \
 #         --animate \
-#         --mesh test/carlisle/carlisle_mesh18_sgs.parquet \
-#         --frame-step 100 \
-#         --var depth \
-#         --output-dir testanimation \
+#         --mesh mesh.parquet \
 #         --local-units
+#
+#   Animation using a specified resolution:
+#     julia --project=. visualisation/view_h5_output.jl sim.h5 \
+#         --animate \
+#         --resolution 1920x1080
+#
+#   Animation using a specified primary colourmap:
+#     julia --project=. visualisation/view_h5_output.jl sim.h5 \
+#         --animate \
+#         --colormap viridis
+#
+#   Reverse colourmap:
+#     julia --project=. visualisation/view_h5_output.jl sim.h5 \
+#         --animate \
+#         --colormap -viridis
+#
+#   Display elevation beneath a depth threshold:
+#     julia --project=. visualisation/view_h5_output.jl sim.h5 \
+#         --animate \
+#         --var depth \
+#         --dry-threshold 0.001 \
+#         --dry-var elevation \
+#         --dry-colormap gray
 #
 # Animation mode renders the actual A5 pentagonal cell boundaries from the
 # supplied GeoParquet mesh. The HDF5 file deliberately does not contain mesh
 # geometry, so --mesh is required for --animate.
-#
-# By default animation geometry is plotted in geographic longitude/latitude
-# coordinates. Use --local-units to transform the geometry to a local
-# East-North coordinate system in metres centred on the simulation domain.
 #
 # Frames are written as:
 #     frame_000001.png
@@ -52,42 +64,6 @@
 #     ...
 #
 # They can subsequently be assembled into an MP4 with ffmpeg.
-#
-# CLI options:
-#
-#   --cell ID
-#       Cell to highlight and plot as a time series.
-#
-#   --var NAME
-#       Variable to display:
-#         depth, volume, saturation, velocity
-#
-#   --time SECONDS
-#       Requested time for the interactive map.
-#
-#   --animate
-#       Export a sequence of PNG animation frames instead of opening the
-#       interactive viewer.
-#
-#   --mesh PATH
-#       GeoParquet mesh containing the actual A5 cell boundaries.
-#       Required with --animate.
-#
-#   --frame-step N
-#       Output every Nth simulation frame. The final frame is always included.
-#
-#   --output-dir PATH
-#       Directory for animation frames. Default: animation
-#
-#   --resolution WIDTHxHEIGHT
-#       Figure/output resolution in pixels. Default: 1920x1080.
-#       Examples: 1920x1080, 1600x900, 1200x800.
-#
-#   --local-units
-#       For animation, transform mesh longitude/latitude coordinates to a
-#       local East-North coordinate system in metres. Without this flag,
-#       animation uses geographic longitude/latitude coordinates directly.
-#
 # =============================================================================
 
 using HDF5
@@ -106,7 +82,7 @@ const R_EARTH = 6_371_000.0
 
 
 # =============================================================================
-# CLI parsing
+# CLI parsing helpers
 # =============================================================================
 
 """
@@ -116,54 +92,93 @@ Examples:
     1400x820
     1920x1080
     1600X900
-    1600,900
-
-Returns:
-    (width, height)
 """
-function parse_resolution(spec::String)
-    s = strip(spec)
+function parse_resolution(s::String)
+    m = match(r"^(\d+)[xX](\d+)$", strip(s))
 
-    # Accept x, X, or comma as separator.
-    parts = split(s, r"[xX,]")
-
-    length(parts) == 2 ||
+    isnothing(m) &&
         error(
             "--resolution must have the form WIDTHxHEIGHT, " *
-            "for example 1400x820; got: $spec"
+            "e.g. 1400x820; got: $s"
         )
 
-    width = tryparse(Int, strip(parts[1]))
-    height = tryparse(Int, strip(parts[2]))
+    width = parse(Int, m.captures[1])
+    height = parse(Int, m.captures[2])
 
-    isnothing(width) &&
-        error("Invalid resolution width in '$spec'")
-
-    isnothing(height) &&
-        error("Invalid resolution height in '$spec'")
-
-    width > 0 ||
-        error("Resolution width must be greater than zero")
-
-    height > 0 ||
-        error("Resolution height must be greater than zero")
+    width > 0 || error("--resolution width must be greater than zero")
+    height > 0 || error("--resolution height must be greater than zero")
 
     return (width, height)
 end
 
+
+"""
+Return a Makie colourmap name and whether it should be reversed.
+
+A leading '-' means reverse the requested colourmap.
+
+Examples:
+    viridis  -> ("viridis", false)
+    -viridis -> ("viridis", true)
+"""
+function parse_colormap(s::String)
+    isempty(strip(s)) &&
+        error("Colourmap name cannot be empty")
+
+    s = strip(s)
+
+    if startswith(s, "-")
+        name = s[2:end]
+        isempty(name) &&
+            error("Invalid colourmap '-': specify a colourmap name")
+        return name, true
+    else
+        return s, false
+    end
+end
+
+
+"""
+Construct a Makie colourmap specification from a CLI colourmap name.
+
+A leading '-' requests the reversed colourmap.
+"""
+function resolve_colormap(s::String)
+    name, reversed = parse_colormap(s)
+
+    # Makie accepts colourmap names as strings/symbols. Convert to Symbol so
+    # invalid names generate a useful Makie error at the point of use.
+    cmap = Symbol(name)
+
+    return reversed ? Reverse(cmap) : cmap
+end
+
+
+# =============================================================================
+# CLI parsing
+# =============================================================================
 
 function parse_args(args)
     length(args) < 1 && error("""
         Usage:
           julia --project=. view_h5_output.jl <h5file>
               [--cell ID] [--var NAME] [--time SECONDS]
+              [--colormap NAME]
               [--resolution WIDTHxHEIGHT]
+              [--local-units]
 
         Animation:
           julia --project=. view_h5_output.jl <h5file>
               --animate --mesh MESH.parquet
-              [--frame-step N] [--var NAME] [--output-dir DIR]
-              [--resolution WIDTHxHEIGHT] [--local-units]
+              [--frame-step N]
+              [--var NAME]
+              [--output-dir DIR]
+              [--colormap NAME]
+              [--resolution WIDTHxHEIGHT]
+              [--local-units]
+              [--dry-threshold VALUE]
+              [--dry-var NAME]
+              [--dry-colormap NAME]
     """)
 
     h5file       = args[1]
@@ -176,10 +191,20 @@ function parse_args(args)
     frame_step   = 1
     output_dir   = "animation"
 
-    resolution   = (1920, 1080)
+    # Existing rendering options.
+    resolution   = (1400, 820)
     local_units  = false
 
+    # Primary colourmap.
+    colormap     = "turbo"
+
+    # Optional dry-cell/background rendering.
+    dry_threshold = nothing
+    dry_var       = nothing
+    dry_colormap  = "gray"
+
     i = 2
+
     while i <= length(args)
         arg = args[i]
 
@@ -225,22 +250,66 @@ function parse_args(args)
             local_units = true
             i += 1
 
+        elseif arg == "--colormap" && i < length(args)
+            colormap = args[i + 1]
+            i += 2
+
+        elseif arg == "--dry-threshold" && i < length(args)
+            dry_threshold = tryparse(Float64, args[i + 1])
+            isnothing(dry_threshold) &&
+                error(
+                    "--dry-threshold must be a number, " *
+                    "got: $(args[i + 1])"
+                )
+            i += 2
+
+        elseif arg == "--dry-var" && i < length(args)
+            dry_var = args[i + 1]
+            i += 2
+
+        elseif arg == "--dry-colormap" && i < length(args)
+            dry_colormap = args[i + 1]
+            i += 2
+
         else
             error("Unknown or incomplete argument: $arg")
         end
     end
 
+    # Dry-cell rendering requires both a threshold and a background variable.
+    if !isnothing(dry_threshold) && isnothing(dry_var)
+        error(
+            "--dry-threshold requires --dry-var. " *
+            "For example: --dry-threshold 0.001 --dry-var elevation"
+        )
+    end
+
+    if !isnothing(dry_var) && isnothing(dry_threshold)
+        error(
+            "--dry-var requires --dry-threshold. " *
+            "For example: --dry-threshold 0.001 --dry-var elevation"
+        )
+    end
+
+    dry_threshold !== nothing &&
+        dry_threshold < 0 &&
+        error("--dry-threshold must be zero or greater")
+
     return (
-        h5file      = h5file,
-        cell_id     = cell_id,
-        varname     = varname,
-        time_req    = time_req,
-        animate     = animate,
-        mesh_path   = mesh_path,
-        frame_step  = frame_step,
-        output_dir  = output_dir,
-        resolution  = resolution,
-        local_units = local_units,
+        h5file       = h5file,
+        cell_id      = cell_id,
+        varname      = varname,
+        time_req     = time_req,
+        animate      = animate,
+        mesh_path    = mesh_path,
+        frame_step   = frame_step,
+        output_dir   = output_dir,
+        resolution   = resolution,
+        local_units  = local_units,
+        colormap     = colormap,
+        dry_threshold = dry_threshold,
+        dry_var       = dry_var,
+        dry_colormap = dry_colormap,
     )
 end
 
@@ -395,9 +464,15 @@ function get_var(data, varname::String)
     varname == "velocity" &&
         return data.velocity, "Velocity (m/s)", "plasma"
 
+    # Elevation is primarily useful as a dry-cell/background variable.
+    varname == "elevation" &&
+        return repeat(reshape(data.elevs, 1, :), data.n_frames, 1),
+               "Elevation (m)",
+               "gray"
+
     error(
         "Unknown variable '$varname'. " *
-        "Choose: depth, volume, saturation, velocity"
+        "Choose: depth, volume, saturation, velocity, elevation"
     )
 end
 
@@ -457,13 +532,19 @@ approximation from cell centres is used for animation.
 """
 function get_boundary(df, row::Int)
     bnd = df[row, :boundary]
-    return [(Float64(v[1]), Float64(v[2])) for v in bnd]
+
+    return [
+        (Float64(v[1]), Float64(v[2]))
+        for v in bnd
+    ]
 end
 
 
 """
 Project geographic boundary vertices to a local East-North coordinate system
-centred on (cx, cy). This is the same local projection used by visualise_mesh.jl.
+centred on (cx, cy).
+
+This is the same local projection used by visualise_mesh.jl.
 """
 function to_local_m(
     boundary::Vector,
@@ -487,22 +568,15 @@ end
 
 
 """
-Return either geographic longitude/latitude coordinates or local East/North
-coordinates in metres, depending on the --local-units option.
+Return geographic boundary coordinates unchanged.
 """
-function project_boundary(
+function to_geographic(
     boundary::Vector,
-    cx::Float64,
-    cy::Float64,
-    local_units::Bool,
 )
-    if local_units
-        return to_local_m(boundary, cx, cy)
-    else
-        xs = [Float64(v[1]) for v in boundary]
-        ys = [Float64(v[2]) for v in boundary]
-        return xs, ys
-    end
+    xs = [Float64(v[1]) for v in boundary]
+    ys = [Float64(v[2]) for v in boundary]
+
+    return xs, ys
 end
 
 
@@ -528,7 +602,10 @@ function match_mesh_cells(data, mesh_idx)
     end
 
     if !isempty(missing)
-        preview = join(missing[1:min(5, length(missing))], ", ")
+        preview = join(
+            missing[1:min(5, length(missing))],
+            ", ",
+        )
 
         error(
             "$(length(missing)) HDF5 cells were not found in the supplied " *
@@ -541,7 +618,52 @@ end
 
 
 # =============================================================================
-# Animation
+# Colour-range helpers
+# =============================================================================
+
+"""
+Calculate a stable colour range for an animation.
+
+For the primary physical variables, zero is retained as the lower bound when
+appropriate, giving a consistent interpretation across frames.
+"""
+function animation_colorrange(
+    var_data,
+    var_label,
+)
+    finite_values = var_data[isfinite.(var_data)]
+
+    isempty(finite_values) &&
+        error(
+            "Selected variable '$var_label' contains no finite values"
+        )
+
+    data_min = minimum(finite_values)
+    data_max = maximum(finite_values)
+
+    color_min = data_min
+
+    if var_label in (
+        "Water depth (m)",
+        "Volume (m³)",
+        "Saturation (0–1)",
+        "Velocity (m/s)",
+    )
+        color_min = min(0.0, data_min)
+    end
+
+    color_max = data_max
+
+    if color_max <= color_min
+        color_max = color_min + 1e-6
+    end
+
+    return (color_min, color_max)
+end
+
+
+# =============================================================================
+# Animation polygon construction
 # =============================================================================
 
 """
@@ -549,6 +671,9 @@ Construct the static polygon geometry for the animation.
 
 The polygons are created once. Their colour is then updated for each frame,
 rather than destroying and recreating thousands of Makie polygon plots.
+
+If local_units is true, coordinates are converted to local East/North metres.
+Otherwise longitude/latitude coordinates are retained.
 """
 function build_animation_polygons!(
     ax,
@@ -568,12 +693,11 @@ function build_animation_polygons!(
     for i in 1:data.n_cells
         bnd = get_boundary(mesh_df, mesh_rows[i])
 
-        xs, ys = project_boundary(
-            bnd,
-            cx,
-            cy,
-            local_units,
-        )
+        if local_units
+            xs, ys = to_local_m(bnd, cx, cy)
+        else
+            xs, ys = to_geographic(bnd)
+        end
 
         # No stroke: the A5 polygons share their actual boundary vertices,
         # so neighbouring cells abut without a distracting grid overlay.
@@ -601,6 +725,123 @@ function update_animation_colours!(
 end
 
 
+"""
+Construct an individual polygon colour from either the primary variable or
+the dry/background variable.
+
+A cell is considered dry when its primary variable is water depth and its
+depth is <= dry_threshold.
+
+For the intended use case:
+
+    primary variable = depth
+    dry threshold    = 0.001
+    dry variable     = elevation
+
+dry cells therefore show elevation while wet cells show water depth.
+"""
+function animation_cell_colours(
+    primary_values,
+    background_values,
+    dry_threshold,
+)
+    if isnothing(background_values)
+        return primary_values
+    end
+
+    colours = similar(primary_values)
+
+    for i in eachindex(primary_values)
+        if primary_values[i] <= dry_threshold
+            colours[i] = background_values[i]
+        else
+            colours[i] = primary_values[i]
+        end
+    end
+
+    return colours
+end
+
+
+"""
+Update polygon colours for an animation frame when dry/background rendering
+is enabled.
+
+Because the primary and background variables generally have different
+numeric ranges, the values themselves cannot share one colourmap. The
+function therefore sets the appropriate RGBA colour for each cell using
+Makie's `to_color` pathway.
+"""
+function update_animation_mixed_colours!(
+    plots,
+    primary_values,
+    background_values,
+    dry_threshold,
+    primary_colormap,
+    primary_colorrange,
+    background_colormap,
+    background_colorrange,
+)
+    for i in eachindex(plots)
+        if primary_values[i] <= dry_threshold
+            v = background_values[i]
+
+            if isfinite(v)
+                plots[i].color[] = get(
+                    Makie.cgrad(
+                        background_colormap,
+                        256,
+                        categorical = false,
+                    ),
+                    clamp(
+                        Int(round(
+                            1 + 255 *
+                            (v - background_colorrange[1]) /
+                            max(
+                                background_colorrange[2] -
+                                background_colorrange[1],
+                                eps(),
+                            )
+                        )),
+                        1,
+                        256,
+                    ),
+                )
+            end
+        else
+            v = primary_values[i]
+
+            if isfinite(v)
+                plots[i].color[] = get(
+                    Makie.cgrad(
+                        primary_colormap,
+                        256,
+                        categorical = false,
+                    ),
+                    clamp(
+                        Int(round(
+                            1 + 255 *
+                            (v - primary_colorrange[1]) /
+                            max(
+                                primary_colorrange[2] -
+                                primary_colorrange[1],
+                                eps(),
+                            )
+                        )),
+                        1,
+                        256,
+                    ),
+                )
+            end
+        end
+    end
+end
+
+
+# =============================================================================
+# Animation
+# =============================================================================
+
 function animate_h5(
     data,
     var_data,
@@ -608,9 +849,13 @@ function animate_h5(
     colormap,
     mesh_path,
     frame_step,
-    output_dir,
-    resolution,
-    local_units,
+    output_dir;
+    resolution = (1400, 820),
+    local_units = false,
+    dry_threshold = nothing,
+    dry_var_data = nothing,
+    dry_var_label = nothing,
+    dry_colormap = "gray",
 )
     isnothing(mesh_path) &&
         error("--mesh is required when using --animate")
@@ -626,11 +871,10 @@ function animate_h5(
     println("  Mesh       : $mesh_path")
     println("  Frame step : $frame_step")
     println("  Output     : $output_dir")
-    println("  Resolution : $(resolution[1]) × $(resolution[2]) px")
-    println(
-        "  Coordinates: " *
-        (local_units ? "local East-North metres" : "longitude/latitude")
-    )
+    println("  Resolution : $(resolution[1]) × $(resolution[2])")
+    println("  Coordinates: " *
+            (local_units ? "local East/North (m)" : "longitude/latitude"))
+    println("  Colormap   : $colormap")
 
     mesh_df, mesh_idx = load_parquet(mesh_path)
 
@@ -638,41 +882,61 @@ function animate_h5(
 
     mesh_rows = match_mesh_cells(data, mesh_idx)
 
-    # Use one fixed colour range for the entire animation. For physical
-    # variables whose natural minimum is zero, retaining zero as the lower
-    # bound makes the colour scale consistent and interpretable.
-    finite_values = var_data[isfinite.(var_data)]
+    # -------------------------------------------------------------------------
+    # Primary colour range
+    # -------------------------------------------------------------------------
 
-    isempty(finite_values) &&
-        error("Selected variable '$var_label' contains no finite values")
-
-    data_min = minimum(finite_values)
-    data_max = maximum(finite_values)
-
-    color_min = data_min
-
-    if var_label in (
-        "Water depth (m)",
-        "Volume (m³)",
-        "Saturation (0–1)",
-        "Velocity (m/s)",
+    primary_colorrange = animation_colorrange(
+        var_data,
+        var_label,
     )
-        color_min = min(0.0, data_min)
-    end
-
-    color_max = data_max
-
-    if color_max <= color_min
-        color_max = color_min + 1e-6
-    end
-
-    colorrange = (color_min, color_max)
 
     println(
-        "  Colour range: " *
-        "$(round(color_min, digits=4)) – " *
-        "$(round(color_max, digits=4))"
+        "  Primary colour range: " *
+        "$(round(primary_colorrange[1], digits=4)) – " *
+        "$(round(primary_colorrange[2], digits=4))"
     )
+
+    # -------------------------------------------------------------------------
+    # Optional dry/background variable
+    # -------------------------------------------------------------------------
+
+    primary_cmap = resolve_colormap(colormap)
+
+    background_enabled =
+        !isnothing(dry_threshold) &&
+        !isnothing(dry_var_data)
+
+    background_cmap = nothing
+    background_colorrange = nothing
+
+    if background_enabled
+        background_cmap = resolve_colormap(dry_colormap)
+
+        background_colorrange = animation_colorrange(
+            dry_var_data,
+            dry_var_label,
+        )
+
+        println(
+            "  Dry threshold       : $(dry_threshold) m"
+        )
+        println(
+            "  Dry/background var  : $dry_var_label"
+        )
+        println(
+            "  Dry/background cmap : $dry_colormap"
+        )
+        println(
+            "  Background range    : " *
+            "$(round(background_colorrange[1], digits=4)) – " *
+            "$(round(background_colorrange[2], digits=4))"
+        )
+    end
+
+    # -------------------------------------------------------------------------
+    # Frame selection
+    # -------------------------------------------------------------------------
 
     frames = collect(1:frame_step:data.n_frames)
 
@@ -684,38 +948,78 @@ function animate_h5(
 
     mkpath(output_dir)
 
+    # -------------------------------------------------------------------------
+    # Figure
+    # -------------------------------------------------------------------------
+
     fig = Figure(
         size = resolution,
         backgroundcolor = :white,
     )
 
+    xlabel = local_units ? "Easting (m)" : "Longitude"
+    ylabel = local_units ? "Northing (m)" : "Latitude"
+
     ax = Axis(
         fig[1, 1],
         aspect = DataAspect(),
-        xlabel = local_units ? "Easting (m)" : "Longitude",
-        ylabel = local_units ? "Northing (m)" : "Latitude",
+        xlabel = xlabel,
+        ylabel = ylabel,
         title = "",
     )
 
-    plots = build_animation_polygons!(
-        ax,
-        data,
-        mesh_df,
-        mesh_rows,
-        var_data[frames[1], :],
-        colormap,
-        colorrange,
-        local_units,
-    )
+    # -------------------------------------------------------------------------
+    # Initial polygons
+    # -------------------------------------------------------------------------
+
+    if background_enabled
+        # Build the polygons initially using the primary variable. Their
+        # colours are immediately replaced below with the mixed dry/wet
+        # colours.
+        plots = build_animation_polygons!(
+            ax,
+            data,
+            mesh_df,
+            mesh_rows,
+            var_data[frames[1], :],
+            primary_cmap,
+            primary_colorrange,
+            local_units,
+        )
+    else
+        plots = build_animation_polygons!(
+            ax,
+            data,
+            mesh_df,
+            mesh_rows,
+            var_data[frames[1], :],
+            primary_cmap,
+            primary_colorrange,
+            local_units,
+        )
+    end
+
+    # -------------------------------------------------------------------------
+    # Colourbars
+    # -------------------------------------------------------------------------
 
     Colorbar(
         fig[1, 2],
-        limits = colorrange,
-        colormap = colormap,
+        limits = primary_colorrange,
+        colormap = primary_cmap,
         label = var_label,
     )
 
-    # The map itself is the presentation focus; no cell outlines.
+    if background_enabled
+        Colorbar(
+            fig[1, 3],
+            limits = background_colorrange,
+            colormap = background_cmap,
+            label = dry_var_label * " (dry cells)",
+        )
+    end
+
+    # Use a clean map presentation.
     hidedecorations!(
         ax,
         ticks = false,
@@ -724,11 +1028,33 @@ function animate_h5(
     )
     hidespines!(ax)
 
-    for (output_index, frame_idx) in enumerate(frames)
-        values = var_data[frame_idx, :]
+    # -------------------------------------------------------------------------
+    # Frame rendering
+    # -------------------------------------------------------------------------
 
-        if output_index > 1
-            update_animation_colours!(plots, values)
+    for (output_index, frame_idx) in enumerate(frames)
+        primary_values = var_data[frame_idx, :]
+
+        if background_enabled
+            background_values = dry_var_data[frame_idx, :]
+
+            update_animation_mixed_colours!(
+                plots,
+                primary_values,
+                background_values,
+                dry_threshold,
+                primary_cmap,
+                primary_colorrange,
+                background_cmap,
+                background_colorrange,
+            )
+        else
+            if output_index > 1
+                update_animation_colours!(
+                    plots,
+                    primary_values,
+                )
+            end
         end
 
         t_s = data.times[frame_idx]
@@ -760,14 +1086,12 @@ function animate_h5(
 
     println()
     println(
-        "Animation frames written to: " *
-        "$(abspath(output_dir))"
+        "Animation frames written to: $(abspath(output_dir))"
     )
     println("  Frames: $(length(frames))")
     println("  First : frame_000001.png")
     println(
-        "  Last  : " *
-        @sprintf("frame_%06d.png", length(frames))
+        "  Last  : $(@sprintf("frame_%06d.png", length(frames)))"
     )
 
     return nothing
@@ -782,10 +1106,21 @@ function interactive_view(
     data,
     cell_id,
     varname,
-    time_req,
-    resolution,
+    time_req;
+    colormap = nothing,
+    resolution = (1400, 820),
+    local_units = false,
 )
-    var_data, var_label, colormap = get_var(data, varname)
+    var_data, var_label, default_colormap = get_var(
+        data,
+        varname,
+    )
+
+    cmap = isnothing(colormap) ?
+        default_colormap :
+        colormap
+
+    cmap = resolve_colormap(cmap)
 
     map_fi, map_t_actual = select_frame(
         data.times,
@@ -821,51 +1156,45 @@ function interactive_view(
                   "Available IDs (first 5): " *
                   "$(data.cell_ids[1:min(5, end)])"
         else
-            println()
-            println("Cell $cell_id (index $cell_idx):")
-
+            println("\nCell $cell_id (index $cell_idx):")
             println(
                 "  Lon/Lat      : " *
                 "$(round(data.lons[cell_idx], digits=5)), " *
-                "$(round(data.lats[cell_idx], digits=5))",
+                "$(round(data.lats[cell_idx], digits=5))"
             )
-
             println(
                 "  Elevation    : " *
-                "$(round(data.elevs[cell_idx], digits=2)) m",
+                "$(round(data.elevs[cell_idx], digits=2)) m"
             )
-
             println(
                 "  Final depth  : " *
-                "$(round(data.depth[end, cell_idx], digits=3)) m",
+                "$(round(data.depth[end, cell_idx], digits=3)) m"
             )
-
             println(
                 "  Final volume : " *
-                "$(round(data.volume[end, cell_idx], digits=1)) m³",
+                "$(round(data.volume[end, cell_idx], digits=1)) m³"
             )
-
             println(
                 "  Final sat    : " *
-                "$(round(data.saturation[end, cell_idx], digits=3))",
+                "$(round(data.saturation[end, cell_idx], digits=3))"
             )
 
             peak_depth_idx =
                 argmax(data.depth[:, cell_idx])
 
-            println(
-                "  Peak depth   : " *
-                "$(round(maximum(data.depth[:, cell_idx]), digits=3)) m " *
-                "at t=$(round(data.t_hr[peak_depth_idx], digits=2)) h",
-            )
-
             peak_volume_idx =
                 argmax(data.volume[:, cell_idx])
 
             println(
+                "  Peak depth   : " *
+                "$(round(maximum(data.depth[:, cell_idx]), digits=3)) m " *
+                "at t=$(round(data.t_hr[peak_depth_idx], digits=2)) h"
+            )
+
+            println(
                 "  Peak volume  : " *
                 "$(round(maximum(data.volume[:, cell_idx]), digits=1)) m³ " *
-                "at t=$(round(data.t_hr[peak_volume_idx], digits=2)) h",
+                "at t=$(round(data.t_hr[peak_volume_idx], digits=2)) h"
             )
         end
     end
@@ -874,45 +1203,54 @@ function interactive_view(
     # Figure
     # -------------------------------------------------------------------------
 
-    fig_height = isnothing(cell_idx) ?
-                 resolution[2] :
-                 max(resolution[2], 950)
-
     fig = Figure(
-        size = (
-            resolution[1],
-            fig_height,
-        ),
+        size = resolution,
     )
+
+    xlabel = local_units ? "Easting (m)" : "Longitude"
+    ylabel = local_units ? "Northing (m)" : "Latitude"
 
     ax_map = Axis(
         fig[1, 1],
         title = "$(var_label) — $map_title_suffix",
-        xlabel = "Longitude",
-        ylabel = "Latitude",
+        xlabel = xlabel,
+        ylabel = ylabel,
         aspect = DataAspect(),
     )
 
     map_vals = var_data[map_fi, :]
 
-    finite_map = map_vals[isfinite.(map_vals)]
-
-    isempty(finite_map) &&
-        error("Selected variable '$varname' contains no finite values")
-
-    vmin = minimum(finite_map)
-    vmax = maximum(finite_map)
+    vmin = minimum(map_vals)
+    vmax = maximum(map_vals)
 
     if vmax <= vmin
         vmax = vmin + 1e-6
     end
 
+    if local_units
+        cx = mean(data.lons)
+        cy = mean(data.lats)
+
+        map_x = [
+            (lon - cx) * deg2rad(1) * R_EARTH * cosd(cy)
+            for lon in data.lons
+        ]
+
+        map_y = [
+            (lat - cy) * deg2rad(1) * R_EARTH
+            for lat in data.lats
+        ]
+    else
+        map_x = data.lons
+        map_y = data.lats
+    end
+
     sc = scatter!(
         ax_map,
-        data.lons,
-        data.lats;
+        map_x,
+        map_y;
         color = map_vals,
-        colormap = colormap,
+        colormap = cmap,
         colorrange = (vmin, vmax),
         markersize = 8,
     )
@@ -927,8 +1265,8 @@ function interactive_view(
     if !isnothing(cell_idx)
         scatter!(
             ax_map,
-            [data.lons[cell_idx]],
-            [data.lats[cell_idx]];
+            [map_x[cell_idx]],
+            [map_y[cell_idx]];
             color = :red,
             marker = :star5,
             markersize = 18,
@@ -936,8 +1274,8 @@ function interactive_view(
 
         text!(
             ax_map,
-            data.lons[cell_idx],
-            data.lats[cell_idx];
+            map_x[cell_idx],
+            map_y[cell_idx];
             text = "  $(cell_id[1:min(8, length(cell_id))])…",
             fontsize = 10,
             color = :red,
@@ -982,39 +1320,32 @@ function interactive_view(
             linestyle = :dash,
         )
 
-        peak_idx = argmax(cell_series)
-        peak_y = cell_series[peak_idx]
-
-        text_y = if isfinite(peak_y) && peak_y != 0
-            peak_y * 0.05
-        else
-            0.0
-        end
+        peak_y = maximum(cell_series)
 
         text!(
             ax_ts,
             map_t_hr,
-            text_y;
+            peak_y * 0.05;
             text = " map\n $(round(map_t_s))s",
             fontsize = 9,
             color = :darkorange,
         )
 
+        pk = argmax(cell_series)
+
         scatter!(
             ax_ts,
-            [data.t_hr[peak_idx]],
-            [cell_series[peak_idx]];
+            [data.t_hr[pk]],
+            [cell_series[pk]];
             color = :red,
             markersize = 10,
         )
 
         text!(
             ax_ts,
-            data.t_hr[peak_idx],
-            cell_series[peak_idx];
-            text =
-                " peak\n " *
-                "$(round(cell_series[peak_idx], digits=2))",
+            data.t_hr[pk],
+            cell_series[pk];
+            text = " peak\n $(round(cell_series[pk], digits=2))",
             fontsize = 10,
             color = :red,
         )
@@ -1054,11 +1385,10 @@ function interactive_view(
 
         for (fi, t) in enumerate(data.t_hr)
             marker = fi == map_fi ? "→" : " "
-
             println(
-                "$marker Frame $fi/$(data.n_frames) " *
-                "— t = $(round(t, digits=3)) h " *
-                "— $(round(cell_series[fi], digits=4))"
+                "$marker Frame $(fi)/$(data.n_frames) " *
+                "t=$(round(t, digits=3)) h  " *
+                "$(round(cell_series[fi], digits=6))"
             )
         end
     end
@@ -1068,12 +1398,7 @@ function interactive_view(
     println()
     println("Close the window to exit.")
 
-    # Keep the interactive window alive until it is closed.
-    for screen in copy(GLMakie.ALL_SCREENS)
-        if screen.window_open[]
-            wait(screen)
-        end
-    end
+    wait(display(fig))
 end
 
 
@@ -1086,30 +1411,61 @@ args = parse_args(ARGS)
 data = load_h5(args.h5file)
 
 if args.animate
+
+    # Primary variable.
+    var_data, var_label, default_cmap =
+        get_var(data, args.varname)
+
+    # User-specified colormap overrides the variable default.
+    primary_cmap =
+        args.colormap
+
+    # Optional dry/background variable.
+    dry_var_data = nothing
+    dry_var_label = nothing
+
+    if !isnothing(args.dry_var)
+        dry_var_data, dry_var_label, _ =
+            get_var(data, args.dry_var)
+    end
+
     animate_h5(
         data,
-        get_var(data, args.varname)...,
+        var_data,
+        var_label,
+        primary_cmap,
         args.mesh_path,
         args.frame_step,
-        args.output_dir,
-        args.resolution,
-        args.local_units,
+        args.output_dir;
+        resolution = args.resolution,
+        local_units = args.local_units,
+        dry_threshold = args.dry_threshold,
+        dry_var_data = dry_var_data,
+        dry_var_label = dry_var_label,
+        dry_colormap = args.dry_colormap,
     )
+
 else
+
     if !isnothing(args.mesh_path)
         @warn "--mesh was supplied without --animate; ignoring it."
     end
 
-    if args.local_units
-        @warn "--local-units currently applies to animation geometry only; " *
-              "the interactive viewer uses HDF5 longitude/latitude coordinates."
+    if !isnothing(args.dry_threshold) ||
+       !isnothing(args.dry_var)
+        @warn (
+            "--dry-threshold/--dry-var are only used with " *
+            "--animate; ignoring them."
+        )
     end
 
     interactive_view(
         data,
         args.cell_id,
         args.varname,
-        args.time_req,
-        args.resolution,
+        args.time_req;
+        colormap = args.colormap,
+        resolution = args.resolution,
+        local_units = args.local_units,
     )
 end

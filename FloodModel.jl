@@ -35,6 +35,17 @@ Output flags:
 """
 
 push!(LOAD_PATH, @__DIR__)
+
+"""
+FloodA5's version string, following Semantic Versioning (semver.org):
+MAJOR.MINOR.PATCH, currently in the 0.x.y initial-development phase (see
+VERSIONING.md at the repository root for the project's versioning policy).
+Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
+features, flags, or intentional behaviour changes, and reserve 1.0.0 for
+the first release considered validated against real-world data.
+"""
+const FLOODA5_VERSION = "0.1.0"
+
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
 if !isdefined(Main, :A5Grid)
@@ -1531,7 +1542,7 @@ function initialise_flow_model(mesh::A5Mesh,
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing,
                                 q_centre_theta            :: Float64 = 0.9,
-                                gradient_correction       :: Bool    = true,
+                                gradient_correction       :: Bool    = false,
                                 gradient_correction_alpha :: Float64 = 1.0,
                                 momentum_model            :: Symbol  = :edge,
                                 face_flux_method          :: Symbol  = :legacy)::FlowState
@@ -2949,7 +2960,7 @@ function run_flood_model(;
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
     q_centre_theta            :: Float64 = 0.9,
-    gradient_correction       :: Bool    = true,
+    gradient_correction       :: Bool    = false,
     gradient_correction_alpha :: Float64 = 1.0,
     momentum_model            :: Symbol  = :edge,
     face_flux_method          :: Symbol  = :legacy,
@@ -2969,7 +2980,7 @@ function run_flood_model(;
     output_path       :: Union{String,Nothing} = nothing,
     output_interval   :: Float64 = 60.0)
 
-    @info "=== A5 Flood Model ===" Dates.now()
+    @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
     if !mesh_only
         @info "Flow method : $flow_method"
@@ -3398,7 +3409,7 @@ end
 function print_help(exit_code::Int = 0)
     modes_str = join(string.(VIS_MODES), " | ")
     println("""
-FloodA5 — A5 Pentagon Flood Model
+FloodA5 — A5 Pentagon Flood Model (v$FLOODA5_VERSION)
 ==================================
 Usage:
   julia [--threads auto] FloodModel.jl  --meshgen <aoi.geojson>  --meshres <N>
@@ -3475,6 +3486,18 @@ Flow model options:
                             _manning_flux_ra) — uncorrected; retained for
                             A/B benchmarking against the corrected scheme.
                      See FloodA5_NonOrthogonal_Correction_Plan.md.
+  --gradient-correction-alpha N
+                     Scale factor in [0,1] on the tangential (non-orthogonal)
+                     correction term when --gradient-correction on is used
+                     with --face-flux-method legacy. Default: 1.0 (full
+                     over-relaxed correction). alpha=0.0 applies only the
+                     orthogonal (direct WSE-difference) term, no tangential
+                     correction — the more conservative, empirically more
+                     stable interim setting recommended in
+                     FloodA5_GradientCorrection_PentagonChirality_Handover.md.
+                     Research/diagnostic parameter; has no effect when
+                     --face-flux-method diamond is selected (the diamond
+                     construction has no separate alpha term).
   --face-flux-method legacy|diamond
                      Selects how dWSE_n (the corrected driving head) is
                      constructed when --gradient-correction is on. Only
@@ -3495,6 +3518,26 @@ Flow model options:
                                 (expected to be extremely rare).
                      See FloodA5_DirectionalBias_ReformulationPlan_v4.md
                      and FloodA5_PhaseB_Complete_PhaseC_Handoff.md.
+  --momentum-model edge|cell
+                     Selects how stored inter-step momentum (q_prev in the
+                     Bates equation) is represented.
+                       edge   (default) legacy per-edge scalar — one
+                              independent q_prev per pentagon face (5 per
+                              cell), unchanged Bates (2010) behaviour.
+                       cell   Perot-style reconstruction: a single 2D
+                              discharge vector (qvec_u, qvec_v) per cell,
+                              rebuilt each step by WLSQ from all 5 face
+                              fluxes; q_prev at each face is the projection
+                              of the two adjacent cells' vectors onto that
+                              face's normal. Empirically the stronger of
+                              the two directional-bias correction levers
+                              tested — see
+                              FloodA5_DirectionalBias_TechnicalSummary.md §4, §6.
+                     NOTE: only wired into the standard-flow solver
+                     (step_standard!). Has no effect under
+                     --flow-model sgs (a warning is printed if selected
+                     together with sgs).
+                     See FloodA5_FlowDirectionFixes_Handover.md.
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
@@ -3573,13 +3616,13 @@ Examples:
   julia --threads auto FloodModel.jl \\
       --meshload mesh_sgs.parquet --flow-model standard --sim-duration 1800
 
-Resolution guide (approximate cell area):
-  Level  5  ~5 000 km²  Continental / regional
-  Level  8  ~250 km²    Large catchment
-  Level 10  ~50 km²     Medium catchment
-  Level 12  ~10 km²     Small catchment
-  Level 14  ~2 km²      Urban / detailed
-  Level 17  ~0.1 km²    High-resolution modelling
+Resolution guide (approximate cell area — see docs/A5_QUIRKS.md §5 for the full table):
+  Level  5  ~33 100 km²  Continental
+  Level  8  ~518 km²     Large catchment
+  Level 10  ~32.4 km²    Medium catchment
+  Level 12  ~2.02 km²    Small catchment
+  Level 14  ~12.6 ha     Urban / detailed
+  Level 17  ~1 976 m²    High-resolution modelling
 """)
     exit(exit_code)
 end
@@ -3821,6 +3864,10 @@ function main(args=String[])
     @info "Arguments passed: $(args)"
 
     ("--help" in args || "-h" in args) && print_help(0)
+    if "--version" in args || "-v" in args
+        println("FloodA5 v$FLOODA5_VERSION")
+        exit(0)
+    end
 
     # --vis [mode]
     vis_mode = :none
@@ -3954,6 +4001,28 @@ function main(args=String[])
 
     flow_method ∉ (:sgs, :standard) &&
         (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
+
+    # --momentum-model cell and --face-flux-method diamond (and, by
+    # extension, --gradient-correction on/--gradient-correction-alpha) are
+    # only wired into step_standard!'s Phase A — step_sgs! is untouched by
+    # the directional-bias-reformulation and flow-direction-fixes branches
+    # (see FloodA5_DirectionalBias_MergeHandover.md §5.1, "not touched this
+    # branch"). Warn rather than silently doing nothing, since --flow-model
+    # sgs is the default and a user could easily combine these flags without
+    # realising they have no effect.
+    if flow_method == :sgs
+        if momentum_model == :cell
+            @warn "--momentum-model cell has no effect under --flow-model sgs " *
+                  "(step_sgs! does not use the cell-vector momentum reconstruction). " *
+                  "Add --flow-model standard to exercise it, or ignore this warning " *
+                  "if sgs was intended and this flag was left over from a template."
+        end
+        if gradient_correction
+            @warn "--gradient-correction on has no effect under --flow-model sgs " *
+                  "(step_sgs! does not use the corrected flux kernels). " *
+                  "Add --flow-model standard to exercise it."
+        end
+    end
 
     # --sim-duration / --dt-max / --rainfall
     sim_dur_val,  args = _pop_flag(args, "--sim-duration")
