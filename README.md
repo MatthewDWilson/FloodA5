@@ -1,4 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
+![Status: In Development](https://img.shields.io/badge/Status-Experimental-red)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -9,6 +10,8 @@ A 2D surface-water flood model built on the [A5 pentagonal Discrete Global Grid 
 routes water between them using the Bates et al. (2010) inertial shallow-water
 formulation, and resolves sub-cell terrain variability through pre-computed hypsometric
 storage tables.
+
+Note: this model is still in an experimental phase and should not be used in production. 
 
 Key characteristics:
 
