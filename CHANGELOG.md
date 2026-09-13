@@ -67,6 +67,12 @@ current state of the model.
 - The resolution-to-cell-area guidance shown in `--help` was incorrect by
   roughly 16× at resolution 14, and disagreed with the (correct, internally
   consistent) table in `docs/A5_QUIRKS.md`. Corrected to match.
+- `README.md`'s documentation index linked to `CHANGELOG.md` at the
+  repository root while the file itself lived at `docs/CHANGELOG.md` —
+  a dead link. Resolved by moving `CHANGELOG.md` to the repository root
+  (alongside `VERSION` and `VERSIONING.md`, and matching common practice
+  of keeping the changelog next to `README.md` rather than nested under
+  `docs/`), rather than changing the link.
 
 ### Documentation
 - `docs/HYDRAULICS.md` rewritten in full — the previous version predated
@@ -114,4 +120,4 @@ current state of the model.
   general pointers to the project's internal development history
   (retained, not published, available on request).
 
-[0.1.0]: https://github.com/ (tag pending)
+[0.1.0]: https://github.com/MatthewDWilson/FloodA5/releases/tag/v0.1.0
