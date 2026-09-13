@@ -16,3 +16,6 @@ test/planar_embankment/planar_embankment_aoi.geojson
 # Synthetic DEM test — generated files
 test/synthetic_dem/synthetic_dem.tif
 test/synthetic_dem/synthetic_dem_params.json
+*.png
+*.bat
+*.mp4
