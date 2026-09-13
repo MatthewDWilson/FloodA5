@@ -6,73 +6,171 @@ New cases will be added as the model is applied to additional domains.
 
 ---
 
-## 1. Square Domain (Point Spread Test)
+## 1. Square Domain (Directional-Bias Benchmarks)
 
-**Location:** `test/square/`  
+**Location:** `test/square/`
 **Purpose:** Confirm that flood spreading from a point source on a flat domain
 is radially symmetric — i.e., that the pentagonal grid does not introduce
-directional bias.
+directional bias — and provide the reference domain for the point-spread
+directional-bias correction benchmark described in `docs/HYDRAULICS.md` §7–§8.
 
 ### Domain
 
 A 1.35° × 1.35° square polygon centred at 0°N, 0°E (`test/square/square_domain.geojson`).
 The domain straddles the null meridian and equator for a clean, unbiased test geometry.
-No DEM is used — all cells have zero elevation. The domain is geometrically simple
-enough that the expected behaviour can be checked visually without an analytical
-solution.
+No DEM is used — all cells have zero elevation.
 
-### Simulation setup
+Also present: `test/square/square.bci` and `test/square/lisflood_square.par`, a
+LISFLOOD-FP-format configuration of the same domain for an external
+rectangular-grid comparison run (not automated as part of this repository's
+test suite — see "Comparison with rectangular grids" below).
 
-Resolution 18 (approximately 500 m² per cell), standard flow solver:
+### Point-spread circularity benchmark (`test/test_point_spread.jl`)
+
+This is an **HDF5-output analysis tool** — it does not run the model itself.
+Generate two comparison runs first, then point the script at both:
 
 ```bash
-# Generate mesh
+# 1. Generate the mesh once, reused for both runs (resolution 14)
 julia --threads 1 --project=. FloodModel.jl \
-    --meshgen test/square/square_domain.geojson --meshres 18 \
-    --meshout test/square/square_mesh18_standard.parquet \
+    --meshgen test/square/square_domain.geojson --meshres 14 \
+    --meshout test/square/square_mesh_res14.parquet \
     --flow-model standard --mesh-only
 
-# Run with a central point source (50 mm/hr applied to one cell)
+# 2. Baseline run (uncorrected, legacy kernel — the current default)
 julia --threads auto --project=. FloodModel.jl \
-    --meshload test/square/square_mesh18_standard.parquet \
+    --meshload test/square/square_mesh_res14.parquet \
     --flow-model standard \
-    --rainpoint 0.0,0.0,50.0 \
-    --sim-duration 72000 --dt-max 10 \
-    --output test/square/square_rainpoint_2hr.h5 \
-    --output-interval 300
+    --injection-point 0.0,0.0,50.0 \
+    --gradient-correction off \
+    --sim-duration 3600 --dt-max 30 \
+    --output test/square/square_baseline.h5 --output-interval 45
+
+# 3. Corrected run (WLSQ + skewness correction)
+julia --threads auto --project=. FloodModel.jl \
+    --meshload test/square/square_mesh_res14.parquet \
+    --flow-model standard \
+    --injection-point 0.0,0.0,50.0 \
+    --gradient-correction on \
+    --sim-duration 3600 --dt-max 30 \
+    --output test/square/square_corrected.h5 --output-interval 45
+
+# 4. Compare
+julia --project=. test/test_point_spread.jl \
+    --baseline  test/square/square_baseline.h5 \
+    --corrected test/square/square_corrected.h5
 ```
 
-### Expected results
+The script computes, from the wet-cell centres at a matched output frame: a
+convex hull, Polsby–Popper circularity (`4π·area/perimeter²`, 1.0 = perfect
+circle), and a directional front-radius coefficient of variation (lower =
+more circular spreading). See `--help` in the script for the `--frame` and
+`--list-frames` options.
 
-- Water propagates outward from the central cell in all five principal directions
-  approximately equally.
-- The flood front radius at any given time should be approximately equal in all
-  directions (circular front, not diamond or cross-shaped).
+**Recorded result** (resolution 16, 331 cells, matched frame): circularity
+0.938 → 0.980, front-radius CV 0.137 → 0.055, comparing
+`--gradient-correction off` to `on`. See `docs/HYDRAULICS.md` §7–§8 for the
+full picture, including that this is one of three tested corrections and none
+is the current default.
+
+### Expected results, uncorrected default configuration
+
+- Water propagates outward from the injection cell in all five principal
+  directions approximately equally, though with a measurable, non-zero
+  directional bias (this is the phenomenon the benchmark above quantifies).
 - Mass balance error (`mb_err` in logs) should be < 0.01% throughout.
 - No negative volumes or NaN values.
 
-### Reference output
-
-A pre-computed GeoPackage output for comparison is provided at
-`test/square/square_mesh18_standard_output.gpkg`. This was produced with the
-standard solver at resolution 18 and can be used to check that results are
-consistent after code changes.
-
 ### Comparison with rectangular grids
 
-A rectangular grid model run on the same domain at equivalent resolution will
-produce a diamond-shaped flood front rather than a circular one — the directional
-bias inherent in four-connected rectangular grids. This comparison is a key
-motivating result for the pentagonal grid approach.
-
-### Post-processing
-
-The provided R script (`test/square/plot_output.R`) reads the HDF5 output and
-plots the flood front at selected time steps.
+A rectangular-grid model run on the same domain (`test/square/square.bci`,
+`test/square/lisflood_square.par` provide a LISFLOOD-FP-format starting point)
+would be expected to produce a diamond-shaped flood front rather than a
+circular one — the directional bias inherent in four-connected rectangular
+grids — for comparison against FloodA5's own measured (non-zero, but smaller)
+bias. This comparison has not been automated as part of this repository; the
+files are provided for anyone wanting to run it externally.
 
 ---
 
-## 2. Carlisle 2005 Flood Event
+## 2. Planar Slope — Directional-Bias and SGS Test Domains
+
+**Location:** `test/planar_embankment/`
+**Purpose:** Two related but distinct uses of the same underlying terrain
+generator, for two different tests.
+
+### 2a. SGS sub-cell routing validation (`test_planar_embankment.jl`)
+
+Tests SGS sub-cell routing against the standard solver on a planar 0.1%
+west–east slope (4 km domain, 4 m total relief) with a 2 m rectangular
+embankment ridge across the domain, containing a 3 m notch — narrower than a
+resolution-18 A5 cell (~22 m) — at the domain centre.
+
+```bash
+# 1. Generate the DEM (once) — default embankment height 5 m
+python test/planar_embankment/generate_planar_embankment_dem.py
+
+# 2. Run tests (meshes auto-generated if absent — 2-5 min first time)
+julia --threads auto test/planar_embankment/test_planar_embankment.jl
+
+# 3. Optional: Makie visualisation (standard flow only)
+julia --threads auto test/planar_embankment/test_planar_embankment.jl --vis
+```
+
+| Test | Description |
+|------|-------------|
+| T0 | Both meshes have cells on both sides of the embankment |
+| T1 | Standard flow: no downstream water while upstream WSE < embankment crest |
+| T2 | SGS: downstream water appears once WSE ≥ notch sill (well before crest) |
+| T3 | SGS routes more water downstream than standard at the same injection history |
+| T4 | Mass balance < 0.01% for both solvers (closed domain) |
+| T5 | HDF5 output files valid: correct frame count, non-zero depths |
+
+Full detail: `test/planar_embankment/README.md`.
+
+### 2b. North/south volume-symmetry benchmark (`test/test_planar_symmetry.jl`)
+
+The same slope generator with the embankment height set to zero
+(`--emb-height 0`) gives a terrain-feature-free planar slope — a domain with
+no physical north/south distinction, so any measured north/south volume
+asymmetry is purely a mesh/solver artefact. This is the primary acceptance
+test used throughout the directional-bias correction work (`docs/HYDRAULICS.md`
+§7–§8): it is far less noisy than a per-cell velocity-direction metric,
+because it's an integrated quantity (total volume on each side) rather than
+an instantaneous per-cell one.
+
+```bash
+# 1. Generate a terrain-feature-free DEM
+python test/planar_embankment/generate_planar_embankment_dem.py --emb-height 0.0
+
+# 2. Generate the mesh, then run two comparison simulations (as in §1 above,
+#    substituting --injection-point for the domain's actual source location
+#    and --closed-boundaries so the metric isn't confounded by outflow)
+
+# 3. Compare — this script is HDF5-output analysis only, like test_point_spread.jl
+julia --project=. test/test_planar_symmetry.jl \
+    --baseline  planar_baseline.h5 \
+    --corrected planar_corrected.h5 \
+    --source-lat <lat> --source-lon <lon> \
+    --sweep 10
+```
+
+`--sweep N` reports the asymmetry metric at every Nth output frame across
+the whole run, which is the form the result is usually reported in (a single
+frame can be misleadingly noisy or, conversely, misleadingly clean — see
+`docs/HYDRAULICS.md` §7 for examples of both).
+
+**Recorded result** (resolution 16, closed boundaries): baseline `|asymmetry|`
+rises to 0.25 by the end of a 2-hour run; with gradient correction, it stays
+below 0.07 throughout. Best combination tested to date
+(`--face-flux-method diamond --momentum-model cell`) reaches ~0.61 on a
+harder, sustained-ponding resolution-18 configuration — see
+`docs/HYDRAULICS.md` §8 for the full comparison table and the important
+caveat that none of this fully eliminates the bias.
+
+---
+
+## 3. Carlisle 2005 Flood Event
 
 **Location:** `test/carlisle/`  
 **Purpose:** Validate FloodA5 against a well-documented historical flood event
@@ -198,7 +296,7 @@ currently affect simulation speed (only SGS pre-processing).
 
 ---
 
-## 3. Synthetic DEM SGS Validation
+## 4. Synthetic DEM SGS Validation
 
 **Location:** `test/synthetic_dem/`  
 **Purpose:** Verify that the SGS solver correctly detects and routes water through

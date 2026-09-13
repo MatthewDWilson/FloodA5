@@ -86,10 +86,14 @@ Edge geometry is computed from the actual cell boundary polygons:
 - **Edge width** (`w`) — haversine length of the shared edge arc.
 - **Centre-to-centre distance** (`L`) — haversine distance between the two cell
   centres.
-- **Non-orthogonality correction** (`cos θ`) — dot product of the centre-to-centre
-  unit vector with the edge face normal, computed on a local equirectangular
-  projection. This corrects for the fact that A5 pentagon edges are generally not
-  perpendicular to the line joining cell centres.
+- **Non-orthogonality angle** (`cos θ`) — dot product of the centre-to-centre
+  unit vector **d̂** with the edge face normal **n̂**, computed on a local
+  equirectangular projection. On A5 pentagons θ ranges from ~16° to ~38° (mean ~23°).
+- **WLSQ correction vector** (`V̂ = n̂ − (d̂·n̂)·d̂`) — the tangential component of
+  the face normal after removing its projection onto **d̂**. This encodes both the
+  direction and magnitude of the non-orthogonality and is used by the gradient
+  correction described in §5.3. By construction `|V̂| = sin θ`, so the correction is
+  zero for orthogonal edges and increases smoothly with skew angle.
 
 ---
 
@@ -275,7 +279,111 @@ of checkerboarding identified in comparison with LISFLOOD-FP.
 any single edge is capped at `V_donor / 10` per step, ensuring at most 50% of a
 cell's volume can leave via all five edges in a single timestep.
 
-### 5.4 Manning's roughness
+---
+
+### 5.4 Directional bias and its correction — current status
+
+A5 pentagon edges are generally not perpendicular to the centre-to-centre vector
+**d**. Uncorrected, the face-normal driving term in eq. (1) is approximated
+along **d** rather than along the true face normal **n̂**. On A5 cells the
+angle between **d** and **n̂** (the non-orthogonality angle θ) ranges from
+~16° to ~38° (mean ~23°), and this produces a measurable systematic
+directional bias: point-source flood fronts are elongated rather than
+circular, and flow on a planar slope deviates from the analytically expected
+downslope direction.
+
+**This is an active area of work with three independent, opt-in corrections
+implemented and validated to different degrees. None is the default flow
+path.** The uncorrected legacy Bates (2010) kernel — `_bates_flux` /
+`_manning_flux_ra`, `cos θ`-scaled `L_eff`, per-edge scalar momentum — remains
+the default for **both** the standard and SGS solvers. This is a change from
+earlier project documentation, which at one point recorded gradient
+correction as "enabled by default"; that was corrected once several sessions
+of real-mesh testing (see `HYDRAULICS.md` §7.1) showed the picture was more complicated
+than initially thought, and the default was reverted to `off` pending further
+validation. **Only the standard-flow solver (`--flow-model standard`) is
+affected by any of the flags below — the SGS solver does not use any of
+them, regardless of setting.**
+
+Full derivations, proofs, and the complete experimental record (including
+the dead ends) live in `HYDRAULICS.md` §5–§8. That document also notes where
+a fuller, session-by-session account is kept in the project's internal
+development history, for anyone doing further work in this area. This
+section gives the current summary only.
+
+#### Correction 1 — WLSQ gradient + skewness term (`--face-flux-method legacy`)
+
+A weighted least-squares (WLSQ) gradient is reconstructed once per cell per
+timestep from its neighbours' WSE values, averaged onto each face, and
+decomposed into an orthogonal term (direct two-cell WSE difference) plus a
+tangential correction scaled by `--gradient-correction-alpha`. This was the
+first correction implemented and is described in full in `HYDRAULICS.md` §7.1.
+
+**Known limitation, found during multi-session real-mesh testing:** the
+single per-cell gradient is shared across all five of that cell's
+differently-oriented faces, and — at `alpha=1` (full correction), combined
+with per-edge momentum storage — was found to overshoot into a *mirrored*
+directional bias under sustained ponding, with a response to timestep size
+that is not simply "improves as dt→0" (see `HYDRAULICS.md` §7.1 for the
+detailed evidence). `alpha=0` (orthogonal term only) is smaller in effect but
+stable and non-flipping, and is the better-supported setting if this
+correction is used at all.
+
+#### Correction 2 — Diamond face-flux reconstruction (`--face-flux-method diamond`)
+
+A face-local reconstruction that builds a bespoke gradient for each edge
+directly from that edge's own two adjacent cell centres and its own two
+shared vertices — no cell-averaged gradient shared across faces. Proven
+exact for linear WSE fields (algebraic proof plus real-mesh confirmation to
+machine precision on 98.8% of edges; see `HYDRAULICS.md` §7). Selected via
+`--face-flux-method diamond` together with `--gradient-correction on`.
+
+#### Correction 3 — Cell-vector momentum (`--momentum-model cell`)
+
+Independent of both correction terms above: replaces the five independent
+per-edge momentum scalars with a single 2D discharge vector per cell,
+reconstructed each step from all five face fluxes (Perot-style WLSQ),
+projected onto each face normal to supply `q_prev`. Empirically **the
+stronger of the levers tested** — in controlled planar-slope benchmarks it
+closed more of the measured bias on its own than either gradient correction
+alone. See `HYDRAULICS.md` §7.3.
+
+#### Current empirical picture (planar-slope closed-domain benchmark)
+
+| Configuration | N/S volume asymmetry, `\|asym\|` | Notes |
+|---|---|---|
+| Uncorrected (default) | 0.866–0.916 | Baseline |
+| `--gradient-correction on --gradient-correction-alpha 0.0` | ~0.85 | Small, stable, never flips |
+| `--gradient-correction on --gradient-correction-alpha 1.0` | flips sign, transient minimum near 0 | Larger effect, not production-safe as-is |
+| `--face-flux-method diamond --momentum-model cell` | ~0.61 | Best result found to date; still non-zero |
+
+None of these fully eliminate the bias. The most likely remaining cause,
+per `HYDRAULICS.md` §8, is the constitutive relationship between stored
+momentum and face flux (inherited from Bates 2010, derived for a
+2-flux-direction Cartesian cell, not re-derived for a 5-face polygon) —
+this is the subject of ongoing work, not a closed problem.
+
+#### Computational cost
+
+Gradient correction (either method) adds one O(5 × n_cells) reconstruction
+pass per timestep on top of the flux loop; overhead of +11–30% wall time
+(depending on resolution) was measured in earlier testing against a shared
+kernel that was, at the time, also used by the SGS solver. That shared-kernel
+arrangement has since been superseded — SGS does not use gradient correction
+in the present codebase (§9.4 of `HYDRAULICS.md`) — so these figures are
+retained here for historical reference only, not as a current cost estimate.
+
+#### CLI control
+
+All of `--gradient-correction`, `--gradient-correction-alpha`,
+`--face-flux-method`, and `--momentum-model` default to the legacy,
+uncorrected behaviour. See `USER_GUIDE.md` §4.3a for the full flag reference,
+and `HYDRAULICS.md` §8 for the current recommended experimental
+configuration and its caveats.
+
+---
+
+### 5.5 Manning's roughness
 
 Manning's `n` per edge is the arithmetic mean of the two adjacent cell values:
 `n_edge = 0.5 × (n_i + n_j)`. This matches the LISFLOOD-FP convention and
@@ -410,6 +518,12 @@ cell matching.
   of the shallow water equations for efficient two-dimensional flood inundation
   modelling. *Journal of Hydrology* 387(1–2), 33–45.
   https://doi.org/10.1016/j.jhydrol.2010.03.027
+- Jasak, H. (1996). Error analysis and estimation for the finite volume method
+  with applications to fluid flows. PhD thesis, Imperial College London. *(WLSQ
+  gradient reconstruction for non-orthogonal meshes.)*
+- Moukalled, F., Mangani, L., Darwish, M. (2016). *The Finite Volume Method in
+  Computational Fluid Dynamics.* Springer. Chapter 8: Gradient computation on
+  unstructured meshes.
 - Neal, J.C. et al. (2012). How much physical complexity is needed to model flood
   inundation? *Hydrological Processes* 26(15), 2264–2282.
 - Weller, H. (2014). Non-orthogonal version of the arbitrary polygonal C-grid and

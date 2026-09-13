@@ -105,9 +105,23 @@ julia --threads auto FloodModel.jl \
     --output my_sim.h5 --vis
 ```
 
-> **Thread count:** always use `--threads 1` for mesh generation (stage 1+2),
-> due to a thread-safety constraint in the Python bridge. Simulation runs
-> (stage 3) are safe with `--threads auto`.
+> **Thread count for mesh generation:** the recommended default is
+> `--threads 1` for mesh generation (stages 1+2, i.e. any run using
+> `--meshgen`). This is a conservative recommendation, not an absolute
+> requirement: two specific crashes previously traced to threaded calls
+> into the Python/GDAL bridge (`PyCall`'s garbage-collector finaliser firing
+> on a non-main thread) have been fixed, and `--threads auto` mesh
+> generation — including DEM sampling — has since run successfully.
+> However, DEM sampling still makes coordinate-transform calls into the
+> same Python/GDAL bridge from inside a threaded loop, the general pattern
+> behind those crashes, and the failure mode was intermittent and
+> mesh-size-dependent rather than immediate, so a clean run is encouraging
+> but not a guarantee at every mesh size or resolution. **If mesh
+> generation crashes with a low-level fault (typically reported as
+> `EXCEPTION_ACCESS_VIOLATION` or similar) rather than a normal Julia
+> error, retry with `--threads 1`** — this has always resolved it.
+> Simulation runs (stage 3, `--meshload`) are unaffected either way and are
+> always safe with `--threads auto`.
 
 ---
 
@@ -204,6 +218,34 @@ All arguments are named flags; position does not matter.
 | `--friction FILE` | — | GeoTIFF friction raster. Per-cell Manning's n sampled at cell centres; overrides `--manning-n` where the raster is finite. |
 | `--sim-duration S` | 3600 | Simulation duration in seconds. |
 | `--dt-max S` | 60 | Maximum adaptive timestep in seconds. Reduce to 10–30 s for high-resolution (level 18+) or steep-terrain runs. |
+
+### 4.3a Directional-bias correction options (standard flow only)
+
+**These flags only affect `--flow-model standard`.** None of them are wired
+into the SGS solver (`step_sgs!`) — passing them alongside `--flow-model sgs`
+(the default flow model) is a silent no-op and now prints a warning at
+startup. Add `--flow-model standard` to actually exercise any of these.
+
+All defaults below are the **legacy, uncorrected Bates (2010) behaviour** —
+nothing in this table changes the default simulation output. They exist for
+A/B comparison while the directional-bias correction work
+(`flow-direction-fixes` and `directional-bias-reformulation` branches) is
+validated on more test domains (see §8 of `HYDRAULICS.md` for the current
+recommendation and open items).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--q-centre-theta N` | `0.9` | Spatial momentum-smoothing parameter θ for the Q-centred scheme (checkerboard suppression), range `[0.0, 1.0]`. `0.9` is the LISFLOOD-FP standard (light smoothing); `1.0` disables the scheme (pure Bates semi-implicit momentum — may reveal period-2 checkerboarding on fine/irregular meshes). |
+| `--gradient-correction on\|off` | `off` | Enables the WLSQ non-orthogonal gradient correction in place of the legacy `cos θ`-only scaling. When `on`, the driving-head term is constructed by `--face-flux-method` below. Must be given an explicit `on`/`off` value (a bare flag is an error, to avoid accidentally swallowing the next argument). |
+| `--gradient-correction-alpha N` | `1.0` | Only applies when `--gradient-correction on --face-flux-method legacy`. Scales the tangential (non-orthogonal) correction term. `1.0` = full over-relaxed correction; `0.0` = orthogonal-only correction (direct WSE-difference term alone, no tangential term). **`0.0` is the empirically more stable interim setting** found during real-mesh testing (see `HYDRAULICS.md` §8) — `1.0` gives a larger correction but has been observed to overshoot into a mirrored bias under sustained ponding. Has no effect with `--face-flux-method diamond`. |
+| `--face-flux-method legacy\|diamond` | `legacy` | Only applies when `--gradient-correction on`. Selects how the corrected driving head is constructed. `legacy`: cell-centred WLSQ gradient, averaged onto the face, then skewness-corrected. `diamond`: face-local reconstruction built directly from the two adjacent cell centres and the edge's own two shared vertices, with no cell-averaged-then-shared gradient. Proven exact for linear fields; falls back to `legacy` automatically on any individual edge whose diamond geometry is degenerate (rare, confined to AOI-boundary vertices — see `HYDRAULICS.md` §7). |
+| `--momentum-model edge\|cell` | `edge` | Selects how previous-timestep momentum (`q_prev`) is represented. `edge`: one independent scalar per pentagon face (5 per cell) — the original Bates representation, carried over unmodified from a Cartesian grid. `cell`: a single 2D discharge vector per cell, reconstructed each step from all 5 face fluxes by WLSQ (Perot-style), then projected onto each face normal. Empirically the stronger of the two correction levers tested to date (see `HYDRAULICS.md` §7.3). |
+
+**Recommended experimental configuration** (opt-in, not default — see
+`HYDRAULICS.md` §8 for the evidence and caveats):
+```
+--flow-model standard --gradient-correction on --face-flux-method diamond --momentum-model cell
+```
 
 ### 4.4 Water source options
 
@@ -483,8 +525,10 @@ more steps. Typical values:
 | 20 | 5 s |
 
 **Multi-threading** helps most in the SGS table lookups and edge flux loops.
-Use `julia --threads auto` to exploit all available cores during simulation. Use
-`julia --threads 1` for mesh generation.
+Use `julia --threads auto` to exploit all available cores during simulation.
+For mesh generation, `--threads 1` is the recommended default — see the
+callout in §2 for the full explanation and the fallback if you use
+`--threads auto` and hit a crash.
 
 ---
 
@@ -516,5 +560,9 @@ Add `--rainfall`, `--rainpoint`, `--injection-point`, or `--inflow-bci` to the r
 on a steep DEM. Reduce `--dt-max` (try `--dt-max 5`) and check that the DEM
 covers the full AOI extent (`--dem-strict` will report cells outside the DEM).
 
-**Mesh generation hangs.** Use `--threads 1` for mesh generation. The Python
-bridge is not thread-safe during the mesh build phase.
+**Mesh generation crashes with a low-level fault (e.g.
+`EXCEPTION_ACCESS_VIOLATION`), rather than a normal Julia error.** This is a
+known interaction between Julia's garbage collector and the Python/GDAL
+bridge (`PyCall`) when a coordinate-transform call happens on a non-main
+thread. Retry with `--threads 1` — see the callout in §2 for what's
+actually going on and why `--threads auto` sometimes works fine anyway.

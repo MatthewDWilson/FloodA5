@@ -1,0 +1,87 @@
+[ Info: A5Grid: CUDA GPU detected ÔÇö PIP sampling will run on GPU
+Ôöî Info: Starting FloodA5 model...
+Ôöö   Dates.now() = 2026-08-24T21:12:49.792
+[ Info: Arguments passed: ["--meshload", "D:\\FloodA5\\test\\square\\square_mesh18_standard.parquet", "--flow-model", "standard", "--gradient-correction", "on", "--face-flux-method", "diamond", "--sim-duration", "60", "--dt-max", "10"]
+Ôöî Info: === A5 Flood Model ===
+Ôöö   Dates.now() = 2026-08-24T21:13:19.974
+[ Info: Vis mode    : none
+[ Info: Flow method : standard
+[ Info: Loading mesh from D:\FloodA5\test\square\square_mesh18_standard.parquet...
+[ Info: Loaded adjacency for 4702 cells from parquet neighbours column
+[ Info: Loaded mesh ÔÇö scalar: [cell_area], adjacency: 4702 cells
+[ Info: Mesh loaded in 2.14 s ÔÇö 4702 cells
+Ôöî Warning: No DEM provided and mesh has no saved elevation data. The model will run with flat terrain (z=0 everywhere). Use --dem <file.tif> to sample elevation data.
+Ôöö @ Main D:\FloodA5\FloodModel.jl:3083
+Ôöî Info: A5 Pentagon Mesh Summary
+Ôöé   Resolution   : 18
+Ôöé   Cell count   : 4702
+Ôöé   Lon range    : -0.0069 ÔåÆ 0.0069
+Ôöé   Lat range    : -0.0069 ÔåÆ 0.0069
+Ôöé   Elevation    : not sampled
+Ôöé   SGS tables   : not built
+Ôöé   Static vars  : cell_area
+Ôöé   Array vars   : none
+Ôöö   Backend      : GPU (CUDA, threshold=500000)
+[ Info: Initialising flow model (standard) on 4702 cells...
+Ôöî Warning: No elevation data ÔÇö all cells at z=0. Use --dem before running.
+Ôöö @ Main D:\FloodA5\FloodModel.jl:1550
+[ Info: Cell areas: min=497.0 max=497.0 mean=497.0 NaN=0 zero/small=0
+[ Info: Using pre-computed adjacency from mesh parquet...
+[ Info:   Adjacency ready in 0.0s (4702 cells)
+[ Info: Building edge list...
+[ Info: Edge list built: 11523 edges for 4702 cells (2.45 edges/cell)
+[ Info: Edge non-orthogonality (cos ╬©):  min=0.807  mean=0.916  max=0.953
+[ Info: Edge non-orthogonality (╬©, degrees):  min=17.7┬░  mean=22.7┬░  p95=36.2┬░  max=36.2┬░  (OpenFOAM: corrected-scheme-safe Ôëñ70┬░, limiting advised above)
+[ Info: Edge WLSQ correction vector |V╠é| (= sin ╬©):  mean=0.383  max=0.591  (0 = orthogonal/no correction, bounded in [0,1])
+[ Info: Q-centred collinear edges: ci=11425/11523  cj=11430/11523 found
+[ Info:   Edge list built in 0.0s
+[ Info: Mesh connectivity: fully connected (4702 cells, 1 component)
+[ Info: Building ghost edges (boundary BCs)...
+[ Info: Boundary cells: 273 / 4702 (5.8%)
+[ Info: Ghost edges: 464 created for 273 boundary cells (default BC: ZeroGradient)
+[ Info: WLSQ gradient weights built in 0.158s ÔÇö 4702/4702 cells with a valid 2D gradient stencil
+[ Info: Cell-vector momentum weights built in 0.002s ÔÇö 4702/4702 cells with a valid 2D momentum stencil (momentum_model=edge: precomputed but inactive)
+[ Info: Diamond flux: vertex table built ÔÇö 7286 vertices (227 k=2 fallback, 191 k<=1 fallback, 0 ill-conditioned)
+[ Info: Diamond flux: 11523/11523 edges have a valid diamond record (0 no shared edge, 0 degenerate normal, 0 degenerate area ÔÇö these fall back to the legacy gradient-correction path automatically)
+[ Info: Diamond flux table built in 0.204s
+[ Info: Flow model ready in 441 ms  (adjacency: 4702 cells, Manning n = 0.03, q_centre_theta = 0.9, gradient_correction = true, alpha = 1.0, momentum_model = edge, face_flux_method = diamond)
+[ Info: Starting simulation: duration=60.0s  dt_max=10.0s  rainfall=0.0 mm/hr  sources=0  open_bc=464
+[ Info: Pre-sim check: n_cells=4702  initial_vol_sum=0.0  rainfall_rate=0.0  n_inflow=0  n_injection=0  n_rainpoints=0  ghost_edges=464  open_bc=464
+[ Info:   Step 0: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info: step_standard! call 1: NaN_vol=0  NaN_elev=0 NaN_area=0  zero_area=0 vol_sum=0.0  max_water_depth=0.0
+[ Info:   cell[1]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[2]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[3]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   Step 1: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info: step_standard! call 2: NaN_vol=0  NaN_elev=0 NaN_area=0  zero_area=0 vol_sum=0.0  max_water_depth=0.0
+[ Info:   cell[1]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[2]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   cell[3]: vol=0.0  depth=0.0  wse=0.0
+[ Info:   Step 2: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info:   Step 3: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info:   Step 4: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info:   Step 5: vol_sum=0.0  src=  src_vol=Any[]  wet=0 (non-src=0)  dt=10.0
+[ Info: Simulation finished at t=60.0s  (6 steps)
+
+FloodA5 ÔÇö Run Summary
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Phase                          Wall time   % total
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Mesh load / generate              2.14 s     46.1%
+DEM sampling                      < 1 ms      0.0%
+SGS table build                   < 1 ms      0.0%
+Flow model init                   441 ms      9.5%
+Source / BC setup                 < 1 ms      0.0%
+Simulation                        2.04 s     43.9%
+HDF5 output (cumul.)              < 1 ms      0.0%
+Visualiser keepalive              < 1 ms      0.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+Total wall time                   4.64 s    100.0%
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  Cells          : 4702
+  Steps          : 6  (2.9 steps/wall-s)
+  Sim speed      : 29.44 sim-hrs/wall-hr  (0.02 sim-hrs in 2.04 s)
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+
+Ôöî Info: FloodA5 model finished.
+Ôöö   Dates.now() = 2026-08-24T21:13:24.629

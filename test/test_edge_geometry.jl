@@ -2,7 +2,7 @@
 test_edge_geometry.jl
 ---------------------
 Tests for Phase 1 physics corrections and the Option D EdgeList refactor:
-  - A5Grid._edge_cos_theta
+  - A5Grid._edge_geometry (cos θ + skewness; supersedes _edge_cos_theta)
   - _build_edge_list (EdgeList construction)
   - step_standard! / step_sgs! (EdgeList-based flux loop)
 
@@ -14,7 +14,7 @@ synthetically from first principles so the tests run offline and fast.
 
 Test structure
 --------------
-  Group 1 — _edge_cos_theta: unit geometry
+  Group 1 — _edge_geometry (cos θ component): unit geometry
       1.1  Perfectly orthogonal pair      → cos θ = 1.0 exactly
       1.2  45° skew                       → cos θ = cos(45°) ≈ 0.7071
       1.3  Arbitrary known angle          → cos θ within tolerance
@@ -170,10 +170,10 @@ function _make_pair_with_skew(skew_deg::Float64;
 end
 
 # ---------------------------------------------------------------------------
-# Group 1 — _edge_cos_theta unit geometry
+# Group 1 — _edge_geometry (cos θ component) unit geometry
 # ---------------------------------------------------------------------------
 
-println("\nGroup 1 — _edge_cos_theta unit geometry")
+println("\nGroup 1 — _edge_geometry (cos θ component) unit geometry")
 println("─" ^ 50)
 
 # 1.1  Perfectly orthogonal pair: c-to-c is due north, shared edge is
@@ -187,7 +187,7 @@ let
     bnd_j = [[-hw+lon0,  hw+lat0], [hw+lon0, hw+lat0],
               [hw+lon0,  3hw+lat0], [-hw+lon0, 3hw+lat0],
               [-hw+lon0,  hw+lat0]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0-0.005,
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0-0.005,
                                               lon0, lat0+hw+0.005)
     check("1.1  orthogonal pair → cos θ ≈ 1.0",
           isfinite(ct) && abs(ct - 1.0) < 0.01,
@@ -221,7 +221,7 @@ let
 
     lon_i = lon0;             lat_i = lat0 - hw   # centre i: south of edge
     lon_j = lon0 + dlon_deg;  lat_j = lat0 + hw   # centre j: north-east of edge
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon_i, lat_i, lon_j, lat_j)
     expected = cosd(45.0)
     check("1.2  45° skew → cos θ ≈ 0.7071",
           isfinite(ct) && abs(ct - expected) < 0.02,
@@ -231,7 +231,7 @@ end
 # 1.3  Arbitrary angle: 20°
 let
     cell_i, cell_j = _make_pair_with_skew(20.0)
-    ct = A5Grid._edge_cos_theta(cell_i.boundary, cell_j.boundary,
+    ct, _, _ = A5Grid._edge_geometry(cell_i.boundary, cell_j.boundary,
                                  cell_i.center_lon, cell_i.center_lat,
                                  cell_j.center_lon, cell_j.center_lat)
     expected = cosd(20.0)
@@ -253,7 +253,7 @@ let
     bnd_j = [[-hw+lon0+1.0, -hw+lat0+1.0], [hw+lon0+1.0, -hw+lat0+1.0],
               [hw+lon0+1.0,  hw+lat0+1.0], [-hw+lon0+1.0, hw+lat0+1.0],
               [-hw+lon0+1.0, -hw+lat0+1.0]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0, lon0+1.0, lat0+1.0)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0, lon0+1.0, lat0+1.0)
     check("1.4  non-adjacent cells → 1.0 fallback (no NaN suppression)",
           ct == 1.0, @sprintf("got %s", string(ct)))
 end
@@ -264,7 +264,7 @@ let
     lon0 = 0.0; lat0 = 0.0
     bnd_i = [[-hw, -hw], [hw, -hw], [hw, hw], [-hw, hw], [-hw, -hw]]
     bnd_j = [[-hw, hw],  [hw, hw],  [hw, 3hw], [-hw, 3hw], [-hw, hw]]
-    ct = A5Grid._edge_cos_theta(bnd_i, bnd_j, lon0, lat0-10.0, lon0, lat0+10.0)
+    ct, _, _ = A5Grid._edge_geometry(bnd_i, bnd_j, lon0, lat0-10.0, lon0, lat0+10.0)
     check("1.5  large centre separation → finite result, no crash",
           isfinite(ct))   # must be finite (NaN fallback → 1.0)
 end
@@ -272,10 +272,10 @@ end
 # 1.6  Symmetry: swap i and j → same cos θ
 let
     cell_i, cell_j = _make_pair_with_skew(30.0)
-    ct_ij = A5Grid._edge_cos_theta(cell_i.boundary, cell_j.boundary,
+    ct_ij, _, _ = A5Grid._edge_geometry(cell_i.boundary, cell_j.boundary,
                                     cell_i.center_lon, cell_i.center_lat,
                                     cell_j.center_lon, cell_j.center_lat)
-    ct_ji = A5Grid._edge_cos_theta(cell_j.boundary, cell_i.boundary,
+    ct_ji, _, _ = A5Grid._edge_geometry(cell_j.boundary, cell_i.boundary,
                                     cell_j.center_lon, cell_j.center_lat,
                                     cell_i.center_lon, cell_i.center_lat)
     check("1.6  symmetry: swap i↔j → same cos θ",
@@ -296,9 +296,9 @@ let
         bnd_j = [[-hw+lon0,  hw+lat0], [hw+lon0,  hw+lat0],
                   [hw+lon0,  3hw+lat0], [-hw+lon0, 3hw+lat0],
                   [-hw+lon0,  hw+lat0]]
-        A5Grid._edge_cos_theta(bnd_i, bnd_j,
+        A5Grid._edge_geometry(bnd_i, bnd_j,
                                 lon0, lat0-hw/2,
-                                lon0, lat0+hw*1.5)
+                                lon0, lat0+hw*1.5)[1]   # cos_theta component
     end
 
     ct_coarse = orthogonal_pair(hw_coarse)
@@ -320,6 +320,17 @@ println("─" ^ 50)
 
 # Build a minimal 3-cell synthetic mesh: cell 0 (centre) adjacent to cell 1
 # (north) and cell 2 (east), giving 2 undirected edges total.
+#
+# NOTE: cell IDs must be valid hex strings, because _build_edge_list
+# normalises every id via _norm(id) = _to_hex(parse(UInt64, id, base=16))
+# before doing any adjacency lookup (matching the real pya5 cell-ID
+# convention used in production).  Using non-hex placeholder strings like
+# "c0"/"mr_coarse" here previously caused every adjacency lookup to miss
+# silently (ids[i] became a zero-padded 16-char hex string but `adj`/`id_idx`
+# still used the original short keys), producing an empty EdgeList with no
+# error — this was a pre-existing bug in the test fixture, not in
+# _build_edge_list or _edge_geometry.  Fixed by using hex IDs throughout and
+# normalising the dictionary keys exactly as _build_edge_list will.
 function _three_cell_mesh()
     hw   = 0.01
     lon0 = 172.0; lat0 = -43.5
@@ -336,13 +347,23 @@ function _three_cell_mesh()
              [3hw+lon0,  hw+lat0], [hw+lon0,  hw+lat0],
              [hw+lon0, -hw+lat0]]
 
-    c0 = A5Cell("c0", 14, lon0,       lat0,       bnd0, NaN)
-    c1 = A5Cell("c1", 14, lon0,       lat0+2hw,   bnd1, NaN)
-    c2 = A5Cell("c2", 14, lon0+2hw,   lat0,       bnd2, NaN)
+    # Valid hex IDs (raw, pre-normalisation form — _build_edge_list will
+    # pad these to 16 chars internally via _norm).
+    id0, id1, id2 = "0", "1", "2"
+
+    c0 = A5Cell(id0, 14, lon0,       lat0,       bnd0, NaN)
+    c1 = A5Cell(id1, 14, lon0,       lat0+2hw,   bnd1, NaN)
+    c2 = A5Cell(id2, 14, lon0+2hw,   lat0,       bnd2, NaN)
 
     cells  = [c0, c1, c2]
-    id_idx = Dict("c0" => 1, "c1" => 2, "c2" => 3)
-    adj    = Dict("c0" => ["c1", "c2"], "c1" => ["c0"], "c2" => ["c0"])
+
+    # id_idx and adj must be keyed by the *normalised* hex string, since
+    # that is what _build_edge_list looks them up by (ids[i] = _norm(c.id)).
+    norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    n0, n1, n2 = norm(id0), norm(id1), norm(id2)
+
+    id_idx = Dict(n0 => 1, n1 => 2, n2 => 3)
+    adj    = Dict(n0 => [n1, n2], n1 => [n0], n2 => [n0])
     areas  = [_polygon_area_m2(c.boundary) for c in cells]
     elevs  = [0.0, 0.0, 0.0]
     return cells, id_idx, adj, areas, elevs
@@ -400,12 +421,20 @@ let
               [-hw_fine+lon0,  hw_coarse+hw_fine*2+lat0],
               [-hw_fine+lon0,  hw_coarse+lat0]]
 
-    c_c = A5Cell("mr_coarse", 14, lon0, lat0,                  bnd_c, NaN)
-    c_f = A5Cell("mr_fine",   15, lon0, lat0+hw_coarse+hw_fine, bnd_f, NaN)
+    # Valid hex IDs — see note in _three_cell_mesh() above. The original
+    # "mr_coarse"/"mr_fine" placeholder strings were not valid hex at all
+    # (contain 'r', 's', etc.), so parse(UInt64, ..., base=16) would throw
+    # outright. Use plain hex IDs and key id_idx/adj by their normalised form.
+    id_c, id_f = "10", "11"
+    c_c = A5Cell(id_c, 14, lon0, lat0,                  bnd_c, NaN)
+    c_f = A5Cell(id_f, 15, lon0, lat0+hw_coarse+hw_fine, bnd_f, NaN)
 
-    cells_mr  = [c_c, c_f]
-    id_idx_mr = Dict("mr_coarse" => 1, "mr_fine" => 2)
-    adj_mr    = Dict("mr_coarse" => ["mr_fine"], "mr_fine" => ["mr_coarse"])
+    cells_mr = [c_c, c_f]
+    norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    n_c, n_f = norm(id_c), norm(id_f)
+
+    id_idx_mr = Dict(n_c => 1, n_f => 2)
+    adj_mr    = Dict(n_c => [n_f], n_f => [n_c])
     areas_mr  = [_polygon_area_m2(c.boundary) for c in cells_mr]
     elevs_mr  = [0.0, 0.0]
 
@@ -545,7 +574,17 @@ function _make_edge_list(edges_spec::Vector{Tuple{Int,Int,Float64}};
     sls = [e[3] for e in edges_spec]
     EdgeList(ne, ci, cj,
              fill(width, ne), fill(L, ne), fill(cos_theta, ne),
-             sls, zeros(Float64, ne))
+             sls,
+             zeros(Float64, ne),   # flux
+             zeros(Float64, ne),   # flux_Q
+             zeros(Int, ne),       # collinear_i
+             zeros(Int, ne),       # collinear_j
+             zeros(Float64, ne),   # skew_x (orthogonal synthetic edges)
+             zeros(Float64, ne),   # skew_y
+             fill(L, ne),          # dx_m = L (edges run east)
+             zeros(Float64, ne),   # dy_m = 0
+             fill(1.0, ne),        # nf_x = 1 (east, orthogonal)
+             zeros(Float64, ne))   # nf_y = 0
 end
 
 function _minimal_state(; n_cells::Int,
@@ -555,15 +594,43 @@ function _minimal_state(; n_cells::Int,
                            edges::EdgeList,
                            manning_n::Vector{Float64}=fill(0.03, n_cells),
                            cell_area::Vector{Float64}=fill(1.5e6, n_cells),
-                           sgs_tables::Vector{Any}=Any[])
+                           sgs_tables::Vector{Any}=Any[],
+                           q_centre_theta::Float64=0.9,
+                           gradient_correction::Bool=false,
+                           gradient_correction_alpha::Float64=1.0,
+                           momentum_model::Symbol=:edge,
+                           face_flux_method::Symbol=:legacy)
+    adj_matrix = zeros(Int, 5, n_cells)   # not used by step functions in these tests
+
+    cell_edge_index = zeros(Int, N_SIDES, n_cells)
+    _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n_cells)
+    mom_weights = zeros(Float64, 10, n_cells)
+    _build_mom_weights!(mom_weights, cell_edge_index, edges, n_cells)
+
     FlowState(
         ["c$i" for i in 1:n_cells],
-        copy(depth), copy(volume), zeros(n_cells), copy(elev),
+        copy(depth), copy(volume),
+        zeros(n_cells), zeros(n_cells), zeros(n_cells),   # velocity, vel_u, vel_v
+        copy(elev),
         copy(manning_n), copy(cell_area),
+        zeros(n_cells), zeros(n_cells),   # cell_lons, cell_lats (unused by these tests)
         Dict{String,Vector{String}}(),
-        zeros(Int, 5, n_cells),   # adj_matrix (not used by step functions)
+        adj_matrix,
         edges,
         sgs_tables,
+        falses(n_cells),         # boundary_mask — no open boundaries in these synthetic tests
+        Any[],                   # ghost_edges — empty: Phase D is a no-op
+        Any[],                   # ghost_cell_bc
+        0.0,                     # vol_removed
+        zeros(Float64, 2, n_cells),    # grad_wse — unused while gradient_correction=false
+        zeros(Float64, 10, n_cells),   # wlsq_weights — unused while gradient_correction=false
+        q_centre_theta,
+        gradient_correction,
+        gradient_correction_alpha,
+        zeros(Float64, n_cells), zeros(Float64, n_cells),   # qvec_u, qvec_v
+        cell_edge_index, mom_weights,
+        momentum_model,
+        face_flux_method, nothing,   # face_flux_method, diamond_table (Phase C)
     )
 end
 
@@ -591,7 +658,17 @@ let
     edges = EdgeList(ne, [1,1], [2,2],
                      fill(200.0, ne), fill(1500.0, ne),
                      [NaN, 1.0],     # slot 0: NaN → skipped; slot 1: valid
-                     fill(0.0, ne),  zeros(Float64, ne))
+                     fill(0.0, ne),
+                     zeros(Float64, ne),    # flux
+                     zeros(Float64, ne),    # flux_Q
+                     zeros(Int, ne),        # collinear_i
+                     zeros(Int, ne),        # collinear_j
+                     zeros(Float64, ne),    # skew_x
+                     zeros(Float64, ne),    # skew_y
+                     fill(1500.0, ne),      # dx_m = L (east)
+                     zeros(Float64, ne),    # dy_m = 0
+                     fill(1.0, ne),         # nf_x = 1 (east, orthogonal)
+                     zeros(Float64, ne))    # nf_y = 0
     depth  = [2.0, 0.5]
     volume = depth .* 1.5e6
     state  = _minimal_state(n_cells=2, depth=depth, volume=volume, edges=edges)
@@ -641,7 +718,27 @@ let
     elev_bins  = collect(range(0.0, 4.0, length=n_bins))
     vol_curve  = area .* elev_bins
     area_curve = fill(area, n_bins)
-    tbl = SGSTable(elev_bins, vol_curve, area_curve, area, 0.0, 4.0)
+
+    # step_sgs! always uses the R-A kernel (_manning_flux_ra) — there is no
+    # Bates fallback in the current implementation despite the SGSTable
+    # docstring's "falls back to Bates if zero" note (that note describes
+    # intended legacy-mesh behaviour, not what step_sgs! actually does).
+    # zeros(n_bins, 5) for edge_area_curves would make _manning_flux_ra's
+    # `A <= 1e-6 && return 0.0` dry-edge guard fire on every edge, silently
+    # producing zero flux — test 4.5's assertion would then fail, correctly
+    # flagging that no water moved, but for the wrong reason (a degenerate
+    # fixture, not the physics under test).  Build a simple rectangular
+    # channel cross-section instead: width 50m, so at WSE = elev_bins[k]
+    # the flow area through any edge is 50 × elev_bins[k] (m²) and the
+    # wetted perimeter is 50 + 2×elev_bins[k] (m) — a trapezoidal-ish
+    # rectangular trench, consistent with the T-EA1 analytical test case
+    # described in FloodA5_SGS_RA_Flux_Implementation.md §4.1.
+    chan_width = 50.0
+    edge_area_curve  = repeat(chan_width .* elev_bins, 1, 5)
+    edge_perim_curve = repeat(chan_width .+ 2.0 .* elev_bins, 1, 5)
+
+    tbl = SGSTable(elev_bins, vol_curve, area_curve, area, 0.0, 4.0,
+                   edge_area_curve, edge_perim_curve)
 
     edges  = _make_edge_list([(1, 2, 0.0)])
     volume = [3.0e6, 0.75e6]
@@ -662,7 +759,16 @@ let
     elev_bins  = collect(range(0.0, 4.0, length=n_bins))
     vol_curve  = area .* elev_bins
     area_curve = fill(area, n_bins)
-    tbl = SGSTable(elev_bins, vol_curve, area_curve, area, 0.0, 4.0)
+
+    # See note in test 4.5 above: step_sgs! always uses the R-A kernel, so
+    # the edge curves must be non-degenerate for this test to exercise real
+    # flux rather than a silent zero-flow no-op.
+    chan_width = 50.0
+    edge_area_curve  = repeat(chan_width .* elev_bins, 1, 5)
+    edge_perim_curve = repeat(chan_width .+ 2.0 .* elev_bins, 1, 5)
+
+    tbl = SGSTable(elev_bins, vol_curve, area_curve, area, 0.0, 4.0,
+                   edge_area_curve, edge_perim_curve)
 
     edges  = _make_edge_list([(1,2,0.0), (2,3,0.0)])
     volume = [3.0e6, 1.5e6, 0.75e6]

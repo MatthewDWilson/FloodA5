@@ -16,6 +16,7 @@ binding.
 ```
 FloodModel.jl          Entry point, CLI, simulation loop, FlowState
 mesh/A5Grid.jl         Julia module: mesh struct, DEM sampling, SGS tables
+mesh/DiamondFlux.jl    Diamond face-flux reconstruction (opt-in; see HYDRAULICS.md §7.2)
 mesh/a5_bridge.py      Python subprocess: pya5 calls, GeoParquet I/O
 surfacewater/flow2d.jl Pure physics kernels (Bates, Manning R-A, CFL)
 boundaryinputs/        Source types, BC types, hydrograph I/O
@@ -42,19 +43,33 @@ The entry point and main application file. Responsibilities:
 - **CLI parsing** — `_pop_flag` / `_pop_bool` helpers and the `main()` function.
   The `print_help()` function is the authoritative CLI reference.
 - **Mesh initialisation** — `initialise_flow_model(mesh, method)` builds the
-  `EdgeList`, assigns SGS tables, detects boundary cells, builds ghost edges, and
-  resolves source locations.
+  `EdgeList`, assigns SGS tables, detects boundary cells, builds ghost edges,
+  pre-computes the WLSQ gradient and cell-momentum weight matrices (always,
+  regardless of whether the directional-bias corrections are enabled — see
+  `HYDRAULICS.md` §7), and — only when `--face-flux-method diamond` is
+  selected — builds the diamond flux table (`mesh/DiamondFlux.jl`), which is
+  otherwise left as `nothing` since it is more expensive to construct than
+  the always-built WLSQ weights.
 - **Simulation loop** — `run_simulation!(state, method, sources, ...)` drives
-  the timestep loop. Per-step phases:
-  - Phase A: apply water sources
-  - Phase B: sync `water_depth` from `volume` (standard solver)
-  - Phase C: compute edge fluxes and accumulate `dV`
-  - Phase D: apply volume limiter and scatter `dV` to `volume`
-  - Phase E: apply ghost-edge (boundary outflow) fluxes
-  - Phase F: log progress and write output frames
+  the timestep loop. Each outer-loop step:
+  1. Applies all water sources (`apply_source!` for every `AbstractSource`)
+  2. Syncs `water_depth` from `volume` (standard solver only — SGS derives
+     WSE from the hypsometric table directly inside `step_sgs!`)
+  3. Calls `step_standard!` or `step_sgs!`, which implement their own
+     internal phases (see below)
+  4. Logs progress and writes output frames
 
-The step functions `step_standard!` and `step_sgs!` implement Phases C–D for
-their respective solvers.
+  The step functions have their own internal phase lettering, which is
+  *not* the same as the outer loop's steps above:
+
+  | Phase | `step_standard!` | `step_sgs!` |
+  |---|---|---|
+  | A | Parallel edge flux computation | Parallel edge flux computation |
+  | B | Serial `dV` scatter | Serial `dV` scatter, per-edge donor limiter |
+  | C | Parallel cell volume update | Parallel cell volume update |
+  | D | Open-boundary (ghost-edge) outflow | Open-boundary (ghost-edge) outflow |
+  | E | Velocity computation | Velocity computation |
+  | F | Cell-vector momentum reconstruction (`--momentum-model cell` only) | — (not implemented for SGS; see `HYDRAULICS.md` §9.4) |
 
 **Include order matters.** `flow2d.jl` is included after type definitions but
 before the step functions, because the step functions call kernels defined there.
@@ -115,6 +130,17 @@ A smoke-test mode is available: `python mesh/a5_bridge.py check`.
 garbage collector in multithreaded Julia contexts. The subprocess boundary provides
 complete isolation.
 
+### `mesh/DiamondFlux.jl`
+
+Implements the diamond face-flux reconstruction (`--face-flux-method
+diamond`; see `HYDRAULICS.md` §7.2). Deliberately does **not** add fields to
+`EdgeList` — all diamond-specific geometry lives in a separate
+`DiamondFluxTable`, keyed 1:1 with `EdgeList` by edge index, referenced from
+`FlowState.diamond_table` (`nothing` unless `--face-flux-method diamond` is
+selected). Key exports: `VertexRecord`, `eta_at_vertex`, `build_diamond_flux_table`.
+When `--face-flux-method legacy` (the default) is selected, this file's
+functions are loaded but never called — zero behavioural change.
+
 ### `surfacewater/flow2d.jl`
 
 Pure physics kernels — no `FlowState`, no mesh, no I/O. All functions are
@@ -132,9 +158,14 @@ Key functions:
 | `_manning_ghost_flux` | Outflow flux across a ghost edge (SGS solver). |
 | `_cfl_dt` | Wave-speed CFL timestep. |
 | `_q_centred` | Q-centred (spatially smoothed) unit discharge. |
+| `_bates_flux_corrected` / `_bates_flux_limited_corrected` | WLSQ or diamond-corrected driving head, standard flow. See `HYDRAULICS.md` §7. |
 
 Constants: `_G = 9.81`, `HFLOW_THRESHOLD = 0.001`, `FROUDE_LIMIT = 0.8`,
-`Q_CENTRE_THETA = 0.9`, `N_SIDES = 5`, `DONOR_EDGE_DIVISOR = 10`.
+`N_SIDES = 5`, `DONOR_EDGE_DIVISOR = 10`. `Q_CENTRE_THETA_DEFAULT = 0.9` is
+only the *default* — the live value is `state.q_centre_theta`, set via
+`--q-centre-theta` and threaded through explicitly (it was promoted from a
+plain constant to a `FlowState` field so it could be varied per run for
+the directional-bias correction work — see `HYDRAULICS.md` §7).
 
 This file is designed to be includable independently (e.g. by a GPU kernel
 wrapper or a 3D coupling plugin) without pulling in the full application.
@@ -173,32 +204,54 @@ Four scripts and one static directory:
 
 ### `FlowState`
 
-The central mutable struct, passed through the entire simulation loop:
+The central mutable struct, passed through the entire simulation loop. The
+fields below are grouped by purpose; see the struct definition in
+`FloodModel.jl` (it carries extensive inline comments explaining the
+non-obvious ones, particularly around the directional-bias fields) for the
+authoritative, fully-commented version.
 
 ```julia
 mutable struct FlowState
+    # ── Core per-cell state ──────────────────────────────────────────────
     cell_ids    :: Vector{String}
     water_depth :: Vector{Float64}   # m — diagnostic; derived from volume each step
     volume      :: Vector{Float64}   # m³ — PRIMARY STATE VARIABLE
     velocity    :: Vector{Float64}   # m/s scalar magnitude
-    elevation   :: Vector{Float64}   # bed elevation (m)
-    manning_n   :: Vector{Float64}   # Manning's roughness per cell
-    cell_area   :: Vector{Float64}   # plan area (m²)
-    cell_lons   :: Vector{Float64}   # cell centre longitude (degrees)
-    cell_lats   :: Vector{Float64}   # cell centre latitude (degrees)
+    vel_u       :: Vector{Float64}   # m/s eastward velocity component
+    vel_v       :: Vector{Float64}   # m/s northward velocity component
+    elevation   :: Vector{Float64}
+    manning_n   :: Vector{Float64}
+    cell_area   :: Vector{Float64}
+    cell_lons   :: Vector{Float64}
+    cell_lats   :: Vector{Float64}
     adjacency   :: Dict{String, Vector{String}}
-    adj_matrix  :: Matrix{Int}       # (5 × n_cells) — for neighbour queries
+    adj_matrix  :: Matrix{Int}       # (max_nb × n_cells)
     edges       :: EdgeList
     sgs_tables  :: Vector{Any}       # Vector{SGSTable} for SGS; empty for standard
-    boundary_mask  :: BitVector      # true = domain-edge cell
-    ghost_edges    :: Vector{GhostEdge}
-    ghost_cell_bc  :: Vector{BCType}
-    vol_removed    :: Float64        # cumulative outflow through ghost edges (m³)
+
+    # ── Open boundary / ghost-edge state ─────────────────────────────────
+    boundary_mask :: BitVector
+    ghost_edges   :: Vector{Any}     # Vector{GhostEdge}
+    ghost_cell_bc :: Vector{Any}     # Vector{BCType}
+    vol_removed   :: Float64         # cumulative ghost-edge outflow (m³)
+
+    # ── Directional-bias correction state (see HYDRAULICS.md §7) ────────
+    # Always allocated and populated regardless of whether corrections are
+    # enabled — the cost of building them is small relative to mesh
+    # generation, and it keeps FlowState's shape independent of CLI flags.
+    grad_wse                  :: Matrix{Float64}   # (2 × n_cells) per-cell WSE gradient
+    wlsq_weights              :: Matrix{Float64}   # (10 × n_cells) pre-computed WLSQ projection
+    q_centre_theta            :: Float64           # --q-centre-theta
+    gradient_correction       :: Bool              # --gradient-correction
+    gradient_correction_alpha :: Float64           # --gradient-correction-alpha (legacy method only)
+    qvec_u, qvec_v            :: Vector{Float64}   # per-cell 2D discharge vector (--momentum-model cell)
+    cell_edge_index           :: Matrix{Int}       # (slot, cell) → edge index
+    mom_weights               :: Matrix{Float64}   # (10 × n_cells) WLSQ projection for qvec
+    momentum_model            :: Symbol            # :edge (default) or :cell
+    face_flux_method          :: Symbol            # :legacy (default) or :diamond
+    diamond_table             :: Any               # DiamondFluxTable, or nothing if :legacy
 end
 ```
-
-`volume` is the primary state variable. `water_depth` is a derived diagnostic,
-recomputed each step.
 
 ### `EdgeList`
 
@@ -206,23 +259,38 @@ Undirected edge list — each edge stored once, with `cell_i < cell_j`:
 
 ```julia
 struct EdgeList
-    n_edges   :: Int
-    cell_i    :: Vector{Int}       # lower-index cell
-    cell_j    :: Vector{Int}       # higher-index cell
-    width     :: Vector{Float64}   # shared edge length (m)
-    L         :: Vector{Float64}   # centre-to-centre haversine distance (m)
-    cos_theta :: Vector{Float64}   # non-orthogonality correction (1.0 = orthogonal)
-    sill      :: Vector{Float64}   # sill elevation (m)
-    flux      :: Vector{Float64}   # q (m²/s) at t-dt — standard solver
-    flux_Q    :: Vector{Float64}   # Q (m³/s) at t-dt — SGS R-A solver
-    collinear_i :: Vector{Int}     # index of most collinear edge for cell_i (Q-centred)
-    collinear_j :: Vector{Int}     # index of most collinear edge for cell_j
+    n_edges     :: Int
+    cell_i      :: Vector{Int}       # lower-index cell
+    cell_j      :: Vector{Int}       # higher-index cell
+    width       :: Vector{Float64}   # shared edge length (m)
+    L           :: Vector{Float64}   # centre-to-centre haversine distance (m)
+    cos_theta   :: Vector{Float64}   # oriented cos θ = d̂·n̂ ∈ [0,1] (n̂ oriented so d̂·n̂ ≥ 0)
+    sill        :: Vector{Float64}   # sill elevation (m)
+    flux        :: Vector{Float64}   # q (m²/s) at t-dt — standard flow, SGS Bates kernel
+    flux_Q      :: Vector{Float64}   # Q (m³/s) at t-dt — SGS R-A kernel only, zero otherwise
+    collinear_i :: Vector{Int}       # Q-centred scheme: most-collinear edge on the ci side
+    collinear_j :: Vector{Int}       # Q-centred scheme: most-collinear edge on the cj side
+    skew_x      :: Vector{Float64}   # V̂ₓ — tangential correction vector component (see below)
+    skew_y      :: Vector{Float64}   # V̂ᵧ
+    dx_m        :: Vector{Float64}   # cj−ci displacement, local metres, x
+    dy_m        :: Vector{Float64}   # cj−ci displacement, local metres, y
+    nf_x        :: Vector{Float64}   # oriented unit face normal, x
+    nf_y        :: Vector{Float64}   # oriented unit face normal, y
 end
 ```
 
-**Sign convention:** `flux > 0` means flow from `cell_j` to `cell_i` (j is higher).
-When `WSE_i > WSE_j`: `dWSE > 0` → `q_new < 0` → `Q < 0` → `dV[i] += Q·dt` (i
-loses volume) → correct.
+**On `skew_x`/`skew_y`:** despite the field names (kept unchanged through a
+revision to minimise diff size), these hold the *directional* correction
+vector `V̂ = n̂ − c·d̂` (dimensionless, `|V̂| = sin θ`), **not** a positional
+offset in metres. An earlier formulation genuinely did store a positional
+offset here and was found to be geometrically incorrect — see the
+`_edge_geometry` docstring in `mesh/A5Grid.jl` for the full account if
+you're modifying anything that touches this field. This is exactly the
+kind of thing worth reading before touching this code, not after.
+
+**Sign convention:** `flux > 0` means flow from `cell_j` to `cell_i` (j is
+higher). When `WSE_i > WSE_j`: `dWSE > 0` → `q_new < 0` → `Q < 0` →
+`dV[i] += Q·dt` (i loses volume) — correct.
 
 ### `SGSTable`
 
@@ -294,6 +362,29 @@ dependency, included by `FloodModel.jl`.
 
 Planned future readers: `WaterML2Reader`, `CFNetCDFGaugeReader`, `HydroMLReader`.
 
+### Adding a new directional-bias correction
+
+The `--gradient-correction` / `--face-flux-method` / `--momentum-model`
+machinery (see `HYDRAULICS.md` §7) is deliberately structured so a new
+correction can be added without touching the others:
+
+1. A new driving-head construction (like the diamond method) is a new
+   function taking pre-computed geometry and cell/edge state and returning
+   `dWSE_n`, dispatched on a new `face_flux_method` symbol in
+   `step_standard!` Phase A. It does not need a new flux kernel — B1's
+   proof (see `FloodA5_PhaseB_B1_FaceFluxEquation.md` in the project's
+   internal development history) established that any exact gradient
+   source plugs into the existing `_bates_flux_limited_corrected`
+   unchanged.
+2. A new momentum representation (like the cell-vector model) is a new
+   `momentum_model` symbol, a new per-cell or per-edge state array on
+   `FlowState`, and a dispatch branch computing `q_prev_eff` in
+   `step_standard!` Phase A plus a reconstruction step in Phase F.
+3. **Either kind of correction currently only reaches `step_standard!`.**
+   Extending either to `step_sgs!` is open work — see `HYDRAULICS.md` §9.4
+   for the specific known risk (interaction with the SGS dry-cell WSE
+   clamp) that needs resolving first.
+
 ### Adding a new visualisation variable
 
 1. Add the variable to `FlowState` and compute it in the step function.
@@ -340,9 +431,22 @@ resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`.
 
 ## 6. Thread Safety
 
-- **Mesh generation** — use `julia --threads 1`. The Python bridge makes PyCall
-  calls inside loops; garbage collection on non-main threads can trigger PyCall
-  finalisers and crash. This is a known limitation.
+- **Mesh generation** — `--threads 1` is the recommended default. The known
+  hazard: `ArchGDAL.createcoordtrans` (a PyCall-backed GDAL call) is invoked
+  from inside `Threads.@threads` loops in both `sample_dem_mean!` (standard
+  DEM sampling) and `build_sgs_tables!`'s Step 1 (hypsometric curve build).
+  Garbage collection firing on a non-main thread during one of these calls
+  can trigger a `PyCall` finaliser crash (`EXCEPTION_ACCESS_VIOLATION` or
+  similar). Two specific instances of this were found and fixed by making
+  the affected loop serial (`_shared_edge`'s internal implementation, and
+  `build_sgs_tables!`'s Step 2 edge-sill loop) — both are now safe under any
+  thread count — but the two loops named above still carry the same general
+  hazard and have not been made serial. In practice, `--threads auto` mesh
+  generation (including DEM sampling) has run successfully; the failure mode
+  was originally observed to depend on mesh size and GC timing rather than
+  occurring every time, so a clean run is not a guarantee. If mesh generation
+  ever crashes with a low-level fault rather than a Julia error, retry with
+  `--threads 1`.
 - **Simulation loop** — safe with any thread count. The edge flux loop uses
   `Threads.@threads` over the `EdgeList`; there are no write hazards because
   the loop accumulates into per-edge `edge_vol` arrays before scattering to cells.
@@ -364,15 +468,30 @@ Key test files:
 | File | What it tests |
 |---|---|
 | `test_a5grid.jl` | A5Grid cell API |
-| `test_edge_geometry.jl` | `_shared_edge`, `_edge_cos_theta`, `_edge_length_m` |
+| `test_edge_geometry.jl` | `_edge_geometry` (cos θ, tangential correction vector, face normal) |
 | `test_sgs_unit.jl` | SGS hypsometric lookups, 5-cell chain routing |
 | `test_sgs_edge_ra_tables.jl` | SGS edge flow area / wetted perimeter curves |
 | `test_inflow_point.jl` | `InflowPoint`, `_interp_hydrograph`, `.bdy` reader, `.bci` parser |
 | `test_open_boundary.jl` | Ghost edge geometry, BC types, outflow flux, mass balance |
 | `test_flat_rainpoint.jl` | Flat-terrain point-source integration test |
-| `synthetic_dem/test_sgs_synthetic.jl` | Full SGS validation: mesh, routing, sub-cell notch, mass balance |
+| `test_noc_correction.jl` | WLSQ gradient weights and reconstruction correctness (T-NOC1–5) |
+| `test_point_spread.jl` | Point-spread directional-bias benchmark (convex hull, Polsby–Popper circularity) |
+| `test_planar_symmetry.jl` | Planar-slope north/south volume-asymmetry benchmark — the primary directional-bias acceptance test |
+| `test_mirror_symmetry.jl` | Synthetic mirror-symmetric geometry — isolates the driving-head formula from real-mesh noise |
+| `test_cell_momentum.jl` | Cell-vector momentum reconstruction (`--momentum-model cell`) |
+| `test_analytical_gradient_threeway.jl` | Gradient-reconstruction exactness, raw/limited flux comparison, `:edge`-vs-`:cell` convergence |
+| `synthetic_dem/test_sgs_synthetic.jl` | Full SGS validation: mesh, routing, sub-cell notch, mass balance (T0–T4) |
 
 The synthetic DEM test (`test_sgs_synthetic.jl`) is the most comprehensive
 validation: it uses a purpose-built DEM with a Gaussian embankment containing
 a sub-cell notch, and confirms that the SGS solver routes 5–14× more water through
 the notch than the standard solver at the same injection history.
+
+Several one-off audit/diagnostic scripts (`audit_vertex_valence.jl`,
+`audit_diamond_gradient.jl`, `audit_centre_vs_centroid.jl`,
+`audit_vertex_winding.jl`, `diagnose_skew_bias.jl`, and others) were written
+during the directional-bias investigation to check specific geometric
+properties against real mesh data rather than as ongoing regression tests.
+They're kept in `test/` since they're cheap to re-run and useful if the
+mesh-generation pipeline changes, but aren't part of the standard test
+suite above.

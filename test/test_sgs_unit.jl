@@ -135,13 +135,30 @@ if abspath(PROGRAM_FILE) == @__FILE__
     e_flux   = zeros(Float64, n_edges)
 
     edges = EdgeList(n_edges, e_ci, e_cj, e_width, e_L, e_ct, e_sill,
-                     e_flux, zeros(Float64, n_edges))   # flux_Q (m³/s, R-A kernel)
+                     e_flux, zeros(Float64, n_edges),
+                     zeros(Int, n_edges), zeros(Int, n_edges),
+                     zeros(Float64, n_edges), zeros(Float64, n_edges),
+                     e_L, zeros(Float64, n_edges),  # dx_m=L
+                     zeros(Float64, n_edges), zeros(Float64, n_edges))  # dy_m=0; nf=0
 
     # Lons/lats: ~30m spacing along a longitude line near (0,0)
     cell_lons = Float64[i * 0.00027 for i in 0:(n_cells-1)]   # ~30m per step
     cell_lats = zeros(Float64, n_cells)
 
     function fresh_state()
+        edges_i = EdgeList(n_edges, copy(e_ci), copy(e_cj), copy(e_width),
+                 copy(e_L), copy(e_ct), copy(e_sill), copy(e_flux),
+                 zeros(Float64, n_edges),
+                 zeros(Int, n_edges), zeros(Int, n_edges),
+                 zeros(Float64, n_edges), zeros(Float64, n_edges),
+                 copy(e_L), zeros(Float64, n_edges),   # dx_m=L
+                 zeros(Float64, n_edges), zeros(Float64, n_edges))  # nf=0
+
+        cell_edge_index = zeros(Int, N_SIDES, n_cells)
+        _build_cell_edge_index!(cell_edge_index, adj_matrix, edges_i, n_cells)
+        mom_weights = zeros(Float64, 10, n_cells)
+        _build_mom_weights!(mom_weights, cell_edge_index, edges_i, n_cells)
+
         FlowState(
             copy(ids),
             zeros(n_cells),     # water_depth
@@ -156,10 +173,23 @@ if abspath(PROGRAM_FILE) == @__FILE__
             copy(cell_lats),
             deepcopy(adj_dict),
             copy(adj_matrix),
-            EdgeList(n_edges, copy(e_ci), copy(e_cj), copy(e_width),
-                     copy(e_L), copy(e_ct), copy(e_sill), copy(e_flux),
-                     zeros(Float64, n_edges)),   # flux_Q (m³/s, R-A kernel)
+            edges_i,
             deepcopy(tbls),
+            falses(n_cells),    # boundary_mask — no open boundaries in this synthetic chain
+            Any[],              # ghost_edges
+            Any[],              # ghost_cell_bc
+            0.0,                # vol_removed
+            zeros(Float64, 2, n_cells),    # grad_wse — unused while gradient_correction=false
+            zeros(Float64, 10, n_cells),   # wlsq_weights — unused while gradient_correction=false
+            0.9,                # q_centre_theta (production default)
+            false,              # gradient_correction (legacy kernels; SGS unit tests
+                                 # exercise the existing Bates/R-A path, not the WLSQ fix)
+            1.0,                # gradient_correction_alpha
+            zeros(Float64, n_cells), zeros(Float64, n_cells),   # qvec_u, qvec_v
+            cell_edge_index, mom_weights,
+            :edge,              # momentum_model — SGS path is :edge only
+            :legacy, nothing,   # face_flux_method, diamond_table (Phase C;
+                                 # step_sgs! doesn't read these yet)
         )
     end
 

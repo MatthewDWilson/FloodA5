@@ -47,18 +47,18 @@ Stored as Apache Arrow list columns (variable-length arrays). Each row contains 
 
 | Column | Length | Description |
 |---|---|---|
-| `sgs_elev_bins` | n_bins + 1 | Elevation bin edges (m), quantile-spaced from z_min to z_max |
+| `sgs_elev_bins` | n_bins | Elevation bin knot points (m), quantile-spaced from z_min to z_max |
 | `sgs_vol_curve` | n_bins | Cumulative stored volume at each bin edge (m³) |
 | `sgs_area_curve` | n_bins | Wetted plan area at each bin elevation (m²) |
 | `sgs_edge_sills` | max_nb | Minimum DEM elevation along the shared edge to each neighbour (m), indexed by adjacency slot |
 | `sgs_edge_area_curve` | n_bins × max_nb | Cross-sectional flow area at each elevation knot, per adjacency slot (m²). Stored as a flat array of length n_bins × 5; reshape to (n_bins, 5) on load. |
 | `sgs_edge_perim_curve` | n_bins × max_nb | Wetted perimeter at each elevation knot, per adjacency slot (m). Same layout as `sgs_edge_area_curve`. |
 
-### Adjacency columns
+### Adjacency column
 
 | Column | dtype | Description |
 |---|---|---|
-| `adj_0` … `adj_4` | string | Neighbour cell IDs in each of the up to 5 adjacency slots. Empty string if the slot is unused (boundary cells have fewer than 5 neighbours). |
+| `neighbours` | list of string | Neighbour cell IDs (edge-sharing adjacency, up to 5). Variable-length — boundary cells with fewer than 5 neighbours simply have a shorter list, rather than a fixed 5-slot layout with empty placeholders. Cell ID normalisation (16-char zero-padded hex) is applied on load; see `A5_QUIRKS.md` §2. |
 
 ### Reading in Python
 
@@ -114,7 +114,9 @@ Each snapshot is a numbered subgroup:
 | `volume` | (n_cells,) | float64 | Stored water volume (m³) — primary state variable |
 | `saturation` | (n_cells,) | float64 | Wetted fraction 0–1 (SGS: meaningful; standard: binary) |
 | `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s) |
-| `flux_Q` | (n_edges,) | float64 | Volumetric flux per edge (m³/s), SGS R-A solver only. Zero for standard solver. |
+| `vel_u` | (n_cells,) | float64 | Eastward velocity component (m/s) |
+| `vel_v` | (n_cells,) | float64 | Northward velocity component (m/s) |
+| `flux_Q` | (n_edges,) | float64 | Volumetric flux per edge (m³/s). Only present in the frame group when at least one edge is non-zero — i.e. only for SGS runs using the R-A flux kernel (see `HYDRAULICS.md` §9.3). Absent (not zero-filled) otherwise. |
 
 Datasets are chunked (`min(n_cells, 4096)`) and gzip-compressed (level 4). Frame
 groups are zero-padded to six digits.
@@ -222,11 +224,17 @@ Specifies boundary condition entries for the domain. FloodA5 supports `P`-type
 
 | Col | Description |
 |---|---|
-| 1 | Entry type: `P` (point source), `N/E/S/W` (unsupported), `F` (unsupported) |
+| 1 | Entry type: `P` (point source), `N/E/S/W` (unsupported — see below), `F` (unsupported) |
 | 2 | Longitude (or easting if `--bc-epsg` is set) |
 | 3 | Latitude (or northing) |
-| 4 | BC code: `QVAR`, `QFIX`, or `FREE` |
+| 4 | BC code: `QVAR`, `QFIX`, `FREE`, or `HFIX`/`HVAR` (see below) |
 | 5 | For `QVAR`: series name in the companion `.bdy` file. For `QFIX`: discharge in m³/s. |
+
+**`HFIX`/`HVAR` (fixed/time-varying water surface elevation — tide-style
+boundary) entries are recognised by the parser but not yet implemented.**
+They are logged with a warning and skipped rather than silently ignored or
+misapplied. This is planned future work (see the roadmap in the top-level
+`README.md`).
 
 Example:
 
