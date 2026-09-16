@@ -187,10 +187,17 @@ stability fixes that match the CAESAR-Lisflood qroute() implementation:
   Prevents supercritical discharge and suppresses the checkerboard instability
   on irregular/pentagonal meshes where each edge has an independent q_prev.
 
-**Fix B — Volume limiter** (CAESAR: depth/4 threshold → depth/5 cap per edge)
-  Caps |Q × dt| at `depth_donor × width / 5.0`, so no more than ~20% of the
-  donor cell's water can leave via one edge per step.  On A5 cells `width` is
-  the natural spatial scale (shared edge length).
+**Fix B — Volume limiter** (CAESAR: depth/4 threshold → depth/5 cap per edge
+  on A5, where the mesh has 5 neighbours per interior cell)
+  Caps |Q × dt| at `depth_donor × width / (vol_limit_divisor × dt)`, so no
+  more than `1/vol_limit_divisor` of the donor cell's water can leave via
+  one edge per step. `vol_limit_divisor` defaults to `5.0` (A5's own
+  neighbour count, i.e. today's exact original behaviour) but the caller
+  should pass the mesh's own neighbour ceiling (`state.max_neighbours` —
+  e.g. `4.0` for a Cartesian grid) so the ~20%-per-edge reasoning reflects
+  this mesh's actual connectivity rather than an A5-specific assumption
+  baked into the default. On any mesh, `width` is the natural spatial scale
+  (shared edge length).
 
 **Fix C — Consistent q_stored**
   Returns the *post-limiting* unit discharge as `q_stored` for writing back to
@@ -216,7 +223,9 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
                                       cos_theta    :: Float64,
                                       n_mann       :: Float64,
                                       dt           :: Float64,
-                                      depth_donor  :: Float64)::Tuple{Float64,Float64}
+                                      depth_donor  :: Float64;
+                                      vol_limit_divisor :: Float64 = 5.0
+                                      )::Tuple{Float64,Float64}
     h_flow = max(wse_i, wse_j) - z_sill
     if h_flow <= HFLOW_THRESHOLD
         # Edge is dry — zero out stale momentum so adjacent cells don't
@@ -242,9 +251,16 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     q_max = h_flow * sqrt(_G * h_flow) * FROUDE_LIMIT
     q_new = clamp(q_new, -q_max, q_max)
 
-    # Fix B: Volume limiter — no more than 1/5 of donor depth per edge per step
+    # Fix B: Volume limiter — no more than 1/vol_limit_divisor of donor depth
+    # per edge per step. vol_limit_divisor defaults to 5.0 (A5's neighbour
+    # count, matching the original CAESAR-derived behaviour exactly) but the
+    # caller should pass the mesh's own max_neighbours (e.g. 4.0 for a
+    # Cartesian grid) so the cap reflects "no more than 1/n_sides of this
+    # cell's donor depth", not an A5-specific assumption. Kept as a plain
+    # scalar argument (not a FlowState/mesh reference) so this function
+    # stays data-structure-independent — see the module-level docstring.
     if depth_donor > 0.0
-        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_vol_max = (depth_donor * width) / (vol_limit_divisor * dt)
         q_new = clamp(q_new, -q_vol_max, q_vol_max)
     end
 
@@ -358,7 +374,8 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
                                                 L           :: Float64,
                                                 n_mann      :: Float64,
                                                 dt          :: Float64,
-                                                depth_donor :: Float64
+                                                depth_donor :: Float64;
+                                                vol_limit_divisor :: Float64 = 5.0
                                                 )::Tuple{Float64,Float64}
     if h_flow <= HFLOW_THRESHOLD
         # See _bates_flux_limited's matching comment: zero out stale
@@ -380,9 +397,11 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
     q_max = h_flow_safe * sqrt(_G * h_flow_safe) * FROUDE_LIMIT
     q_new = clamp(q_new, -q_max, q_max)
 
-    # Fix B: Volume limiter — unchanged from the legacy kernel.
+    # Fix B: Volume limiter — same vol_limit_divisor convention as
+    # _bates_flux_limited (see that function's comment); unchanged in
+    # spirit from the legacy kernel, just no longer hardcoded to A5's 5.
     if depth_donor > 0.0
-        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_vol_max = (depth_donor * width) / (vol_limit_divisor * dt)
         q_new = clamp(q_new, -q_vol_max, q_vol_max)
     end
 

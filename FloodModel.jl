@@ -84,13 +84,58 @@ const VIS_INTERVAL = 1
 const VIS_MODES = (:cesium, :makie)
 
 # Number of sides (neighbours) of an A5 pentagon interior cell.
-# The per-edge donor limiter caps each edge transfer at volume[donor] / DONOR_EDGE_DIVISOR.
-# Divisor = 2*N_SIDES = 10: even if all 5 edges of a cell fire simultaneously,
-# the maximum total outflow is 5 * V/10 = V/2 = 50%, preserving the intended
-# half-step stability criterion.  (Divisor = N_SIDES = 5 allowed 100% drainage
-# when all edges fired together, driving oscillations — Bug 49 Fix A.)
+#
+# NOTE (cartesian-formulation branch, generalisation refactor): this constant
+# is retained ONLY as a convenience literal for A5-specific test fixtures and
+# for the derivation comment below — production geometry-dependent code no
+# longer reads it directly. The actual mesh-wide neighbour ceiling is now a
+# per-mesh, runtime-derived quantity, `FlowState.max_neighbours` (computed in
+# `initialise_flow_model` from the mesh's own adjacency, not assumed to be
+# 5), so that a non-pentagonal backend (Cartesian: 4; a future mixed
+# hex/pentagon or hex/quad tiling such as IGEO7/HEALPix: 6+) sizes and caps
+# everything correctly without editing this constant or any of the functions
+# that used to read it. See `_donor_edge_divisor(state)` below and
+# `FlowState.max_neighbours`'s docstring. A future refactor could retire this
+# constant entirely once the A5 test-fixture files are updated to stop
+# referencing it directly; not done in this pass to avoid touching ~15 test
+# files for a change with no behavioural effect on A5 itself.
+#
+# The per-edge donor limiter caps each edge transfer at
+# volume[donor] / (2 * max_neighbours). Divisor = 2*N_SIDES = 10 for A5:
+# even if all 5 edges of a cell fire simultaneously, the maximum total
+# outflow is 5 * V/10 = V/2 = 50%, preserving the intended half-step
+# stability criterion.  (Divisor = N_SIDES = 5 allowed 100% drainage when all
+# edges fired together, driving oscillations — Bug 49 Fix A.) The same ×2
+# safety-margin reasoning applies verbatim to any neighbour count — see
+# `_donor_edge_divisor`.
 const N_SIDES           = 5
-const DONOR_EDGE_DIVISOR = 2 * N_SIDES   # = 10
+const DONOR_EDGE_DIVISOR = 2 * N_SIDES   # = 10, A5-specific default; see note above
+
+"""
+    _norm_cell_id(id::AbstractString) -> String
+
+Normalise a cell ID string for use as a dictionary key throughout the mesh
+pipeline (adjacency lookups, EdgeList construction, ghost-edge matching).
+
+A5 cell IDs are 64-bit values that `pya5`'s `u64_to_hex` sometimes returns
+without leading zeros; round-tripping through a hex parse and a fixed
+16-character zero-padded re-encode (`A5Grid._to_hex`) ensures parquet-stored
+IDs and IDs returned by `grid_disk_neighbours` compare equal.
+
+This is an A5-specific quirk, not a general requirement of the mesh
+pipeline — cell IDs from other backends (Cartesian, future IGEO7/HEALPix)
+are not guaranteed to be parseable as a hex UInt64, and don't need to be.
+Falls back to returning `id` unchanged whenever the hex round-trip isn't
+applicable, so every other backend's own ID scheme passes through
+unmodified rather than crashing here.
+"""
+@inline function _norm_cell_id(id::AbstractString)::String
+    try
+        return A5Grid._to_hex(parse(UInt64, id, base=16))
+    catch
+        return String(id)
+    end
+end
 
 # ---------------------------------------------------------------------------
 # Flow model types
@@ -331,7 +376,7 @@ mutable struct FlowState
     # These are populated by _build_ghost_edges() in initialise_flow_model.
     # If _build_ghost_edges has not been called (legacy construction), these
     # have safe empty/zero defaults so existing code is unaffected.
-    boundary_mask  :: BitVector       # true = domain-edge cell (< N_SIDES neighbours)
+    boundary_mask  :: BitVector       # true = domain-edge cell (< max_neighbours)
     ghost_edges    :: Vector{Any}     # Vector{GhostEdge} — one per missing edge slot
     ghost_cell_bc  :: Vector{Any}     # Vector{BCType}    — BC type per ghost edge
     vol_removed    :: Float64         # cumulative outflow through ghost edges (m³)
@@ -345,11 +390,12 @@ mutable struct FlowState
     grad_wse        :: Matrix{Float64}
     # wlsq_weights: pre-computed weighted least-squares projection matrix per
     # cell, built once by _build_wlsq_weights! at init time and never mutated
-    # thereafter. Shape (10, n_cells): rows 1:5 are the x-gradient weights
-    # (one per adjacency slot 1..5, in adj_matrix slot order — NOT EdgeList
-    # order), rows 6:10 the y-gradient weights. Zero for slots beyond a
-    # cell's actual neighbour count and for cells with < 2 neighbours
-    # (gradient undefined; grad_wse stays zero for those cells).
+    # thereafter. Shape (2*max_neighbours, n_cells): rows 1:max_neighbours are
+    # the x-gradient weights (one per adjacency slot, in adj_matrix slot
+    # order — NOT EdgeList order), rows max_neighbours+1:2*max_neighbours the
+    # y-gradient weights. Zero for slots beyond a cell's actual neighbour
+    # count and for cells with < 2 neighbours (gradient undefined; grad_wse
+    # stays zero for those cells).
     # See FloodA5_NonOrthogonal_Correction_Plan.md §4.2, §5.1.
     wlsq_weights    :: Matrix{Float64}
     # q_centre_theta: θ for the Q-centred spatial momentum smoothing scheme
@@ -391,7 +437,8 @@ mutable struct FlowState
     # Built once by _build_cell_edge_index! at init.
     cell_edge_index :: Matrix{Int}
     # WLSQ projection matrix: face fluxes -> (qvec_u, qvec_v).
-    # Shape (10 x n_cells): rows 1:5 = qvec_u weights, 6:10 = qvec_v weights.
+    # Shape (2*max_neighbours x n_cells): rows 1:max_neighbours = qvec_u
+    # weights, max_neighbours+1:2*max_neighbours = qvec_v weights.
     # Observation: qvec_i . n_hat_f = -flux[e] for each adjacent edge e.
     # Weights: edge width. Built by _build_mom_weights! at init.
     mom_weights    :: Matrix{Float64}
@@ -421,7 +468,65 @@ mutable struct FlowState
     # (defined in mesh/DiamondFlux.jl, included later) — same pattern
     # already used for `sgs_tables`/`ghost_edges`/`ghost_cell_bc`.
     diamond_table :: Any
+    # ── Generalised neighbour-count ceiling (cartesian-formulation branch) ──
+    # max_neighbours: the maximum number of neighbours any cell in this mesh
+    # has, derived once in initialise_flow_model from the mesh's own
+    # adjacency (NOT hardcoded — see N_SIDES's declaration comment). 5 for
+    # A5, 4 for a Cartesian grid, 6 for a future hex-dominant mixed tiling
+    # (IGEO7/HEALPix) with occasional lower-valence exception cells.
+    #
+    # This is a storage CEILING (it sizes adj_matrix/wlsq_weights/
+    # mom_weights/cell_edge_index, and sets the ×2-safety-margin donor/
+    # volume-limiter divisors), NOT a claim that every cell has this many
+    # neighbours. Cells with fewer (boundary cells on any mesh, or genuine
+    # lower-valence interior cells on a mixed tiling) simply leave the extra
+    # slots zero-padded, exactly as A5 boundary cells already did before
+    # this field existed. The ACTUAL neighbour count for a specific cell i
+    # is always available on demand — count(!iszero, view(adj_matrix,:,i))
+    # — so no separate per-cell array is stored here.
+    max_neighbours :: Int
 end
+
+# ---------------------------------------------------------------------------
+# Backward-compatible FlowState constructor (cartesian-formulation branch)
+# ---------------------------------------------------------------------------
+# `max_neighbours` (above) was appended as FlowState's 32nd field. Rather
+# than touch every existing FlowState(...) call site (production, and ~8
+# test-file fixtures that hand-build an A5-shaped FlowState), this overload
+# accepts the original 31-argument list and defaults the new field to
+# N_SIDES — i.e. "assume A5" — which is exactly what every one of those
+# existing call sites already, implicitly, was. New code (initialise_flow_
+# model) calls the full 32-argument constructor directly with the
+# mesh-derived value; nothing else needs to change.
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      N_SIDES)
+end
+
+"""
+    _donor_edge_divisor(state) -> Float64
+
+Mesh-aware replacement for the A5-specific `DONOR_EDGE_DIVISOR` constant:
+`2 * state.max_neighbours`. Same ×2 safety-margin reasoning as the constant's
+declaration comment (even if every one of a cell's edges fires
+simultaneously, total outflow is capped at 50% of the donor's volume), just
+evaluated against this mesh's own neighbour ceiling instead of an assumed 5.
+"""
+@inline _donor_edge_divisor(state::FlowState) = 2.0 * state.max_neighbours
 
 # ---------------------------------------------------------------------------
 # HDF5 output
@@ -712,7 +817,7 @@ adjacent cells.
 function _build_adjacency_shared_vertices(mesh::A5Mesh)::Dict{String,Vector{String}}
     PREC = 1e7   # multiply then round to get 7 decimal places
 
-    norm = id -> A5Grid._to_hex(parse(UInt64, id, base=16))
+    norm = _norm_cell_id
     ids  = [norm(c.id) for c in mesh.cells]
     n    = length(ids)
 
@@ -784,7 +889,7 @@ function _build_adjacency_matrix!(adj_matrix :: Matrix{Int},
                                    id_idx     :: Dict{String,Int},
                                    adj        :: Dict{String,Vector{String}})
     n      = length(cells)
-    _norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    _norm(id) = _norm_cell_id(id)
     ids    = [_norm(c.id) for c in cells]
     max_nb = size(adj_matrix, 1)
     for i in 1:n
@@ -914,9 +1019,12 @@ end
 """
     _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n)
 
-Build the (N_SIDES × n_cells) lookup table mapping adjacency slot → EdgeList index.
-`cell_edge_index[s, i] = e` means the edge connecting cell i to its slot-s neighbour
-is stored at position e in the EdgeList. 0 = no edge (boundary or empty slot).
+Build the (max_nb × n_cells) lookup table mapping adjacency slot → EdgeList
+index, where `max_nb = size(adj_matrix, 1)` (the mesh's own neighbour
+ceiling — see `FlowState.max_neighbours` — not a hardcoded A5 constant).
+`cell_edge_index[s, i] = e` means the edge connecting cell i to its slot-s
+neighbour is stored at position e in the EdgeList. 0 = no edge (boundary or
+empty slot).
 
 Called once at `initialise_flow_model` time. O(n_edges).
 """
@@ -925,11 +1033,12 @@ function _build_cell_edge_index!(cell_edge_index :: Matrix{Int},
                                   edges           :: EdgeList,
                                   n               :: Int)
     fill!(cell_edge_index, 0)
+    max_nb = size(adj_matrix, 1)
     for e in 1:edges.n_edges
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
         # find slot of cj in ci's adjacency, and slot of ci in cj's adjacency
-        for s in 1:N_SIDES
+        for s in 1:max_nb
             if adj_matrix[s, ci] == cj
                 cell_edge_index[s, ci] = e
             end
@@ -955,8 +1064,11 @@ and the observation `−flux[e_k]` holds for BOTH cells adjacent to edge e_k.
 
 The WLSQ solution uses edge widths as weights (wider faces carry more flux).
 The 2×2 normal equations `(AᵀWA) qvec_i = AᵀW b` are solved analytically.
-The pre-computed projection matrix `P = (AᵀWA)⁻¹ AᵀW` (shape 2×5) is stored
-in `mom_weights` as rows 1:5 (qvec_u) and 6:10 (qvec_v), per cell column.
+The pre-computed projection matrix `P = (AᵀWA)⁻¹ AᵀW` (shape 2×k, k up to
+`max_nb = size(cell_edge_index, 1)`) is stored in `mom_weights` as rows
+`1:max_nb` (qvec_u) and `max_nb+1:2*max_nb` (qvec_v), per cell column.
+`max_nb` is read from `cell_edge_index`'s own shape, not hardcoded — see
+`FlowState.max_neighbours`.
 
 Cells with fewer than 2 non-degenerate adjacent edges get zero weights (safe
 fallback — qvec remains zero, equivalent to edge-momentum behaviour).
@@ -966,12 +1078,13 @@ function _build_mom_weights!(mom_weights     :: Matrix{Float64},
                               edges           :: EdgeList,
                               n               :: Int)
     fill!(mom_weights, 0.0)
+    max_nb = size(cell_edge_index, 1)
     for i in 1:n
         # Collect face normal components and weights for active edges
         nxs = Float64[]
         nys = Float64[]
         ws  = Float64[]
-        for s in 1:N_SIDES
+        for s in 1:max_nb
             e = cell_edge_index[s, i]
             e == 0 && continue
             # Skip degenerate edges (nf = (0,0) set during build)
@@ -994,14 +1107,14 @@ function _build_mom_weights!(mom_weights     :: Matrix{Float64},
         # P[1,:] = (Syy * w_k*nx_k - Sxy * w_k*ny_k) / det_M
         # P[2,:] = (-Sxy * w_k*nx_k + Sxx * w_k*ny_k) / det_M
         slot = 0
-        for s in 1:N_SIDES
+        for s in 1:max_nb
             e = cell_edge_index[s, i]
             e == 0 && continue
             (edges.nf_x[e] == 0.0 && edges.nf_y[e] == 0.0) && continue
             slot += 1
             wk = ws[slot];  nxk = nxs[slot];  nyk = nys[slot]
             mom_weights[s,     i] = ( Syy * wk * nxk - Sxy * wk * nyk) / det_M
-            mom_weights[5 + s, i] = (-Sxy * wk * nxk + Sxx * wk * nyk) / det_M
+            mom_weights[max_nb + s, i] = (-Sxy * wk * nxk + Sxx * wk * nyk) / det_M
         end
     end
 end
@@ -1194,7 +1307,7 @@ function _build_edge_list(cells       :: Vector{A5Cell},
                            sill_matrix :: Union{Matrix{Float64}, Nothing} = nothing,
                            elevations  :: Union{Vector{Float64}, Nothing} = nothing)::EdgeList
     n    = length(cells)
-    _norm(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    _norm(id) = _norm_cell_id(id)
     ids  = [_norm(c.id) for c in cells]
 
     # Pre-size to worst case (5 edges per pentagon, each shared once = 5n/2)
@@ -1550,7 +1663,7 @@ function initialise_flow_model(mesh::A5Mesh,
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
     # leading zeros) and IDs returned by grid_disk_neighbours (always 16 chars).
-    _norm_id(id) = A5Grid._to_hex(parse(UInt64, id, base=16))
+    _norm_id(id) = _norm_cell_id(id)
     ids     = [_norm_id(c.id) for c in mesh.cells]
     id_idx  = Dict{String,Int}(ids[i] => i for i in 1:n)
 
@@ -1622,7 +1735,7 @@ function initialise_flow_model(mesh::A5Mesh,
     adj = if !isempty(mesh.adjacency)
         @info "Using pre-computed adjacency from mesh parquet..."
         # Normalise keys to match ids (16-char zero-padded hex)
-        norm = id -> A5Grid._to_hex(parse(UInt64, id, base=16))
+        norm = _norm_cell_id
         Dict{String,Vector{String}}(
             norm(k) => [norm(nb) for nb in v]
             for (k, v) in mesh.adjacency
@@ -1633,7 +1746,18 @@ function initialise_flow_model(mesh::A5Mesh,
     end
     @info "  Adjacency ready in $(round(time()-t0, digits=1))s ($(length(adj)) cells)"
 
-    max_nb     = 5
+    # max_nb: the maximum number of neighbours any cell in this mesh has — a
+    # storage CEILING (sizes adj_matrix/wlsq_weights/mom_weights/
+    # cell_edge_index below), not a claim every cell has this many
+    # neighbours. Historically hardcoded to 5 (A5's pentagon valence); now
+    # derived directly from the adjacency just computed above, so a
+    # non-pentagonal backend (Cartesian: max 4; a future mixed hex/pentagon
+    # or hex/quad tiling such as IGEO7/HEALPix: max 6+) sizes everything
+    # correctly with no change to this function. Cells with fewer
+    # neighbours (boundary cells, or genuine lower-valence interior cells on
+    # a mixed tiling) simply leave the extra slots zero-padded — exactly as
+    # A5 boundary cells already do today. See FlowState.max_neighbours.
+    max_nb     = isempty(adj) ? N_SIDES : maximum(length(v) for v in values(adj))
     adj_matrix = zeros(Int, max_nb, n)
 
     _build_adjacency_matrix!(adj_matrix, mesh.cells, id_idx, adj)
@@ -1673,7 +1797,7 @@ function initialise_flow_model(mesh::A5Mesh,
     _check_mesh_connectivity(edges, n)
 
     # ── Ghost edges for open/closed boundary conditions ─────────────────────
-    # Boundary cells are those with fewer than N_SIDES neighbours.  Ghost edges
+    # Boundary cells are those with fewer than max_nb neighbours.  Ghost edges
     # are pre-computed once here so the per-step Phase E boundary flux loop
     # has all geometry ready without recomputation.
     # default_bc is ZeroGradient (open outflow) unless overridden by the caller
@@ -1683,7 +1807,7 @@ function initialise_flow_model(mesh::A5Mesh,
     @info "Building ghost edges (boundary BCs)..."
     boundary_mask, ghost_edges, ghost_cell_bc =
         _build_ghost_edges(mesh.cells, adj, id_idx, edges,
-                           elevations, sgs_tables, N_SIDES, ZeroGradient)
+                           elevations, sgs_tables, max_nb, ZeroGradient)
 
     volumes = zeros(Float64, n)
 
@@ -1708,7 +1832,7 @@ function initialise_flow_model(mesh::A5Mesh,
     # mid-session (if that's ever wired up) doesn't require re-running
     # mesh init.
     grad_wse     = zeros(Float64, 2, n)
-    wlsq_weights = zeros(Float64, 10, n)
+    wlsq_weights = zeros(Float64, 2*max_nb, n)
     t_wlsq = time()
     _build_wlsq_weights!(wlsq_weights, adj_matrix, lons, lats)
     n_degenerate = count(i -> all(==(0.0), view(wlsq_weights, :, i)), 1:n)
@@ -1722,8 +1846,8 @@ function initialise_flow_model(mesh::A5Mesh,
     # ── Cell-vector momentum infrastructure (Step 2.2, cell-momentum branch) ──
     qvec_u          = zeros(Float64, n)
     qvec_v          = zeros(Float64, n)
-    cell_edge_index = zeros(Int, N_SIDES, n)
-    mom_weights     = zeros(Float64, 10, n)
+    cell_edge_index = zeros(Int, max_nb, n)
+    mom_weights     = zeros(Float64, 2*max_nb, n)
     t_mom = time()
     _build_cell_edge_index!(cell_edge_index, adj_matrix, edges, n)
     _build_mom_weights!(mom_weights, cell_edge_index, edges, n)
@@ -1780,6 +1904,7 @@ function initialise_flow_model(mesh::A5Mesh,
         momentum_model,
         face_flux_method,
         diamond_table,
+        max_nb,    # max_neighbours — mesh-derived, see this field's docstring
     )
 end
 
@@ -1829,8 +1954,8 @@ Apply a vector of net volume increments `dV` (m³) to a `StandardFlow` state.
 derived as `volume / cell_area` after each update.
 
 The per-edge donor limiter in `step_standard!` already ensures no cell loses
-more than `volume / N_SIDES` per edge, so net outflow across all edges is
-bounded at 50%.  The `max(0.0, …)` floor here is a last-resort guard only.
+more than `volume / (2 * max_neighbours)` per edge, so net outflow across
+all edges is bounded at 50% (see `_donor_edge_divisor`).  The `max(0.0, …)` floor here is a last-resort guard only.
 """
 function _apply_dV_standard!(state::FlowState, dV::Vector{Float64})
     n = length(state.cell_ids)
@@ -1852,7 +1977,8 @@ SGS primary state variable) and derives `water_depth` from the hypsometric
 lookup.
 
 The per-edge donor limiter in `step_sgs!` already ensures no cell loses more
-than `volume / N_SIDES` per edge.  The `max(0.0, …)` floor here is a
+than `volume / (2 * max_neighbours)` per edge (see `_donor_edge_divisor`).
+The `max(0.0, …)` floor here is a
 last-resort guard only.
 """
 function _apply_dV_sgs!(state::FlowState, dV::Vector{Float64})
@@ -1937,7 +2063,7 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
             state.water_depth[ci])
 
         dV = Q_out * dt
-        dV = min(dV, state.volume[ci] / DONOR_EDGE_DIVISOR)
+        dV = min(dV, state.volume[ci] / _donor_edge_divisor(state))
         dV = max(dV, 0.0)
 
         state.volume[ci]      = max(0.0, state.volume[ci] - dV)
@@ -2018,7 +2144,7 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         end
 
         dV = Q_out * dt
-        dV = min(dV, state.volume[ci] / DONOR_EDGE_DIVISOR)
+        dV = min(dV, state.volume[ci] / _donor_edge_divisor(state))
         dV = max(dV, 0.0)
 
         state.volume[ci]   = max(0.0, state.volume[ci] - dV)
@@ -2337,13 +2463,15 @@ function step_standard!(state::FlowState, dt::Float64)
                 q_prev_eff, h_flow, dWSE_n,
                 edges.width[e], edges.L[e],
                 min(state.manning_n[ci], state.manning_n[cj]), dt,
-                depth_donor)
+                depth_donor;
+                vol_limit_divisor = Float64(state.max_neighbours))
         else
             Q, q_stored = _bates_flux_limited(
                 q_prev_eff, wse_ci, wse_cj, edges.sill[e],
                 edges.width[e], edges.L[e], edges.cos_theta[e],
                 min(state.manning_n[ci], state.manning_n[cj]), dt,
-                depth_donor)
+                depth_donor;
+                vol_limit_divisor = Float64(state.max_neighbours))
         end
 
         edges.flux[e] = q_stored   # Fix C: post-limiting q → consistent q_prev
@@ -2365,9 +2493,9 @@ function step_standard!(state::FlowState, dt::Float64)
         cj = edges.cell_j[e]
 
         if ev > 0.0
-            ev = min(ev,  state.volume[cj] / DONOR_EDGE_DIVISOR)   # cj is donor
+            ev = min(ev,  state.volume[cj] / _donor_edge_divisor(state))   # cj is donor
         else
-            ev = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)   # ci is donor
+            ev = max(ev, -state.volume[ci] / _donor_edge_divisor(state))   # ci is donor
         end
 
         dV[ci] += ev   # ci gains when ev > 0
@@ -2405,14 +2533,15 @@ function step_standard!(state::FlowState, dt::Float64)
     # as a diagnostic record; it is no longer the primary momentum state.
     if state.momentum_model === :cell
         n_cells = length(state.cell_ids)
+        max_nb  = state.max_neighbours
         @inbounds for i in 1:n_cells
             qu = 0.0;  qv = 0.0
-            for s in 1:N_SIDES
+            for s in 1:max_nb
                 e = state.cell_edge_index[s, i]
                 e == 0 && continue
                 obs = -edges.flux[e]   # observation: qvec_i · n̂_f = -flux[e]
-                qu += state.mom_weights[s,     i] * obs
-                qv += state.mom_weights[5 + s, i] * obs
+                qu += state.mom_weights[s,          i] * obs
+                qv += state.mom_weights[max_nb + s, i] * obs
             end
             state.qvec_u[i] = qu
             state.qvec_v[i] = qv
@@ -2627,13 +2756,13 @@ function step_sgs!(state::FlowState, dt::Float64)
         # Fix C (full): back-propagate clipped Q to flux_Q so q_prev next
         # step reflects what was actually transferred.
         if ev > 0.0
-            ev_capped = min(ev, state.volume[cj] / DONOR_EDGE_DIVISOR)
+            ev_capped = min(ev, state.volume[cj] / _donor_edge_divisor(state))
             if ev_capped < ev
                 edges.flux_Q[e] = ev_capped / dt
             end
             ev = ev_capped
         else
-            ev_capped = max(ev, -state.volume[ci] / DONOR_EDGE_DIVISOR)
+            ev_capped = max(ev, -state.volume[ci] / _donor_edge_divisor(state))
             if ev_capped > ev
                 edges.flux_Q[e] = ev_capped / dt
             end
