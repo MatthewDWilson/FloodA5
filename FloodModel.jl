@@ -64,6 +64,16 @@ using .A5Grid: SGSTable, wse_from_volume, wetted_area_from_wse,
                sgs_table, build_sgs_tables!,
                grid_disk_neighbours, grid_disk_neighbours_batch,
                _polygon_area_m2, _shared_edge, _haversine_m
+
+# Cartesian mesh backend (cartesian-formulation branch) — pure Julia, no
+# Python bridge. Included after A5Grid/`using .A5Grid` so its top-level code
+# (a plain include, same pattern as mesh/DiamondFlux.jl — not its own
+# module) can reference A5Cell/A5Mesh unqualified. See mesh/CartesianGrid.jl
+# for the design rationale.
+if !isdefined(Main, :generate_cartesian_mesh)
+    include(joinpath(@__DIR__, "mesh", "CartesianGrid.jl"))
+end
+
 using .VisualisationServer
 using .MakieVisualiser
 using JSON3
@@ -3061,8 +3071,16 @@ end
 Main application entry point.
 
 `mesh_source` is one of:
-  - `(:generate, aoi_path, resolution, output_path_or_nothing)`
-  - `(:load, parquet_path)`
+  - `(:generate, aoi_path, resolution, output_path_or_nothing)` — A5 pentagon
+    mesh via the pya5 Python bridge (`mesh/A5Grid.jl`).
+  - `(:generate_cartesian, aoi_path, dx_m, lat_ref_or_nothing, output_path_or_nothing)`
+    — rectangular Cartesian grid, pure Julia, no Python bridge
+    (`mesh/CartesianGrid.jl`, cartesian-formulation branch). Covers the
+    AOI's bounding box (not polygon-clipped — see that file's module
+    comment), with square cells of approximately `dx_m` metres on a side.
+  - `(:load, parquet_path, output_path_or_nothing)` — load a previously
+    generated mesh of either backend; the pipeline downstream of this
+    point doesn't distinguish between backends at all.
 
 `dem_source` is one of:
   - `nothing`              — no DEM; elevation stays zero
@@ -3072,6 +3090,26 @@ Main application entry point.
   - `:standard`  — diffusive wave on mean cell elevation (fast)
   - `:sgs`       — diffusive wave with sub-grid hypsometric lookup (accurate)
 """
+
+"""
+    _mesh_save_path(mesh_source) -> Union{String,Nothing}
+
+Where (if anywhere) the current run should re-save the mesh after DEM
+sampling or SGS table building — one small helper shared by both call
+sites in `run_flood_model`, rather than duplicating the 3-way
+`:generate`/`:generate_cartesian`/`:load` branch inline twice.
+"""
+function _mesh_save_path(mesh_source::Tuple)::Union{String,Nothing}
+    tag = mesh_source[1]
+    if tag === :generate
+        return mesh_source[4]
+    elseif tag === :generate_cartesian
+        return mesh_source[5]
+    else   # :load
+        return something(mesh_source[3], mesh_source[2])
+    end
+end
+
 function run_flood_model(;
     mesh_source      :: Tuple,
     mesh_only        :: Bool    = false,
@@ -3146,6 +3184,23 @@ function run_flood_model(;
         tl.mesh = time() - t0
         @info "Mesh generated in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
         m
+    elseif mesh_source[1] === :generate_cartesian
+        _, aoi_path, dx_m, lat_ref, mesh_out = mesh_source
+        @info "AOI        : $aoi_path"
+        @info "Cell size  : $(dx_m) m (Cartesian grid)"
+        @info "Mesh out   : $(mesh_out === nothing ? "(not saved)" : mesh_out)"
+        @info "Generating Cartesian grid mesh (cartesian-formulation branch, no Python bridge)..."
+        t0 = time()
+        m = if mesh_out !== nothing
+            fmt = endswith(mesh_out, ".parquet") ? :geoparquet : :geojson
+            generate_cartesian_mesh(aoi_path, dx_m; lat_ref=lat_ref,
+                                    output_path=mesh_out, format=fmt)
+        else
+            generate_cartesian_mesh(aoi_path, dx_m; lat_ref=lat_ref)
+        end
+        tl.mesh = time() - t0
+        @info "Mesh generated in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
+        m
     else
         _, parquet_path, mesh_out = mesh_source
         @info "Loading mesh from $parquet_path..."
@@ -3209,11 +3264,7 @@ function run_flood_model(;
         tl.dem_sample = time() - t0
         @info "DEM sampled in $(_fmt_elapsed(tl.dem_sample))"
 
-        mesh_save_path = if mesh_source[1] === :generate
-            mesh_source[4]
-        else
-            something(mesh_source[3], mesh_source[2])
-        end
+        mesh_save_path = _mesh_save_path(mesh_source)
         if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
             @info "Re-saving mesh with elevation to $mesh_save_path..."
             save_mesh_geoparquet(mesh, mesh_save_path)
@@ -3267,8 +3318,7 @@ function run_flood_model(;
             tl.sgs_tables = time() - t0
             @info "SGS tables built in $(_fmt_elapsed(tl.sgs_tables))"
 
-            mesh_save_path = mesh_source[1] === :generate ?
-                mesh_source[4] : something(mesh_source[3], mesh_source[2])
+            mesh_save_path = _mesh_save_path(mesh_source)
             if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
                 @info "Re-saving mesh with SGS tables to $mesh_save_path..."
                 save_mesh_geoparquet(mesh, mesh_save_path)
@@ -3554,17 +3604,41 @@ Usage:
                                         [--output <file.h5>]
                                         [--output-interval SECS]
 
+  julia [--threads auto] FloodModel.jl  --meshgen-cartesian <aoi.geojson>  --dx <metres>
+                                        [--cartesian-lat-ref <deg>]
+                                        [--meshout <file>]
+                                        [--dem <file.tif>]  [--dem-strict]
+                                        [--vis [mode]]  [--vis-port PORT]
+                                        [--output <file.h5>]
+                                        [--output-interval SECS]
+
   julia FloodModel.jl --help
 
 Mesh options (choose one):
   --meshgen  FILE    GeoJSON area of interest. Triggers mesh generation via pya5.
   --meshres  N       A5 resolution level (required with --meshgen).
+  --meshgen-cartesian FILE
+                     GeoJSON area of interest. Generates a rectangular,
+                     4-connected Cartesian grid mesh covering the AOI's
+                     BOUNDING BOX (not clipped to its polygon shape — see
+                     mesh/CartesianGrid.jl). Pure Julia, no Python bridge.
+                     Requires --dx. cartesian-formulation branch.
+  --dx       METRES  Cartesian cell size (required with --meshgen-cartesian).
+                     Cells are exactly square in metres only at
+                     --cartesian-lat-ref (default: the AOI's own
+                     mid-latitude) — see --cartesian-lat-ref below.
+  --cartesian-lat-ref DEG
+                     Reference latitude for the --dx metres → degrees
+                     conversion (default: AOI bounding-box mid-latitude).
+                     Only meaningful with --meshgen-cartesian.
   --mesh-only        Generate (or load) and save the mesh, then exit without
                      simulating. Implied when no water source is provided.
   --meshout  FILE    Save generated mesh (optional). Extension controls format:
                        .parquet  → GeoParquet  (recommended)
                        .geojson  → GeoJSON
-  --meshload FILE    Load a previously saved GeoParquet mesh.
+  --meshload FILE    Load a previously saved GeoParquet mesh (either backend
+                     — A5 and Cartesian meshes are interchangeable from this
+                     point in the pipeline onward).
 
 DEM options:
   --dem      FILE    GeoTIFF elevation file. Samples DEM and bakes elevation
@@ -4023,6 +4097,16 @@ function main(args=String[])
     meshload_val, args = _pop_flag(args, "--meshload")
     mesh_only,    args = _pop_bool(args, "--mesh-only")
 
+    # --meshgen-cartesian / --dx / --cartesian-lat-ref (cartesian-formulation
+    # branch). A third mesh-generation mode alongside --meshgen (A5) and
+    # --meshload — see mesh/CartesianGrid.jl. Generates a rectangular,
+    # 4-connected grid over the AOI's BOUNDING BOX (not polygon-clipped —
+    # see that file's module comment for why), with square cells of
+    # approximately --dx metres on a side.
+    meshgen_cart_val, args = _pop_flag(args, "--meshgen-cartesian")
+    dx_val,           args = _pop_flag(args, "--dx")
+    cart_lat_ref_val, args = _pop_flag(args, "--cartesian-lat-ref")
+
     # --dem / --dem-strict / --dem-method / --dem-samples / --dem-seed
     dem_val,         args = _pop_flag(args, "--dem")
     dem_strict,      args = _pop_bool(args, "--dem-strict")
@@ -4245,23 +4329,32 @@ function main(args=String[])
     closed_boundaries, args = _pop_bool(args, "--closed-boundaries")
 
     # Validate mesh source
-    has_gen  = meshgen_val !== nothing
-    has_load = meshload_val !== nothing
+    has_gen      = meshgen_val !== nothing
+    has_gen_cart = meshgen_cart_val !== nothing
+    has_load     = meshload_val !== nothing
 
-    !has_gen && !has_load &&
-        (println("ERROR: provide --meshgen or --meshload\n"); print_help(1))
-    has_gen && has_load &&
-        (println("ERROR: --meshgen and --meshload are mutually exclusive\n"); print_help(1))
+    n_sources = count((has_gen, has_gen_cart, has_load))
+    n_sources == 0 &&
+        (println("ERROR: provide --meshgen, --meshgen-cartesian, or --meshload\n"); print_help(1))
+    n_sources > 1 &&
+        (println("ERROR: --meshgen, --meshgen-cartesian, and --meshload are " *
+                 "mutually exclusive\n"); print_help(1))
     has_gen && meshres_val === nothing &&
         (println("ERROR: --meshgen requires --meshres\n"); print_help(1))
+    has_gen_cart && dx_val === nothing &&
+        (println("ERROR: --meshgen-cartesian requires --dx <metres>\n"); print_help(1))
     !isempty(args) &&
         (println("ERROR: unexpected arguments: $(join(args, " "))\n"); print_help(1))
-    
-    
 
-    mesh_source = has_gen ?
-        (:generate, meshgen_val, parse(Int, meshres_val), meshout_val) :
+    mesh_source = if has_gen
+        (:generate, meshgen_val, parse(Int, meshres_val), meshout_val)
+    elseif has_gen_cart
+        dx_m    = parse(Float64, dx_val)
+        lat_ref = cart_lat_ref_val !== nothing ? parse(Float64, cart_lat_ref_val) : nothing
+        (:generate_cartesian, meshgen_cart_val, dx_m, lat_ref, meshout_val)
+    else
         (:load, meshload_val, meshout_val)
+    end
 
     dem_source      = dem_val      !== nothing ? FileDEM(dem_val)      : nothing
     friction_source = friction_val !== nothing ? friction_val          : nothing
