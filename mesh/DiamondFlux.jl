@@ -58,6 +58,11 @@ not occur for a genuine mesh vertex).
 """
 @inline function eta_at_vertex(rec::VertexRecord, eta_cell::Vector{Float64})::Float64
     isempty(rec.cell_indices) && return NaN
+    # WP0 fix (2026-10): a :degenerate (ill-conditioned) record stores
+    # zeros(k) weights, so dot() returned 0.0 m — a spurious WSE that the
+    # caller could not detect. Return NaN so diamond_dWSE_n falls back to the
+    # legacy construction for that edge, as its docstring already promised.
+    rec.fallback === :degenerate && return NaN
     return dot(rec.weights, view(eta_cell, rec.cell_indices))
 end
 

@@ -174,9 +174,12 @@ from the analytically correct downslope direction.
 
 **Three independent, opt-in corrections have been implemented and tested to
 different degrees. None is the default.** All are controlled by CLI flags
-documented in `USER_GUIDE.md` §4.3a, and **none of them affect the SGS
-solver** — `step_sgs!` always uses the legacy uncorrected kernel regardless
-of these settings.
+documented in `USER_GUIDE.md` §4.3a. They are validated only for the
+standard solver. **Correction (WP0, 2026-10):** earlier versions of this
+document said none of them affect the SGS solver. In fact `step_sgs!` does
+apply Correction 1 (WLSQ + V̂, with `--gradient-correction-alpha`) when
+`--gradient-correction on` is set, and honours `--q-centre-theta`; only the
+diamond method and cell-vector momentum are ignored under SGS. See §9.4.
 
 ### 7.1 Correction 1 — WLSQ gradient + skewness term (`--face-flux-method legacy`)
 
@@ -403,8 +406,10 @@ whenever the extended parquet columns are present in the loaded mesh.
 
 ### 9.4 Interaction with §7/§8
 
-**None of the directional-bias corrections in §7 apply to the SGS
-solver.** This is a scope boundary, not an oversight: the
+**Only Correction 1 (WLSQ + V̂) reaches the SGS solver, and it is
+unvalidated there**; the diamond method and cell-vector momentum do not
+apply to SGS (corrected WP0, 2026-10 — this section previously said none
+apply). This is a scope boundary, not an oversight: the
 directional-bias-reformulation work was deliberately staged to validate on
 the standard solver first. Extending it to `step_sgs!` — including
 resolving how the corrected gradient interacts with the dry-cell WSE clamp

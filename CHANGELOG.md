@@ -31,6 +31,49 @@ correction candidates (a WLSQ gradient correction, a face-local "diamond"
 reconstruction, and a cell-vector momentum representation), none of which
 fully resolves the bias on its own.
 
+## [Unreleased] — branch `wp0-correctness`
+
+Correctness and test-infrastructure work package WP0 from
+`FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.4, §9). **Some fixes change
+numerical results** (marked ⚠); re-baseline any stored comparison outputs.
+
+### Fixed
+- ⚠ **Data race in Q-centred momentum** (`step_standard!`, `step_sgs!`): the
+  threaded edge loop read neighbouring edges' momentum from the same array it
+  was overwriting. Q-centring now reads a start-of-step snapshot, giving a
+  proper Jacobi update that is deterministic across thread counts. Affects
+  every run with `--momentum-model edge` and `--q-centre-theta` < 1 (the
+  defaults), standard and SGS.
+- ⚠ **SGS CFL depth cap never applied** (`_cfl_dt`): `method == SGSFlow`
+  compared an instance with a type (always false); now `method isa SGSFlow`.
+  SGS runs with overfull channel cells will take larger, correctly capped
+  timesteps.
+- **`_adjacency_slot`** searched only 5 slots by default and returned slot 1
+  silently when a neighbour was not found; it now searches the mesh's own
+  neighbour ceiling, `step_sgs!` passes it explicitly, and
+  `initialise_flow_model` verifies SGS slot consistency at start-up (and
+  errors clearly if a mesh has more neighbours than the SGS tables support).
+- **Diamond degenerate vertex** (`eta_at_vertex`) returned 0.0 m instead of
+  NaN, defeating the documented per-edge fallback to the legacy gradient.
+- **O(n²) allocation in SGS initialisation** (`A5Grid.sgs_table`): the
+  `get(dict, key, fill(NaN, n))` default was evaluated eagerly for every cell.
+- ⚠ (diagnostic output only) **Cell velocity** (`_compute_velocity!`) is now the
+  depth-averaged velocity in m/s from the WLSQ cell-vector reconstruction.
+  The previous scatter used degree-space directions with no cos(lat) factor
+  and had units of s⁻¹. HDF5 `velocity`/`vel_u`/`vel_v` magnitudes change.
+- Startup warning and docs wrongly said `--gradient-correction` has no effect
+  under `--flow-model sgs`; it does (legacy WLSQ + V̂, unvalidated). New
+  warning for `--face-flux-method diamond` under SGS.
+
+### Added
+- `FLOODA5_NO_VIS=1` environment variable: stubs the visualisation modules so
+  FloodModel.jl loads without GLMakie/Oxygen (headless, CI, AI-assisted runs).
+- `test/test_wp0_regressions.jl`: regression tests for the fixes above, plus a
+  lake-at-rest (well-balancing) test across all flux/momentum options.
+- `test/check_determinism.jl`: thread-count determinism fingerprint.
+- Continuous integration: `.github/workflows/ci.yml`, minimal `ci/Project.toml`
+  environment, `ci/run_tests.sh`, `ci/python-requirements.txt`.
+
 ## [0.1.0] — 2026-08-26
 
 First formally versioned release. Merges the `directional-bias-reformulation`

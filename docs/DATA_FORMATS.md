@@ -113,7 +113,7 @@ Each snapshot is a numbered subgroup:
 | `water_depth` | (n_cells,) | float64 | Depth above local bed (m) |
 | `volume` | (n_cells,) | float64 | Stored water volume (m³) — primary state variable |
 | `saturation` | (n_cells,) | float64 | Wetted fraction 0–1 (SGS: meaningful; standard: binary) |
-| `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s) |
+| `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s). Since WP0 (2026-10): depth-averaged velocity from the WLSQ cell-vector reconstruction of face discharges, divided by depth. Earlier files used a flux-weighted direction scatter in degree space whose magnitude was not in m/s — do not compare magnitudes across that change. |
 | `vel_u` | (n_cells,) | float64 | Eastward velocity component (m/s) |
 | `vel_v` | (n_cells,) | float64 | Northward velocity component (m/s) |
 | `flux_Q` | (n_edges,) | float64 | Volumetric flux per edge (m³/s). Only present in the frame group when at least one edge is non-zero — i.e. only for SGS runs using the R-A flux kernel (see `HYDRAULICS.md` §9.3). Absent (not zero-filled) otherwise. |

@@ -221,10 +221,14 @@ All arguments are named flags; position does not matter.
 
 ### 4.3a Directional-bias correction options (standard flow only)
 
-**These flags only affect `--flow-model standard`.** None of them are wired
-into the SGS solver (`step_sgs!`) — passing them alongside `--flow-model sgs`
-(the default flow model) is a silent no-op and now prints a warning at
-startup. Add `--flow-model standard` to actually exercise any of these.
+**These flags are designed for, and validated only with, `--flow-model standard`.**
+Under `--flow-model sgs` (the default flow model), `--face-flux-method diamond`
+and `--momentum-model cell` are ignored (a startup warning is printed).
+`--gradient-correction on`, `--gradient-correction-alpha` and
+`--q-centre-theta` **do** affect `step_sgs!` (it applies the legacy WLSQ + V̂
+correction), but that SGS path is not yet validated — a warning is printed.
+(Earlier versions of this guide, and the startup warning, wrongly described
+gradient correction as a no-op under SGS; corrected in WP0, 2026-10.)
 
 All defaults below are the **legacy, uncorrected Bates (2010) behaviour** —
 nothing in this table changes the default simulation output. They exist for

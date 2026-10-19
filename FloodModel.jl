@@ -51,6 +51,33 @@ const FLOODA5_VERSION = "0.1.0"
 if !isdefined(Main, :A5Grid)
     include(joinpath(@__DIR__, "mesh", "A5Grid.jl"))
 end
+# FLOODA5_NO_VIS=1 (WP0, 2026-10): skip loading the visualisation stack
+# (GLMakie, Oxygen/HTTP) and define no-op stubs instead. Used by CI and by
+# headless / AI-assisted test runs: GLMakie needs an OpenGL context and adds
+# a large load-time cost that no simulation or unit test needs. Any attempt
+# to actually start a visualiser with the stubs raises a clear error.
+# The stubs mirror the ones test/test_edge_geometry.jl already hand-defines.
+if get(ENV, "FLOODA5_NO_VIS", "") == "1"
+    if !isdefined(Main, :VisualisationServer)
+        @eval module VisualisationServer
+            struct VisServer end
+            start(args...; kwargs...) =
+                error("Visualisation is disabled (FLOODA5_NO_VIS=1). Unset it to use --vis cesium.")
+            stop(_)              = nothing
+            push_frame!(args...) = nothing
+            set_mesh!(args...)   = nothing
+            notify_complete!(_)  = nothing
+        end
+    end
+    if !isdefined(Main, :MakieVisualiser)
+        @eval module MakieVisualiser
+            start(args...; kwargs...) =
+                error("Visualisation is disabled (FLOODA5_NO_VIS=1). Unset it to use --vis makie.")
+            stop(_)              = nothing
+            push_frame!(args...; kwargs...) = nothing
+        end
+    end
+end
 if !isdefined(Main, :VisualisationServer)
     include(joinpath(@__DIR__, "visualisation", "VisualisationServer.jl"))
 end
@@ -1806,6 +1833,33 @@ function initialise_flow_model(mesh::A5Mesh,
     # Check graph connectivity -- warn if mesh has isolated components
     _check_mesh_connectivity(edges, n)
 
+    # ── WP0 (2026-10): SGS slot-table consistency check ─────────────────────
+    # step_sgs! looks up each edge's SGS edge curve by adjacency slot. The
+    # per-cell SGS edge curves currently have a fixed number of slot columns
+    # (5, A5-specific — see build_sgs_tables!), and _adjacency_slot used to
+    # return slot 1 silently when a neighbour was not found. Fail loudly here
+    # instead of computing with the wrong curve at run time.
+    if method isa SGSFlow && !isempty(sgs_tables)
+        n_slot_cols = size(sgs_tables[1].edge_area_curves, 2)
+        if max_nb > n_slot_cols
+            error("SGS tables have $n_slot_cols edge-slot columns but this mesh " *
+                  "has cells with up to $max_nb neighbours. SGS is not yet " *
+                  "generalised beyond $n_slot_cols neighbours (see " *
+                  "build_sgs_tables!); use --flow-model standard on this mesh.")
+        end
+        n_missing = 0
+        for e in 1:edges.n_edges
+            ci = edges.cell_i[e]; cj = edges.cell_j[e]
+            found_i = any(s -> adj_matrix[s, ci] == cj, 1:max_nb)
+            found_j = any(s -> adj_matrix[s, cj] == ci, 1:max_nb)
+            (found_i && found_j) || (n_missing += 1)
+        end
+        n_missing > 0 &&
+            @warn "SGS: $n_missing edge(s) have no matching adjacency slot on one " *
+                  "side — those edges will use slot 1's SGS edge curve. This " *
+                  "indicates an asymmetric adjacency list; check the mesh."
+    end
+
     # ── Ghost edges for open/closed boundary conditions ─────────────────────
     # Boundary cells are those with fewer than max_nb neighbours.  Ghost edges
     # are pre-computed once here so the per-step Phase E boundary flux loop
@@ -2172,77 +2226,58 @@ end
 """
     _compute_velocity!(state)
 
-Compute per-cell scalar speed and (u, v) velocity components from the edge
-flux array stored in `state.edges.flux`.
+Compute per-cell depth-averaged velocity (u eastward, v northward, m/s) and
+speed from the current face unit discharges.
 
-Each undirected edge `e` carries unit discharge `q` (m²/s) with sign
-convention: `q > 0` means flow from `cell_j` to `cell_i`.  The volumetric
-flux is `Q = q * width` (m³/s).
+WP0 rewrite (2026-10). The previous implementation scattered Σ|Q|·û over each
+cell's edges, with û built from raw lon/lat degree differences (no cos(lat)
+factor — directions skewed ~1.6× at 51°N) and normalised by `cell_area·h`, which
+gives units of s⁻¹, not m/s (and double-counts through-flow: inflow and outflow
+faces both add in the flow direction). It is diagnostic only (no physics reads
+it), but it is what users see in HDF5 output and the visualisers.
 
-The (u, v) components are accumulated in geographic coordinates:
-  - u  eastward  (positive = flow toward increasing longitude)
-  - v  northward (positive = flow toward increasing latitude)
+The new implementation reuses the cell-vector WLSQ reconstruction already
+built at init for `--momentum-model cell` (`mom_weights`, local equirectangular
+metres, same frame and sign convention as Phase F):
 
-The unit direction vector from cell_i to cell_j is:
-  dx = lon_j - lon_i,  dy = lat_j - lat_i   (un-normalised geographic delta)
-normalised to a unit vector.  When `Q > 0` (flow j→i), the momentum
-contribution to cell_i is in the −(dx,dy) direction and to cell_j in the
-+(dx,dy) direction, and vice versa when `Q < 0`.
+    q_i = Σ_s mom_weights[:, s, i] · (−q_e(s))      (m²/s)
+    (u, v) = q_i / h_i                               (m/s)
 
-After accumulation each cell's speed is:
-  speed = sqrt(u² + v²)
-  u, v are normalised to m/s by dividing by `cell_area * max(depth, h_min)`.
+where `q_e` is the edge unit discharge — `edges.flux[e]` for standard flow, or
+`edges.flux_Q[e] / width[e]` for the SGS R-A kernel. The reconstruction is exact
+for a spatially uniform discharge field on any polygon mesh. Boundary cells
+have no ghost-edge observation in the stencil, so their velocity is less
+accurate (diagnostic only).
 
-Dry cells (depth < h_min) have velocity zeroed.
+Per-cell gather — no scatter, fully threaded. Dry cells (h < h_min) are zeroed.
 """
 function _compute_velocity!(state::FlowState)
     n      = length(state.cell_ids)
     edges  = state.edges
+    max_nb = state.max_neighbours
     h_min  = max(HFLOW_THRESHOLD, 0.01)  # m — velocity zeroed below this depth;
                                           # must be ≥ HFLOW_THRESHOLD so edges that
                                           # return zero flux also produce zero velocity
-
-    # Flux-weighted momentum scatter (serial — ci/cj not unique across edges)
-    sum_u  = zeros(Float64, n)
-    sum_v  = zeros(Float64, n)
-
-    @inbounds for e in 1:edges.n_edges
-        ci = edges.cell_i[e]
-        cj = edges.cell_j[e]
-
-        dlon = state.cell_lons[cj] - state.cell_lons[ci]
-        dlat = state.cell_lats[cj] - state.cell_lats[ci]
-        dist = sqrt(dlon*dlon + dlat*dlat)
-        dist < 1e-12 && continue
-        ux = dlon / dist
-        uy = dlat / dist
-
-        # Use flux_Q (m³/s) for the R-A SGS kernel; fall back to flux*width for
-        # standard flow (flux is unit discharge m²/s, flux_Q is zero).
-        Q = edges.flux_Q[e] != 0.0 ? edges.flux_Q[e] :
-                                      edges.flux[e] * edges.width[e]
-        absQ = abs(Q)
-        if Q < 0.0
-            sum_u[ci] += absQ *  ux;  sum_v[ci] += absQ *  uy
-            sum_u[cj] += absQ * -ux;  sum_v[cj] += absQ * -uy
-        else
-            sum_u[ci] += absQ * -ux;  sum_v[ci] += absQ * -uy
-            sum_u[cj] += absQ *  ux;  sum_v[cj] += absQ *  uy
-        end
-    end
-
-    # Per-cell normalisation (parallel — each i is independent)
     Threads.@threads for i in 1:n
         h = state.water_depth[i]
-        if h < h_min
+        if !(h >= h_min)                  # also catches NaN depth
             state.velocity[i] = 0.0
             state.vel_u[i]    = 0.0
             state.vel_v[i]    = 0.0
             continue
         end
-        denom = state.cell_area[i] * h
-        u = sum_u[i] / denom
-        v = sum_v[i] / denom
+        qu = 0.0; qv = 0.0
+        @inbounds for s in 1:max_nb
+            e = state.cell_edge_index[s, i]
+            e == 0 && continue
+            qe = edges.flux_Q[e] != 0.0 ? edges.flux_Q[e] / max(edges.width[e], 1e-9) :
+                                          edges.flux[e]
+            obs = -qe                     # observation: q_i · n̂_f = −q_e (Phase F convention)
+            qu += state.mom_weights[s,          i] * obs
+            qv += state.mom_weights[max_nb + s, i] * obs
+        end
+        u = qu / h
+        v = qv / h
         state.vel_u[i]    = u
         state.vel_v[i]    = v
         state.velocity[i] = sqrt(u*u + v*v)
@@ -2327,7 +2362,9 @@ function step_standard!(state::FlowState, dt::Float64)
     # ── Phase A: parallel edge flux computation ─────────────────────────────────────
     # Each iteration reads cell state (read-only) and writes to unique edge
     # slots edge_vol[e] and edges.flux[e].  No two threads share a write
-    # target — this is provably race-free.
+    # target, and (since WP0, 2026-10) Q-centring reads the read-only
+    # snapshot `flux_prev`, not the live edges.flux being written here —
+    # previously that read was a data race.
     #
     # _bates_flux_limited applies three stability fixes vs the earlier call:
     #   • Froude limiter      (CAESAR froude_limit=0.8: caps supercritical q)
@@ -2355,6 +2392,14 @@ function step_standard!(state::FlowState, dt::Float64)
     end
 
     edge_vol = Vector{Float64}(undef, ne)
+
+    # ── WP0 (2026-10): read-only momentum snapshot for Q-centring ──────────
+    # The threaded loop below overwrites edges.flux[e]; _q_centred reads the
+    # flux of OTHER (collinear) edges. Reading the live array was a data race
+    # (results depended on edge order and thread scheduling). Q-centring now
+    # reads this start-of-step copy. Under :cell momentum, Phase A never reads
+    # edges.flux, so no copy is needed and the alias is harmless.
+    flux_prev = state.momentum_model === :cell ? edges.flux : copy(edges.flux)
 
     Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
@@ -2390,7 +2435,7 @@ function step_standard!(state::FlowState, dt::Float64)
             -0.5 * ((state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_x[e] +
                     (state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_y[e])
         else
-            _q_centred(edges.flux, e,
+            _q_centred(flux_prev, e,
                        edges.collinear_i[e], edges.collinear_j[e],
                        state.q_centre_theta)
         end
@@ -2642,6 +2687,11 @@ function step_sgs!(state::FlowState, dt::Float64)
     # behaviour where a dry cell never drives flux.
     edge_vol = Vector{Float64}(undef, ne)
 
+    # WP0 (2026-10): read-only snapshot of flux_Q for Q-centring — see the
+    # matching comment in step_standard! (same data race on edges.flux_Q).
+    flux_Q_prev = copy(edges.flux_Q)
+    max_nb_sgs  = state.max_neighbours
+
     Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
@@ -2679,8 +2729,8 @@ function step_sgs!(state::FlowState, dt::Float64)
         # ── R-A flux kernel ──────────────────────────────────────────────────
         wse_flow = max(wse_ci_eff, wse_cj_eff)
 
-        slot_i = _adjacency_slot(state.adj_matrix, ci, cj)
-        slot_j = _adjacency_slot(state.adj_matrix, cj, ci)
+        slot_i = _adjacency_slot(state.adj_matrix, ci, cj, max_nb_sgs)
+        slot_j = _adjacency_slot(state.adj_matrix, cj, ci, max_nb_sgs)
         A_i = A5Grid.flow_area_from_wse(state.sgs_tables[ci], slot_i, wse_flow)
         R_i = A5Grid.hydraulic_radius_from_wse(state.sgs_tables[ci], slot_i, wse_flow)
         A_j = A5Grid.flow_area_from_wse(state.sgs_tables[cj], slot_j, wse_flow)
@@ -2692,7 +2742,7 @@ function step_sgs!(state::FlowState, dt::Float64)
         # Same collinear lookup as standard flow — the checkerboard mode exists
         # on the pentagonal mesh regardless of the flux kernel used.
         # θ = state.q_centre_theta (default 0.9; set via --q-centre-theta).
-        Q_prev_eff = _q_centred(edges.flux_Q, e,
+        Q_prev_eff = _q_centred(flux_Q_prev, e,
                                  edges.collinear_i[e], edges.collinear_j[e],
                                  state.q_centre_theta)
 
@@ -4230,9 +4280,20 @@ function main(args=String[])
                   "Add --flow-model standard to exercise it, or ignore this warning " *
                   "if sgs was intended and this flag was left over from a template."
         end
+        # WP0 correction (2026-10): the previous text said gradient
+        # correction had no effect under sgs. That was wrong — step_sgs! DOES
+        # apply the legacy WLSQ + V̂ correction (and --gradient-correction-alpha,
+        # and --q-centre-theta). Only --face-flux-method diamond and
+        # --momentum-model cell are ignored by step_sgs!.
         if gradient_correction
-            @warn "--gradient-correction on has no effect under --flow-model sgs " *
-                  "(step_sgs! does not use the corrected flux kernels). " *
+            @warn "--gradient-correction on under --flow-model sgs applies the " *
+                  "legacy WLSQ + V̂ correction (with --gradient-correction-alpha). " *
+                  "This SGS path is NOT yet validated (dry-cell gradient " *
+                  "contamination is an open question — see HYDRAULICS.md §9.4)."
+        end
+        if face_flux_method == :diamond
+            @warn "--face-flux-method diamond has no effect under --flow-model sgs " *
+                  "(step_sgs! uses the legacy WLSQ + V̂ construction). " *
                   "Add --flow-model standard to exercise it."
         end
     end

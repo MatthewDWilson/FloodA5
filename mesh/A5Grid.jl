@@ -2389,13 +2389,19 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         edge_perim = zeros(Float64, n_bins, 5)
     end
 
+    # WP0 fix (2026-10): the previous `get(dict, key, fill(NaN, n))[i]` form
+    # evaluated the `fill` default EAGERLY on every call, i.e. three length-n
+    # allocations per cell → O(n²) work and memory during SGS initialisation
+    # (~21 GB of allocation at 30k cells). Look the scalar up directly instead.
+    _sv(key) = haskey(mesh.static_vars, key) ? Float64(mesh.static_vars[key][i]) : NaN
+
     SGSTable(
         mesh.array_vars["sgs_elev_bins"][:, i],
         mesh.array_vars["sgs_vol_curve"][:, i],
         mesh.array_vars["sgs_area_curve"][:, i],
-        get(mesh.static_vars, "sgs_cell_area", fill(NaN, length(mesh.cells)))[i],
-        get(mesh.static_vars, "sgs_z_min",     fill(NaN, length(mesh.cells)))[i],
-        get(mesh.static_vars, "sgs_z_max",     fill(NaN, length(mesh.cells)))[i],
+        _sv("sgs_cell_area"),
+        _sv("sgs_z_min"),
+        _sv("sgs_z_max"),
         edge_area,
         edge_perim,
     )

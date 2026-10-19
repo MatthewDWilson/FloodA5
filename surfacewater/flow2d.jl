@@ -76,6 +76,12 @@ over collinear neighbours naturally cancels it. For a coherent flow field
 
 `theta` is normally `state.q_centre_theta` (set via --q-centre-theta, default
 0.9). Passing `theta = 1.0` disables smoothing entirely (q_eff = flux[e]).
+
+Thread safety (WP0, 2026-10): `flux` must be a READ-ONLY snapshot of the
+previous step's values while the threaded edge loop runs. Passing the live
+`edges.flux` array (which the same loop overwrites) is a data race: the
+result then depends on edge order and thread scheduling. `step_standard!`
+and `step_sgs!` pass a start-of-step copy.
 """
 @inline function _q_centred(flux  :: Vector{Float64},
                               e    :: Int,
@@ -421,17 +427,24 @@ end
 Return the adjacency slot (1..max_nb) of cell `cj` in cell `ci`'s neighbour list,
 as stored in `adj_matrix` (shape max_nb × n_cells, 0 = unused slot).
 
-Returns 1 as a safe fallback if the pair is not found — this should not occur for
-valid EdgeList edges, but avoids a bounds error if called on a boundary edge whose
-neighbour is outside the mesh.
+Returns 1 as a fallback if the pair is not found — this should not occur for
+valid EdgeList edges. `initialise_flow_model` now verifies at start-up (SGS
+runs only) that every edge's slot is found in both directions, so this
+fallback is unreachable on a validated mesh.
+
+`max_nb` defaults to `size(adj_matrix, 1)` (the mesh's own neighbour ceiling).
+WP0 fix (2026-10): the default was previously the literal `5`, and `step_sgs!`
+called this without the argument, so on a mesh with more than 5 neighbours
+slot 6+ was never searched and slot 1 was returned silently — i.e. the wrong
+SGS edge curve was used with no error.
 """
 @inline function _adjacency_slot(adj_matrix::Matrix{Int},
                                   ci::Int, cj::Int,
-                                  max_nb::Int=5)::Int
+                                  max_nb::Int=size(adj_matrix, 1))::Int
     for s in 1:max_nb
         adj_matrix[s, ci] == cj && return s
     end
-    return 1   # safe fallback; should not occur for valid edges
+    return 1   # fallback; unreachable on a mesh validated at init (see above)
 end
 
 
@@ -582,7 +595,11 @@ function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Fl
     # We apply the terrain-range cap here so that overfull channel cells do not force
     # the whole domain to tiny dt — the cap is (z_max - z_min) per cell.
     # The 99th-percentile is used instead of the absolute maximum for the same reason.
-    is_sgs = method == SGSFlow
+    # WP0 fix (2026-10): was `method == SGSFlow`, which compares an instance
+    # (e.g. SGSFlow(0.03)) with the type and is therefore always false — the
+    # SGS terrain-range depth cap below was never applied, so overfull
+    # channel cells set dt for the whole domain. `isa` is the intended test.
+    is_sgs = method isa SGSFlow
     wet_depths = Float64[]
     for i in eachindex(state.cell_ids)
         h = state.water_depth[i]
