@@ -1,6 +1,6 @@
 # Python packages needed by mesh/A5Grid.jl (pya5 via PyCall at module init) and
 # by the mesh bridge (mesh/a5_bridge.py) for tests that generate A5 meshes.
-pya5
+pya5==0.7.3
 numpy
 shapely
 geopandas
