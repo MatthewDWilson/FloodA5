@@ -16,6 +16,9 @@ binding.
 ```
 FloodModel.jl          Entry point, CLI, simulation loop, FlowState
 mesh/A5Grid.jl         Julia module: mesh struct, DEM sampling, SGS tables
+mesh/CartesianGrid.jl  Cartesian (4-connected) mesh backend — pure Julia,
+                       no Python bridge (see mesh/CartesianGrid.jl
+                       and HYDRAULICS.md §14)
 mesh/DiamondFlux.jl    Diamond face-flux reconstruction (opt-in; see HYDRAULICS.md §7.2)
 mesh/a5_bridge.py      Python subprocess: pya5 calls, GeoParquet I/O
 surfacewater/flow2d.jl Pure physics kernels (Bates, Manning R-A, CFL)
@@ -160,8 +163,19 @@ Key functions:
 | `_q_centred` | Q-centred (spatially smoothed) unit discharge. |
 | `_bates_flux_corrected` / `_bates_flux_limited_corrected` | WLSQ or diamond-corrected driving head, standard flow. See `HYDRAULICS.md` §7. |
 
-Constants: `_G = 9.81`, `HFLOW_THRESHOLD = 0.001`, `FROUDE_LIMIT = 0.8`,
-`N_SIDES = 5`, `DONOR_EDGE_DIVISOR = 10`. `Q_CENTRE_THETA_DEFAULT = 0.9` is
+Constants: `_G = 9.81`, `HFLOW_THRESHOLD = 0.001`, `FROUDE_LIMIT = 0.8`.
+`N_SIDES = 5` and `DONOR_EDGE_DIVISOR = 10` (`= 2 × N_SIDES`) still exist in
+`FloodModel.jl`, but only as **A5-specific legacy defaults** kept for the
+existing A5 test fixtures — production code no longer reads either
+directly. The live, mesh-derived equivalents are `state.max_neighbours`
+(5 on A5, 4 on the Cartesian backend, derived from the loaded mesh's own
+adjacency) and `_donor_edge_divisor(state) = 2.0 * state.max_neighbours`,
+and the Fix B volume limiter in `_bates_flux_limited`/
+`_bates_flux_limited_corrected` takes a `vol_limit_divisor` keyword
+(default `5.0`, i.e. unchanged A5 behaviour for any caller that doesn't
+pass it) which `step_standard!` sets to `Float64(state.max_neighbours)`.
+See the `FlowState.max_neighbours` comment in the struct listing below, and
+the project's internal development history (available on request), for the full reasoning. `Q_CENTRE_THETA_DEFAULT = 0.9` is
 only the *default* — the live value is `state.q_centre_theta`, set via
 `--q-centre-theta` and threaded through explicitly (it was promoted from a
 plain constant to a `FlowState` field so it could be varied per run for
@@ -240,16 +254,33 @@ mutable struct FlowState
     # enabled — the cost of building them is small relative to mesh
     # generation, and it keeps FlowState's shape independent of CLI flags.
     grad_wse                  :: Matrix{Float64}   # (2 × n_cells) per-cell WSE gradient
-    wlsq_weights              :: Matrix{Float64}   # (10 × n_cells) pre-computed WLSQ projection
+    wlsq_weights              :: Matrix{Float64}   # (2×max_neighbours × n_cells) pre-computed WLSQ projection
     q_centre_theta            :: Float64           # --q-centre-theta
     gradient_correction       :: Bool              # --gradient-correction
     gradient_correction_alpha :: Float64           # --gradient-correction-alpha (legacy method only)
     qvec_u, qvec_v            :: Vector{Float64}   # per-cell 2D discharge vector (--momentum-model cell)
     cell_edge_index           :: Matrix{Int}       # (slot, cell) → edge index
-    mom_weights               :: Matrix{Float64}   # (10 × n_cells) WLSQ projection for qvec
+    mom_weights               :: Matrix{Float64}   # (2×max_neighbours × n_cells) WLSQ projection for qvec
     momentum_model            :: Symbol            # :edge (default) or :cell
     face_flux_method          :: Symbol            # :legacy (default) or :diamond
     diamond_table             :: Any               # DiamondFluxTable, or nothing if :legacy
+
+    # ── Mesh-backend generalisation (cartesian-formulation branch) ──────
+    # max_neighbours: the mesh's own neighbour-count ceiling — 5 for A5,
+    # 4 for the Cartesian backend (mesh/CartesianGrid.jl), derived once in
+    # initialise_flow_model from the loaded mesh's actual adjacency, NOT a
+    # hardcoded constant. Sizes adj_matrix/wlsq_weights/mom_weights/
+    # cell_edge_index above (hence the "2×max_neighbours" comments) and
+    # sets the ×2-safety-margin donor/volume-limiter divisors (see
+    # `_donor_edge_divisor` and `vol_limit_divisor` in flow2d.jl). A cell
+    # with fewer actual neighbours than this ceiling (a boundary cell on
+    # either backend) simply leaves the extra matrix slots zero-padded —
+    # the ACTUAL per-cell neighbour count is always derivable on demand via
+    # `count(!iszero, view(adj_matrix, :, i))`, so no separate per-cell
+    # array is stored. `N_SIDES = 5` still exists as a module constant, but
+    # is now used only by A5-specific test fixtures — production code reads
+    # this field instead.
+    max_neighbours :: Int
 end
 ```
 
@@ -495,3 +526,16 @@ properties against real mesh data rather than as ongoing regression tests.
 They're kept in `test/` since they're cheap to re-run and useful if the
 mesh-generation pipeline changes, but aren't part of the standard test
 suite above.
+
+Three further diagnostic scripts were added on the `cartesian-formulation`
+branch, specifically for validating the Cartesian mesh backend
+(`mesh/CartesianGrid.jl`) and investigating a mesh-independent directional
+bias found while doing so — see `HYDRAULICS.md` §14 for the full story,
+including a resolution-refinement test whose result (the bias got *worse*,
+not better, at finer resolution) is still an open question:
+
+| File | What it tests |
+|---|---|
+| `audit_cartesian_geometry.jl` | Adjacency correctness (count/symmetry/direction/distance, from `mesh.adjacency` directly) and edge-geometry orthogonality (`cos_theta`/`skew` via the real `_build_edge_list`) for any generated mesh — confirmed exact on the Cartesian backend. |
+| `test_octagonal_anisotropy.jl` | Cardinal-vs-diagonal directional bias, via sectors centred exactly on the 8 compass bearings (fixes `test_point_spread.jl`'s sectors, which are centred *between* cardinal and diagonal bearings) plus a fixed-radius exact-bearing sample. The tool that found the open anisotropy result above. |
+| `check_boundary_proximity.jl` | Reports how close a frame's wetted region is to each of the four domain edges (N/S/E/W separately) — a sanity check for whether a closed-boundary run's results might be contaminated by the front reaching a wall. |

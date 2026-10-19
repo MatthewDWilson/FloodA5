@@ -8,8 +8,14 @@ protocol.
 
 ## 1. GeoParquet Mesh File
 
-Produced by `--meshout` (via `mesh/a5_bridge.py`). Loaded by `--meshload`.
-Extension: `.parquet`.
+Produced by `--meshout` — via `mesh/a5_bridge.py` for A5 meshes (`--meshgen`),
+or via the pure-Julia generator `mesh/CartesianGrid.jl` for Cartesian meshes
+(`--meshgen-cartesian`, `cartesian-formulation` branch; the final GeoParquet
+*write* still goes through the same existing Python-side serialiser in both
+cases — "no Python bridge" for the Cartesian backend means no Python is needed
+to *generate* the geometry, not that file I/O avoids Python). Loaded by
+`--meshload`, which doesn't distinguish between backends — everything
+downstream of load is identical. Extension: `.parquet`.
 
 ### Geometry column
 
@@ -18,16 +24,16 @@ Extension: `.parquet`.
 | Column name | `geometry` |
 | Encoding | WKB via geopandas |
 | CRS | EPSG:4326 (WGS 84, longitude/latitude) |
-| Shape | Pentagon polygon — 5 vertices + closing repeat (6 coordinate pairs) |
+| Shape | A5: pentagon polygon — 5 vertices + closing repeat (6 coordinate pairs). Cartesian: square polygon — 4 vertices + closing repeat (5 coordinate pairs), counter-clockwise. |
 
 ### Required scalar columns
 
 | Column | dtype | Description |
 |---|---|---|
-| `cell_id` | string | 16-character zero-padded hex A5 cell ID, e.g. `08a2a1072b59ffff` |
+| `cell_id` | string | 16-character zero-padded hex ID. A5: the real A5 cell ID, e.g. `08a2a1072b59ffff`. Cartesian: same *shape* but a different meaning — `(row << 32) \| col`, hex-encoded, so e.g. row 40 col 6 is `0000002800000006`; trivially invertible, not a real A5 cell. The loader normalises both identically (see `A5_QUIRKS.md` §2); a non-hex ID from some future backend would also pass through unmodified rather than failing, since the normalisation falls back to the raw string. |
 | `center_lon` | float64 | Cell centre longitude (degrees) |
 | `center_lat` | float64 | Cell centre latitude (degrees) |
-| `resolution` | int32 | A5 resolution level |
+| `resolution` | int32 | A5 resolution level. `0` for Cartesian meshes (the concept doesn't apply — see the `cell_size_m` static column below for the actual cell size; `.resolution` is only ever read for display/logging, never branched on) |
 
 ### Static variable columns (added by FloodA5)
 
@@ -38,12 +44,21 @@ Extension: `.parquet`.
 | `sgs_z_min` | float64 | SGS build | Minimum DEM sample within cell (m) |
 | `sgs_z_max` | float64 | SGS build | Maximum DEM sample within cell (m) |
 | `sgs_n_bins` | float64 | SGS build | Number of hypsometric bins (same for all cells) |
+| `cell_size_m` | float64 | Cartesian generator | Nominal cell edge length (m) used to generate the mesh — present only on Cartesian meshes. Constant across all cells in a given mesh, stored per-cell for consistency with how every other per-cell scalar is stored. |
 
 ### SGS array columns
 
 Stored as Apache Arrow list columns (variable-length arrays). Each row contains a
 1-D array. Length notation: `n_bins` = number of elevation bins (default 100);
-`max_nb` = 5 (maximum neighbours per cell).
+`max_nb` = 5 (maximum neighbours per cell). **SGS is currently A5-only** —
+`build_sgs_tables!` still hardcodes `max_nb = 5` in three places and has not
+yet been generalised to a mesh-derived neighbour ceiling the way the
+standard-flow path has (see `FlowState.max_neighbours` in `ARCHITECTURE.md`).
+A Cartesian mesh should therefore be treated as **unsupported** with
+`--flow-model sgs` — not tested, and the hardcoded 5-slot matrices would not
+match a 4-neighbour mesh. (There is currently no explicit guard blocking the
+combination; it isn't prevented, just not expected to work.) See the
+Development Roadmap in `README.md`.
 
 | Column | Length | Description |
 |---|---|---|
@@ -58,7 +73,7 @@ Stored as Apache Arrow list columns (variable-length arrays). Each row contains 
 
 | Column | dtype | Description |
 |---|---|---|
-| `neighbours` | list of string | Neighbour cell IDs (edge-sharing adjacency, up to 5). Variable-length — boundary cells with fewer than 5 neighbours simply have a shorter list, rather than a fixed 5-slot layout with empty placeholders. Cell ID normalisation (16-char zero-padded hex) is applied on load; see `A5_QUIRKS.md` §2. |
+| `neighbours` | list of string | Neighbour cell IDs (edge-sharing adjacency, up to 5 on A5 or 4 on Cartesian — i.e. up to the mesh's own `max_neighbours`). Variable-length — boundary cells with fewer neighbours than the mesh's maximum simply have a shorter list, rather than a fixed 5-slot layout with empty placeholders. Cell ID normalisation (16-char zero-padded hex) is applied on load; see `A5_QUIRKS.md` §2. |
 
 ### Reading in Python
 
