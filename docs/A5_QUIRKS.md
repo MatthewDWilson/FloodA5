@@ -2,6 +2,8 @@
 
 _Consolidated reference for A5 DGGS-specific behaviour that has caused bugs or requires non-obvious handling. Read this before touching mesh generation, adjacency, or any code that processes cell IDs. Intended as project context for mesh and grid-related development conversations._
 
+_Note: everything below is specific to the A5 backend. FloodA5 also has a plain Cartesian mesh backend (`mesh/CartesianGrid.jl`, `cartesian-formulation` branch) with none of these quirks — no dual sublattice, no `pya5`, fixed 4-neighbour topology, explicit adjacency — which exists precisely so solver behaviour can be separated from A5 grid geometry. See `HYDRAULICS.md` §14._
+
 ---
 
 ## 1. Dual Sublattice — The Most Important Quirk
@@ -47,12 +49,22 @@ If you compare IDs from parquet (15-char) with IDs from `grid_disk_neighbours` (
 **Fix:** Normalise every cell ID to 16-character zero-padded hex at the earliest opportunity:
 
 ```julia
-_norm_id(id::String) = A5Grid._to_hex(parse(UInt64, id, base=16))
+# FloodModel.jl — the single canonical helper (cartesian-formulation branch);
+# previously several separate inline copies of the bare parse/_to_hex call:
+_norm_cell_id(id) = try A5Grid._to_hex(parse(UInt64, id, base=16)) catch; String(id) end
 ```
+
+The `try/catch` fallback is deliberate: the hex round-trip is an A5/`pya5`
+quirk workaround, **not** a general requirement of the pipeline. A cell ID
+from any other backend (the Cartesian generator's `(row<<32)|col` hex IDs
+survive the round-trip unchanged; a non-hex scheme would pass through as the
+raw string) must not crash mesh loading. `mesh/A5Grid.jl` has the equivalent
+`_to_hex_safe` for its one internal call site (that module is included before
+`FloodModel.jl`'s definitions exist, so it can't share the helper).
 
 This normalisation is applied:
 - At the start of `initialise_flow_model` for all IDs from `mesh.cells`
-- Inside `_build_adjacency_shared_vertices`, `_build_adjacency_matrix!`, `_build_edge_list`
+- Inside `_build_adjacency_shared_vertices`, `_build_adjacency_matrix!`, `_build_edge_list`, and `_build_ghost_edges` (the last is on the unconditional mesh-init path)
 - In Python: `a5_bridge.py`'s `_cell_int_to_hex()` helper (`f"{int(cell_id) & 0xFFFFFFFFFFFFFFFF:016x}"`) formats every cell ID this way before it's written to the mesh output
 
 **Rule:** Never compare cell IDs without normalising both sides first.

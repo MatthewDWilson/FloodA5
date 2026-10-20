@@ -31,13 +31,20 @@ correction candidates (a WLSQ gradient correction, a face-local "diamond"
 reconstruction, and a cell-vector momentum representation), none of which
 fully resolves the bias on its own.
 
-## [Unreleased] — branch `wp0-correctness`
+## [Unreleased]
+
+Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
+`cartesian-formulation`. No version number assigned yet; under
+`VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
+0.2.0), to be decided by the maintainer.
+
+### WP0: correctness and test infrastructure (`wp0-correctness`)
 
 Correctness and test-infrastructure work package WP0 from
 `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.4, §9). **Some fixes change
 numerical results** (marked ⚠); re-baseline any stored comparison outputs.
 
-### Fixed
+#### Fixed
 - ⚠ **Data race in Q-centred momentum** (`step_standard!`, `step_sgs!`): the
   threaded edge loop read neighbouring edges' momentum from the same array it
   was overwriting. Q-centring now reads a start-of-step snapshot, giving a
@@ -65,7 +72,7 @@ numerical results** (marked ⚠); re-baseline any stored comparison outputs.
   under `--flow-model sgs`; it does (legacy WLSQ + V̂, unvalidated). New
   warning for `--face-flux-method diamond` under SGS.
 
-### Added
+#### Added
 - `FLOODA5_NO_VIS=1` environment variable: stubs the visualisation modules so
   FloodModel.jl loads without GLMakie/Oxygen (headless, CI, AI-assisted runs).
 - `test/test_wp0_regressions.jl`: regression tests for the fixes above, plus a
@@ -73,6 +80,56 @@ numerical results** (marked ⚠); re-baseline any stored comparison outputs.
 - `test/check_determinism.jl`: thread-count determinism fingerprint.
 - Continuous integration: `.github/workflows/ci.yml`, minimal `ci/Project.toml`
   environment, `ci/run_tests.sh`, `ci/python-requirements.txt`.
+
+### Cartesian formulation (`cartesian-formulation`)
+
+Full account: `HYDRAULICS.md` §14 and the project's internal development
+history (available on request).
+
+#### Added
+- **Cartesian mesh backend** (`mesh/CartesianGrid.jl`): a rectangular,
+  4-connected grid generator, pure Julia (no Python bridge for geometry
+  generation). New CLI flags `--meshgen-cartesian FILE`, `--dx METRES`,
+  `--cartesian-lat-ref DEG`. Covers the AOI's bounding box (not clipped to
+  its polygon shape). Returns the existing `A5Mesh`/`A5Cell` types, so
+  everything downstream of mesh acquisition is unchanged and
+  backend-agnostic.
+- Diagnostic scripts: `test/audit_cartesian_geometry.jl`,
+  `test/test_octagonal_anisotropy.jl`, `test/check_boundary_proximity.jl`.
+
+#### Changed
+- **`N_SIDES` generalisation.** A new `FlowState.max_neighbours` field,
+  derived from the loaded mesh's own adjacency, replaces hardcoded
+  neighbour-count assumptions in matrix sizing (`adj_matrix`,
+  `wlsq_weights`, `mom_weights`, `cell_edge_index`), the donor-edge safety
+  divisor (`_donor_edge_divisor(state)`), the Fix B volume limiter (new
+  `vol_limit_divisor` keyword on `_bates_flux_limited`/
+  `_bates_flux_limited_corrected`, default `5.0` = unchanged A5 behaviour),
+  and the ghost-edge boundary threshold. **No behavioural change on A5** —
+  confirmed by the full existing regression suite. `N_SIDES`/
+  `DONOR_EDGE_DIVISOR` remain as A5-only legacy constants for existing test
+  fixtures. A backward-compatible 31-argument `FlowState` constructor keeps
+  every existing call site working unmodified.
+- **Cell-ID normalisation hardened.** Six previously-duplicated, unsafe
+  inline `A5Grid._to_hex(parse(UInt64, id, base=16))` calls (which threw on
+  any non-hex ID) now route through `_norm_cell_id` / `_to_hex_safe`, which
+  fall back to the raw string — so a non-A5 backend's own ID scheme no
+  longer crashes mesh loading.
+
+#### Known issues / open
+- A real, small, **resolution-independent** cardinal-vs-diagonal
+  directional bias was found on the (provably exactly orthogonal)
+  Cartesian backend; it got *worse* under grid refinement, ruling out
+  ordinary truncation error. Leading hypothesis is the per-edge momentum
+  representation; the confirming test (`--momentum-model cell`) has not
+  been run. See `HYDRAULICS.md` §14.
+- SGS (`--flow-model sgs`) is **not** generalised: `build_sgs_tables!` still
+  hardcodes 5 neighbour slots, so a Cartesian mesh is unsupported with SGS.
+  There is currently no guard preventing the combination.
+- Projected-CRS support does not exist: the Cartesian generator works in
+  decimal degrees via a single reference latitude, so exact raster
+  alignment against a LISFLOOD-FP grid in its own projected CRS is not yet
+  possible.
 
 ## [0.1.0] — 2026-08-26
 
@@ -110,12 +167,6 @@ current state of the model.
 - The resolution-to-cell-area guidance shown in `--help` was incorrect by
   roughly 16× at resolution 14, and disagreed with the (correct, internally
   consistent) table in `docs/A5_QUIRKS.md`. Corrected to match.
-- `README.md`'s documentation index linked to `CHANGELOG.md` at the
-  repository root while the file itself lived at `docs/CHANGELOG.md` —
-  a dead link. Resolved by moving `CHANGELOG.md` to the repository root
-  (alongside `VERSION` and `VERSIONING.md`, and matching common practice
-  of keeping the changelog next to `README.md` rather than nested under
-  `docs/`), rather than changing the link.
 
 ### Documentation
 - `docs/HYDRAULICS.md` rewritten in full — the previous version predated
@@ -163,4 +214,4 @@ current state of the model.
   general pointers to the project's internal development history
   (retained, not published, available on request).
 
-[0.1.0]: https://github.com/MatthewDWilson/FloodA5/releases/tag/v0.1.0
+[0.1.0]: https://github.com/ (tag pending)

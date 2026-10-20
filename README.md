@@ -29,6 +29,14 @@ Key characteristics:
   recommendation, and open questions.
 - **Sub-Grid Sampling (SGS)** — hypsometric volume curves built from LiDAR allow
   partial wetting of cells and accurate routing through channels narrower than a cell.
+- **A second, plain Cartesian mesh backend** (experimental, `cartesian-formulation`
+  branch) — a rectangular, 4-connected grid generator (`--meshgen-cartesian`, pure
+  Julia, no Python bridge) that runs through exactly the same solver. It exists so the
+  flux and momentum code can be tested on a provably orthogonal grid, separating
+  grid-geometry effects from solver effects, and as the basis for a like-for-like
+  benchmark against LISFLOOD-FP. It is not a replacement for A5; SGS is not yet
+  supported on it, and a small residual directional bias found on it is still under
+  investigation (see [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §14).
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
   use WGS 84 (EPSG:4326); no projected CRS selection required.
 - **LISFLOOD-FP compatible inputs** — reads `.bci`/`.bdy` boundary condition files
@@ -121,6 +129,7 @@ FloodA5/
 ├── setup.jl                   # One-time installation script
 ├── mesh/
 │   ├── A5Grid.jl              # Julia module: mesh generation, cell API, SGS tables
+│   ├── CartesianGrid.jl       # Cartesian (rectangular) mesh backend, pure Julia
 │   ├── a5_bridge.py           # Python bridge: pya5 calls, GeoParquet I/O
 │   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
 ├── surfacewater/
@@ -311,6 +320,18 @@ combined, or dropped as understanding improves.
   on the same A5 mesh, to benchmark the reduced-complexity Bates/Manning
   formulation against full shallow-water physics on cases where the two are
   expected to agree closely
+- Resolving the directional bias found on the Cartesian backend (small,
+  cardinal-vs-diagonal, and — unusually — not shrinking under grid refinement,
+  which rules out ordinary truncation error); the leading hypothesis is the
+  per-edge momentum representation, to be tested with `--momentum-model cell`
+  (see [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §14)
+- A like-for-like benchmark against LISFLOOD-FP itself on a matched Cartesian
+  mesh, which will need projected-CRS support in the Cartesian generator for
+  exact raster alignment
+- Generalising the SGS solver beyond A5's five-neighbour assumption, so the
+  sub-grid method can also be checked for flow-direction bias on other grids
+- Additional mesh backends (e.g. hexagonal DGGS such as IGEO7, and HEALPix),
+  which the mesh-agnostic `max_neighbours` refactor was designed to enable
 - Analytical benchmarks not yet run against the corrected flux kernels:
   Thacker (1981) planar-surface oscillation, circular dam-break (also the
   key demonstration case for A5's rotational-symmetry advantage over a

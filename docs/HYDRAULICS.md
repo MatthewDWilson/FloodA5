@@ -4,7 +4,11 @@ _Technical reference for the physics implemented in `FloodModel.jl` and
 `surfacewater/flow2d.jl`. Supersedes the 2026-05-12 version of this document,
 which predates the stability fixes (§6), the SGS R-A flux path (§9), and all
 of the directional-bias correction work (§7–§8). This document reflects the
-state of the `directional-bias-reformulation` branch at merge time._
+state of the `directional-bias-reformulation` branch at merge time, plus
+targeted updates (§6, §11, new §14) for the `cartesian-formulation` branch's
+mesh-backend generalisation (`N_SIDES` → mesh-derived `state.max_neighbours`,
+A5 or the new Cartesian backend), including an open directional-bias finding
+(§14) directly relevant to §8's own open items._
 
 ---
 
@@ -134,11 +138,17 @@ evolving `q_prev` values per cell instead of two on a rectangular grid — has
 no natural directional damping and can drive a checkerboard oscillation.
 
 **Fix B — Volume limiter.** `q` is further clamped so that
-`|Q·dt| <= depth_donor · width / N_SIDES` (`N_SIDES = 5`), i.e. no more than
-~20% of the donor cell's water can leave via any one edge in a single step.
-A coarser, cell-level `DONOR_EDGE_DIVISOR = 10` cap (§11) is retained on top
-of this as a last-resort mass-conservation guard; it should rarely bind
-once Fix A/B are active.
+`|Q·dt| <= depth_donor · width / vol_limit_divisor`, i.e. no more than
+`1/vol_limit_divisor` of the donor cell's water can leave via any one edge
+in a single step. `vol_limit_divisor` defaults to `5.0` (A5's own neighbour
+count, i.e. ~20% per edge, unchanged original behaviour) but
+`step_standard!` passes `Float64(state.max_neighbours)` explicitly — `4.0`
+on the Cartesian backend (`mesh/CartesianGrid.jl`), so the ~20%-per-edge
+reasoning reflects each mesh's own actual connectivity rather than an
+A5-specific assumption baked into the default. A coarser, cell-level
+`DONOR_EDGE_DIVISOR = 10` (A5) / `_donor_edge_divisor(state) =
+2×max_neighbours` cap (§11) is retained on top of this as a last-resort
+mass-conservation guard; it should rarely bind once Fix A/B are active.
 
 **Fix C — Consistent `q_stored`.** The *post-limiting* unit discharge (not
 the raw Bates output) is what gets written to `edges.flux[e]` for use as
@@ -333,7 +343,19 @@ production default.
    term supplies — plausibly why the provably-more-accurate diamond method
    did not clearly outperform the legacy `alpha=1` correction in full
    simulation, despite being strictly more accurate at the gradient level.
-   No reformulation has been attempted yet.
+   No reformulation has been attempted yet. **Independent support for this
+   suspicion, from a different grid entirely:** the `cartesian-formulation`
+   branch found a real, small, *resolution-independent* cardinal-vs-diagonal
+   directional bias on the new Cartesian mesh backend — a grid that is
+   provably exactly orthogonal (`cos_theta≡1`, `skew≡0`), so A5's own bias
+   mechanism (non-orthogonal face/cell-averaged-gradient misalignment)
+   cannot be the cause there. The leading hypothesis for *that* finding is
+   the per-edge momentum representation (`--momentum-model edge`'s
+   axis-local Q-centred smoothing), untested as of this writing. If
+   confirmed, it would be direct, independent, cross-grid evidence that
+   momentum/limiter representation — not grid geometry — is the dominant
+   remaining source of directional bias in this solver family generally.
+   See §14.
 2. **Boundary/ghost-edge treatment is architecturally inconsistent.**
    Interior edges use whichever correction is selected; ghost-cell boundary
    outflow (open, `ZeroGradient` boundaries) always uses the original
@@ -440,8 +462,12 @@ post-hoc pass — an earlier post-hoc version created mass by clipping only
 the donor's loss without reducing the recipient's gain):
 
 ```julia
-edge_vol_capped = min(edge_vol, state.volume[donor] / DONOR_EDGE_DIVISOR)
-# DONOR_EDGE_DIVISOR = 10 = 2 x N_SIDES -> <=50% total drain across all 5 edges
+edge_vol_capped = min(edge_vol, state.volume[donor] / _donor_edge_divisor(state))
+# _donor_edge_divisor(state) = 2 * state.max_neighbours
+# A5: 2*5=10 -> <=50% total drain across all 5 edges
+# Cartesian (mesh/CartesianGrid.jl): 2*4=8 -> <=50% total drain across all 4 edges
+# (DONOR_EDGE_DIVISOR = 10 still exists as the old A5-only constant, kept
+#  for existing test fixtures — production code uses the line above.)
 ```
 
 The same clipped value is applied to both donor and recipient, so mass is
@@ -484,6 +510,63 @@ accumulates ghost-edge outflow (see `boundaryinputs/boundary_conditions.jl`).
 - Thacker, W.C. (1981). Some exact solutions to the nonlinear shallow-water
   wave equations. *Journal of Fluid Mechanics* 107, 499-508.
 - OpenFOAM User Guide, §4.5 Numerical Schemes (non-orthogonality limits).
+
+---
+
+## 14. Mesh-Backend Generalisation and the Cartesian Directional-Bias Finding
+
+Added for the `cartesian-formulation` branch. Two independent pieces of
+work, both touching this document's earlier sections:
+
+**Generalisation.** Everything in §6 and §11 that used to read a hardcoded
+`N_SIDES = 5` (A5's pentagon valence) now reads a mesh-derived
+`state.max_neighbours` instead — 5 on A5, 4 on the new Cartesian backend
+(`mesh/CartesianGrid.jl`, a plain rectangular grid, pure Julia, no Python
+bridge), computed once from the loaded mesh's own adjacency rather than
+assumed. `N_SIDES`/`DONOR_EDGE_DIVISOR` still exist as module constants in
+`FloodModel.jl`, but only as legacy defaults for existing A5 test fixtures
+— production code no longer reads either directly. Everything else in this
+document (the governing equation, sign convention, CFL formula, dry-edge
+threshold, sill elevation, SGS solver, velocity computation) is unchanged
+and applies identically regardless of mesh backend; the face-flux/geometry
+machinery (`_edge_geometry`, WLSQ, the diamond method, §7-§8) is likewise
+backend-agnostic by construction — none of it assumes a specific neighbour
+count. (The SGS solver is the exception: `build_sgs_tables!` still hardcodes
+five neighbour slots, so SGS is A5-only for now.)
+
+**The finding.** The Cartesian backend's own geometry was validated first
+and is exact: `cos_theta≡1.0`, `skew≡0.0` on every edge, confirmed at two
+mesh sizes with zero floating-point deviation. This positively rules out
+A5's own bias mechanism (a cell-averaged gradient shared across several
+non-orthogonal faces) as a possible cause of anything measured on this
+grid. Despite that, a flat-terrain, centred point-injection test found a
+small (~3% in front-radius terms, ~20% in a depth-at-fixed-radius metric)
+but real cardinal-vs-diagonal directional preference — with the *diagonal*
+directions reaching slightly further, the opposite of the classic
+hop-counting prediction for a four-connected grid — and, critically, a
+refinement test (dx=25m → dx=12.5m) found the deviation from isotropy
+**increasing**, not decreasing (cardinal/diagonal front-radius ratio 0.9728
+→ 0.9662), which rules out ordinary discretisation truncation error as the
+explanation (that would be expected to shrink by roughly 4× for a halved
+grid spacing). This is the same diagnostic signature used on the A5 side to
+distinguish genuine structural bias from truncation error (A5's own bias
+metric also grew, not shrank, with refinement, in the project's internal
+Phase A diagnostics).
+
+The leading hypothesis is the per-edge momentum representation
+(`--momentum-model edge`, default): its Q-centred smoothing operates
+axis-locally, so a cardinal-direction cell's inertia is fed along one
+smoothed axis while a diagonal-direction cell's is fed by two independently
+-smoothed axes converging — a structural, grid-spacing-independent
+difference, unlike a geometric/truncation effect. The specific test that
+would confirm or refute this — re-running the same flat-domain experiment
+with `--momentum-model cell` — had not been run as of this document's last
+update. Diagnostic tooling: `test/test_octagonal_anisotropy.jl`,
+`test/audit_cartesian_geometry.jl`, `test/check_boundary_proximity.jl`; see
+`TEST_CASES.md` §5. The full numbers and reasoning are in
+the project's internal development history (available on request).
+
+---
 
 **Full detail and complete experimental history:** this project's internal
 development history retains session-by-session records of the full

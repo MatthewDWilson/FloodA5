@@ -191,10 +191,13 @@ All arguments are named flags; position does not matter.
 
 | Flag | Description |
 |---|---|
-| `--meshgen FILE` | GeoJSON AOI file. Triggers mesh generation via the Python bridge. |
+| `--meshgen FILE` | GeoJSON AOI file. Triggers A5 pentagon mesh generation via the Python bridge. |
 | `--meshres N` | A5 resolution level. Required with `--meshgen`. |
-| `--meshout FILE` | Save generated mesh to `.parquet` (recommended) or `.geojson`. Omit to keep in memory only. |
-| `--meshload FILE` | Load a previously saved GeoParquet mesh, skipping generation. |
+| `--meshgen-cartesian FILE` | GeoJSON AOI file. Triggers Cartesian (4-connected, rectangular) mesh generation — pure Julia, no Python bridge (`mesh/CartesianGrid.jl`, `cartesian-formulation` branch). Covers the AOI's **bounding box**, not its polygon shape. Requires `--dx`. Mutually exclusive with `--meshgen`/`--meshload`. |
+| `--dx METRES` | Cartesian cell size. Required with `--meshgen-cartesian`. |
+| `--cartesian-lat-ref DEG` | Reference latitude for the `--dx` metres→degrees conversion (default: the AOI bounding box's own mid-latitude). Cells are exactly square in true metres only at this latitude, so a domain with large north–south extent shows ordinary equirectangular distortion away from it. Only meaningful with `--meshgen-cartesian`. |
+| `--meshout FILE` | Save generated mesh (either backend) to `.parquet` (recommended) or `.geojson`. Omit to keep in memory only. |
+| `--meshload FILE` | Load a previously saved GeoParquet mesh (either backend — A5 and Cartesian meshes are interchangeable from this point in the pipeline onward), skipping generation. |
 | `--mesh-only` | Generate (or load) and save the mesh, then exit without simulating. Implied when no water source is provided. |
 
 ### 4.2 DEM options
@@ -243,7 +246,7 @@ recommendation and open items).
 | `--gradient-correction on\|off` | `off` | Enables the WLSQ non-orthogonal gradient correction in place of the legacy `cos θ`-only scaling. When `on`, the driving-head term is constructed by `--face-flux-method` below. Must be given an explicit `on`/`off` value (a bare flag is an error, to avoid accidentally swallowing the next argument). |
 | `--gradient-correction-alpha N` | `1.0` | Only applies when `--gradient-correction on --face-flux-method legacy`. Scales the tangential (non-orthogonal) correction term. `1.0` = full over-relaxed correction; `0.0` = orthogonal-only correction (direct WSE-difference term alone, no tangential term). **`0.0` is the empirically more stable interim setting** found during real-mesh testing (see `HYDRAULICS.md` §8) — `1.0` gives a larger correction but has been observed to overshoot into a mirrored bias under sustained ponding. Has no effect with `--face-flux-method diamond`. |
 | `--face-flux-method legacy\|diamond` | `legacy` | Only applies when `--gradient-correction on`. Selects how the corrected driving head is constructed. `legacy`: cell-centred WLSQ gradient, averaged onto the face, then skewness-corrected. `diamond`: face-local reconstruction built directly from the two adjacent cell centres and the edge's own two shared vertices, with no cell-averaged-then-shared gradient. Proven exact for linear fields; falls back to `legacy` automatically on any individual edge whose diamond geometry is degenerate (rare, confined to AOI-boundary vertices — see `HYDRAULICS.md` §7). |
-| `--momentum-model edge\|cell` | `edge` | Selects how previous-timestep momentum (`q_prev`) is represented. `edge`: one independent scalar per pentagon face (5 per cell) — the original Bates representation, carried over unmodified from a Cartesian grid. `cell`: a single 2D discharge vector per cell, reconstructed each step from all 5 face fluxes by WLSQ (Perot-style), then projected onto each face normal. Empirically the stronger of the two correction levers tested to date (see `HYDRAULICS.md` §7.3). |
+| `--momentum-model edge\|cell` | `edge` | Selects how previous-timestep momentum (`q_prev`) is represented. `edge`: one independent scalar per cell face (5 on A5, 4 on the Cartesian backend — see `--meshgen-cartesian` above) — the original Bates representation, derived for a rectangular grid where this is exact by construction. `cell`: a single 2D discharge vector per cell, reconstructed each step from all of that cell's face fluxes by WLSQ (Perot-style), then projected onto each face normal. Empirically the stronger of the two correction levers tested to date on A5 (see `HYDRAULICS.md` §7.3); as of this writing it is also the untested next step in diagnosing a separate, mesh-independent directional bias found on the Cartesian backend — see `HYDRAULICS.md` §14. |
 
 **Recommended experimental configuration** (opt-in, not default — see
 `HYDRAULICS.md` §8 for the evidence and caveats):

@@ -83,13 +83,27 @@ is the current default.
 
 ### Comparison with rectangular grids
 
-A rectangular-grid model run on the same domain (`test/square/square.bci`,
-`test/square/lisflood_square.par` provide a LISFLOOD-FP-format starting point)
-would be expected to produce a diamond-shaped flood front rather than a
-circular one — the directional bias inherent in four-connected rectangular
-grids — for comparison against FloodA5's own measured (non-zero, but smaller)
-bias. This comparison has not been automated as part of this repository; the
-files are provided for anyone wanting to run it externally.
+This comparison now exists *inside* the repository — FloodA5 has its own
+Cartesian (4-connected, rectangular) mesh backend (`mesh/CartesianGrid.jl`,
+`cartesian-formulation` branch), so the same solver can be run on both grid
+types and compared directly; see §5 below for the procedure and results.
+(`test/square/square.bci` and `test/square/lisflood_square.par` remain
+available as a LISFLOOD-FP-format starting point for the separate, still
+pending comparison against LISFLOOD-FP *itself*.)
+
+**This section previously predicted** that a four-connected rectangular grid
+would produce a *diamond-shaped* flood front — the classic hop-counting
+argument that diagonal paths are ~1.41× longer than cardinal ones, so the
+front should reach further along the four cardinal axes than the four
+diagonals. **That prediction was tested and not borne out**: the measured
+anisotropy on FloodA5's own Cartesian backend is small (~3% in front radius)
+and goes the *opposite* way — the diagonal directions reach slightly
+*further*, not less far. The hop-counting argument models a routing/
+cellular-automaton scheme; a resolved finite-volume PDE solver exchanges
+flux continuously across every edge of every wet cell simultaneously, and
+diagonal cells fill via many overlapping short paths, not one zig-zag
+route. See §5 for the numbers, and for the further, still-open finding that
+this residual anisotropy does not shrink with grid refinement.
 
 ---
 
@@ -352,6 +366,106 @@ python test/synthetic_dem/generate_synthetic_dem.py
 ```
 
 Parameters are stored in `test/synthetic_dem/synthetic_dem_params.json`.
+
+---
+
+## 5. Cartesian Backend Validation (`cartesian-formulation` branch)
+
+**Purpose:** validate the new Cartesian mesh backend (`mesh/CartesianGrid.jl`)
+and — using it as a provably-orthogonal reference grid — investigate whether
+the solver's flux/momentum code carries a directional bias that is
+independent of grid geometry. Full account, including every bug found along
+the way: the project's internal development history (available on request).
+
+### 5a. Mesh correctness (`test/audit_cartesian_geometry.jl`)
+
+Checks adjacency (per-cell neighbour count, symmetry, and geometric
+correctness of every adjacency pair) directly from `mesh.adjacency`, and
+edge-geometry orthogonality (`cos_theta`, `skew_x`, `skew_y`) via the real
+production `_build_edge_list`. No simulation.
+
+```powershell
+julia --project=. test\audit_cartesian_geometry.jl <mesh.parquet>
+```
+
+**Result (run, confirmed):** PASS at both 16 cells and 12,800 cells —
+`cos_theta` exactly `1.0`, `skew` exactly `0.0` on every edge, zero
+adjacency errors, valence distribution (2/3/4 at corners/edges/interior)
+exactly as predicted for a rectangular grid.
+
+### 5b. Flat-terrain point-spread / cardinal-vs-diagonal isotropy
+
+Uses `test/square/square_domain.geojson` (a genuinely square 3×3 km AOI
+centred on 0°N, 0°E, chosen specifically to remove any domain-shape
+confound), no DEM (flat), centred point injection, closed boundaries.
+
+```powershell
+# Generate mesh (no DEM)
+julia --project=. FloodModel.jl `
+    --meshgen-cartesian test\square\square_domain.geojson --dx 25 `
+    --meshout test\square\square_cartesian_dx25_flat.parquet --mesh-only
+
+# Run (7200 s at a 60 s output interval gives frame 121 = t 7200 s)
+julia --project=. --threads auto FloodModel.jl `
+    --meshload test\square\square_cartesian_dx25_flat.parquet `
+    --flow-model standard --injection-point 0.0,0.0,10.0 --closed-boundaries `
+    --sim-duration 7200 --dt-max 2 `
+    --output test\square\square_cartesian_dx25_flat_run.h5 --output-interval 60
+
+# Analyse (sectors centred ON the 8 compass bearings, unlike test_point_spread.jl)
+julia --project=. test\test_octagonal_anisotropy.jl `
+    --input test\square\square_cartesian_dx25_flat_run.h5 `
+    --frame 121 --source-lon 0.0 --source-lat 0.0
+```
+
+**Result (run, confirmed), default `--momentum-model edge`:**
+
+| dx | n_wet (t=7200 s) | Cardinal/diagonal front-radius ratio | Deviation from 1.0 |
+|---|---|---|---|
+| 25 m | 2,557 | 0.9728 | 0.0272 |
+| 12.5 m | 9,513 | 0.9662 | 0.0338 |
+
+A ratio below 1.0 means *diagonal* directions reach further. **The deviation
+grew by ~24% when the grid spacing was halved** — ordinary discretisation
+truncation error would be expected to *shrink* by roughly 4×. This rules out
+truncation error and matches the diagnostic signature A5's own bias showed
+in the project's internal Phase A diagnostics. Leading hypothesis (untested
+at time of writing): the per-edge momentum representation — see
+`HYDRAULICS.md` §14 for the mechanism and the exact next test
+(`--momentum-model cell` on the same mesh).
+
+### 5c. Sloped-DEM planar symmetry (re-using §2b's fixture)
+
+Same `test/planar_embankment/` fixture as §2b, with a Cartesian mesh
+(`--meshgen-cartesian ... --dx 25 --dem ...`) in place of the A5 mesh.
+On this exactly-orthogonal grid `--gradient-correction on` and `off` are
+mathematically identical (the correction term is zero), so
+`test_planar_symmetry.jl`'s baseline-vs-corrected comparison is not a real
+before/after here — pass the same output file as both, and read the
+reported `|asymmetry|` itself. Use `--sweep` rather than a single `--frame`
+to see its trajectory over the run.
+
+**Result (run, confirmed):** `|asymmetry|` decreased smoothly from 0.2356
+(t=6,002 s) to 0.0575 (t=72,000 s); baseline and "corrected" were bit-for-bit
+identical at every sampled frame (36,000 steps — a clean confirmation that
+the correction term really is exactly inert on an orthogonal grid).
+
+### 5d. Boundary-proximity check (`test/check_boundary_proximity.jl`)
+
+Reports, per frame, how close the wetted region's edge is to each of the
+four domain boundaries (N/S/E/W separately), to rule closed-wall effects
+in or out as a contaminant of any asymmetry measurement.
+
+```powershell
+julia --project=. test\check_boundary_proximity.jl --input <run.h5> --sweep 20
+```
+
+**Result (run, confirmed) for §5c's run:** the northern and southern
+boundary distances shrank from ~975–1000 m to ~500–525 m over 20 simulated
+hours but never approached zero — the front never got close to either wall,
+ruling out boundary contamination for that test. (The west distance stays
+pinned near 150 m for the whole run — the source sits near that edge and
+water flows east — which is expected, not a finding.)
 
 ---
 
