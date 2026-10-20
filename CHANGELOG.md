@@ -33,10 +33,87 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
-Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
-`cartesian-formulation`. No version number assigned yet; under
-`VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
-0.2.0), to be decided by the maintainer.
+WP0 and the `cartesian-formulation` work it is based on were merged to `main`
+on 2026-10-20; WP1 and WP2 are on their own branches. No version number
+assigned yet; under `VERSIONING.md`'s policy the new CLI flags make this a
+MINOR bump (likely 0.2.0), to be decided by the maintainer.
+
+### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
+
+Work package WP2 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.2, §9).
+All options are opt-in; the defaults are bit-identical to before.
+
+#### Added
+- `--momentum-model blend`: q_prev = θ·q_face + (1−θ)·(face-normal projection
+  of the averaged adjacent cell vectors), θ = `--q-centre-theta`. Replaces
+  Q-centring's "most collinear face" average, which on pentagons mixes faces
+  about 144° apart and by itself deflects the steady flow (WP1 finding).
+  θ = 1 reproduces edge momentum without Q-centring and θ = 0 reproduces
+  `cell` exactly (tested). Standard solver only.
+- `--limiter positivity`: one positivity-preserving scale factor per donor
+  cell, s = min(1, V / Σ outflow), applied to all of its outflows and written
+  back to the stored momentum (`_positivity_scale!`), in place of the per-edge
+  volume limiter (Fix B) and the per-edge donor cap. Mass-conservative and
+  isotropic. Standard and SGS solvers. **Not stable on its own** on the
+  Carlisle DEM (velocity noise up to 5 m/s): the per-edge volume limiter is
+  doing real stabilising work.
+- `--limiter hybrid`: keeps the per-edge volume limiter and uses the
+  positivity scaling only in place of the per-edge donor cap. As smooth as
+  `legacy` on Carlisle res-18 and removes the face-count-dependent cap.
+- `--face-flux-method diamond-wetdry`: as `diamond`, but the two-point face
+  gradient is used where an edge's vertex stencil includes a dry cell (whose
+  bed elevation would otherwise be read as a water level). Bit-identical to
+  `diamond` when every cell is wet. `diamond_stencil_wet` in `DiamondFlux.jl`.
+- `--cfl-mode local`: dt = 0.7 · min over wet cells of ℓ_i/√(g h_i), with
+  ℓ_i = 4A_i/P_i (`FlowState.cell_length`; equal to dx on a square cell),
+  instead of √(min area) paired with the 99th-percentile depth. The SGS
+  terrain-range depth cap still applies.
+- `FlowState` fields 34–36 (`limiter`, `cfl_mode`, `cell_length`), with a
+  backward-compatible 33-argument constructor.
+- `test/test_wp2_momentum_limiters.jl` (in CI); a WP2 case in
+  `test/check_determinism.jl`.
+
+#### Fixed
+- ⚠ **Phantom ghost edges on Cartesian meshes** (`_build_ghost_edges`). Shared
+  polygon sides were matched with a key ordered by longitude only, so a
+  north–south side (lon1 == lon2) could keep a different vertex order in the
+  two polygons and fail to match, becoming an extra "missing" side. On the
+  dx = 25 m square mesh this created 423 ghost edges instead of 244 (open
+  boundary width 10.6 km instead of 6.1 km): open-boundary Cartesian runs had
+  too much outflow width. Sides are now matched in both vertex orders.
+  A5 meshes are unaffected (Carlisle res-18 and planar res-16 ghost edges
+  identical before and after). Regression test G1.
+
+### WP1: vector friction (`wp1-vector-friction`)
+
+Work package WP1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§3, §9).
+Opt-in; the default (`component`) is bit-identical to the previous behaviour.
+
+#### Added
+- `--friction-model component|vector` (`FlowState.friction_model`, the 33rd
+  field; backward-compatible 31- and 32-argument constructors default it to
+  `:component`). `vector` uses the full discharge magnitude
+  |q| = √(q_n² + q_t²) in the friction term of every Bates kernel and the SGS
+  R–A kernels, with q_t the face-tangential component of the averaged
+  adjacent cell vectors. The Froude limiter then scales q_n by
+  min(1, q_max/|q|). Removes the orientation-dependent face conductance of
+  Bates/LISFLOOD-FP component friction (2^¼ diagonal excess and up to 12.8°
+  flow deflection on a Cartesian grid, independent of resolution).
+- Phase F (cell-vector reconstruction) factored into `_reconstruct_qvec!`
+  (threaded, deterministic) and run every step under vector friction, for
+  both `step_standard!` and `step_sgs!`.
+- `test/test_wp1_vector_friction.jl` (in CI): kernel tests, lake at rest, and
+  a frozen-coefficient friction-limit isotropy test through `step_standard!`
+  that reproduces the component-friction theory exactly (12.78°, 2^¼) and
+  shows none under vector friction.
+- `test/frozen_isotropy_lib.jl`, `test/wp1_frozen_isotropy_mesh.jl` (the same
+  test on any GeoParquet mesh), `test/wp1_metrics.jl` (§3.4 metrics:
+  harmonic anisotropy, sector radii, planar N/S asymmetry) and
+  `test/run_wp1_matrix.sh` (the WP1 run matrix).
+- `test/check_determinism.jl`: two vector-friction cases.
+
+#### Known limitations
+- Ghost (open-boundary) edges still use component friction.
 
 ### WP3 (part 1): mesh families and raster-aligned Cartesian grids (`wp3-mesh-families`)
 

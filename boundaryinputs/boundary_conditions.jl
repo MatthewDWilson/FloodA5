@@ -266,10 +266,12 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             j == 0 && continue
             edge = A5Grid._shared_edge(bnd, cells[j].boundary)
             edge === nothing && continue
-            lon1, lat1, lon2, lat2 = edge
-            # Store canonically ordered pair (smaller lon first) for comparison
-            key = lon1 <= lon2 ? (lon1, lat1, lon2, lat2) : (lon2, lat2, lon1, lat1)
-            push!(shared_pairs, key)
+            # Stored as returned; matched below in both orientations. (WP2 fix,
+            # 2026-10: the key used to be ordered by longitude only, so a side
+            # with lon1 == lon2 — every north–south side of a Cartesian cell —
+            # kept whatever vertex order each polygon listed, and a shared side
+            # could fail to match and become a phantom ghost edge.)
+            push!(shared_pairs, Tuple(edge))
         end
 
         # Pentagon sides: check each side against shared_pairs
@@ -296,13 +298,16 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             v1 = bnd[v1_idx]
             v2 = bnd[v2_idx]
 
-            # Check whether this side is shared with a neighbour
-            key_fwd = v1[1] <= v2[1] ? (v1[1], v1[2], v2[1], v2[2]) :
-                                        (v2[1], v2[2], v1[1], v1[2])
+            # Check whether this side is shared with a neighbour (either
+            # vertex order — see the shared_pairs comment above)
+            _near(a, b) = abs(a - b) < 1e-8
             is_shared = false
             for sp in shared_pairs
-                if (abs(sp[1] - key_fwd[1]) < 1e-8 && abs(sp[2] - key_fwd[2]) < 1e-8 &&
-                    abs(sp[3] - key_fwd[3]) < 1e-8 && abs(sp[4] - key_fwd[4]) < 1e-8)
+                fwd = _near(sp[1], v1[1]) && _near(sp[2], v1[2]) &&
+                      _near(sp[3], v2[1]) && _near(sp[4], v2[2])
+                rev = _near(sp[1], v2[1]) && _near(sp[2], v2[2]) &&
+                      _near(sp[3], v1[1]) && _near(sp[4], v1[2])
+                if fwd || rev
                     is_shared = true
                     break
                 end
