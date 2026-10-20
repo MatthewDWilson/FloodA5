@@ -676,9 +676,19 @@ indicator) and rms velocity noise, end of run:
   Carlisle (dry-cell vertex contamination is not its main source), but
   improves the planar result at res-18.
 
+**Carlisle res-20** (478k cells; same forcing, 3 h): the default configuration
+begins to checkerboard at this resolution, while the recommended one stays
+clean, at about 2.4× the steps (local CFL):
+
+| res-20, t = 3 h | extrema | r_rms | dv_rms (m/s) | steps |
+|---|---|---|---|---|
+| default | 6.1% | 252 mm | 0.144 | 9 313 |
+| diamond-wetdry + vector + hybrid + local | 1.6% | 11 mm | 0.073 | 22 561 |
+
 **Recommended experimental configuration:** `--gradient-correction on
 --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid
---cfl-mode local` (edge momentum, θ = 0.9). WP2 acceptance is only partly met:
-it is stable on Carlisle res-18 but noisier than the default, and the review's
-θ-blend and positivity replacements are not usable as proposed.
+--cfl-mode local` (edge momentum, θ = 0.9). It is stable on Carlisle res-18
+(somewhat noisier than the default there) and markedly smoother than the default
+at res-20. The review's θ-blend and positivity replacements are not usable as
+proposed.
 
