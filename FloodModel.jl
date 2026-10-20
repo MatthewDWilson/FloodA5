@@ -1771,8 +1771,8 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     momentum_model in (:edge, :cell, :blend) ||
         throw(ArgumentError("momentum_model must be :edge, :cell or :blend (got :$momentum_model)"))
-    limiter in (:legacy, :positivity) ||
-        throw(ArgumentError("limiter must be :legacy or :positivity (got :$limiter)"))
+    limiter in (:legacy, :positivity, :hybrid) ||
+        throw(ArgumentError("limiter must be :legacy, :positivity or :hybrid (got :$limiter)"))
     cfl_mode in (:legacy, :local) ||
         throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
     n       = length(mesh)
@@ -2020,7 +2020,9 @@ function initialise_flow_model(mesh::A5Mesh,
     # unconditionally on every run. `nothing` when face_flux_method ==
     # :legacy, matching the existing "safe placeholder when unused" pattern.
     # See mesh/DiamondFlux.jl and FloodA5_PhaseB_Complete_PhaseC_Handoff.md.
-    diamond_table = if face_flux_method === :diamond
+    face_flux_method in (:legacy, :diamond, :diamond_wetdry) ||
+        throw(ArgumentError("face_flux_method must be :legacy, :diamond or :diamond_wetdry (got :$face_flux_method)"))
+    diamond_table = if face_flux_method in (:diamond, :diamond_wetdry)
         t_dia = time()
         dt_table = build_diamond_flux_table(mesh.cells, edges)
         @info "Diamond flux table built in $(round(time()-t_dia, digits=3))s"
@@ -2501,8 +2503,10 @@ function step_standard!(state::FlowState, dt::Float64)
 
     # WP2 (2026-10): with --limiter positivity the per-edge volume limiter
     # (Fix B) is disabled — the kernels skip it when depth_donor ≤ 0 — and
-    # positivity is enforced per donor cell in Phase B instead.
-    positivity = state.limiter === :positivity
+    # positivity is enforced per donor cell in Phase B instead. --limiter
+    # hybrid keeps Fix B and replaces only the per-edge donor cap.
+    positivity = state.limiter !== :legacy
+    keep_fixB  = state.limiter !== :positivity
 
     # WP1 (2026-10): vector friction. qvec_u/qvec_v hold the cell discharge
     # vectors reconstructed by Phase F at the end of the previous step (zero
@@ -2527,7 +2531,7 @@ function step_standard!(state::FlowState, dt::Float64)
 
         # Identify donor depth for the volume limiter (higher-WSE side donates);
         # 0.0 disables the per-edge volume limiter under --limiter positivity.
-        depth_donor = positivity ? 0.0 :
+        depth_donor = !keep_fixB ? 0.0 :
                       wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
 
         # ── q_prev: edge-scalar (legacy) or face projection of cell vector ──
@@ -2635,9 +2639,21 @@ function step_standard!(state::FlowState, dt::Float64)
             # to be extremely rare, ~1 edge in 74,000 on the Carlisle
             # mesh in the Phase B empirical verification).
             dWSE_n = NaN
+            #
+            # :diamond_wetdry (WP2, 2026-10): as :diamond, but where the
+            # edge's vertex stencil includes a dry cell (whose "WSE" is just
+            # its bed elevation) the face gradient is the two-point form
+            # c·(wse_ci − wse_cj) instead — see diamond_stencil_wet. Removes
+            # the spurious bank-side gradients seen on the Carlisle DEM.
             if state.face_flux_method === :diamond && state.diamond_table !== nothing
                 dWSE_n = diamond_dWSE_n(state.diamond_table, e, wse_ci, wse_cj,
                                          wse_all, edges.L[e])
+            elseif state.face_flux_method === :diamond_wetdry && state.diamond_table !== nothing
+                dWSE_n = diamond_stencil_wet(state.diamond_table, e, state.water_depth,
+                                             HFLOW_THRESHOLD) ?
+                         diamond_dWSE_n(state.diamond_table, e, wse_ci, wse_cj,
+                                        wse_all, edges.L[e]) :
+                         edges.cos_theta[e] * (wse_ci - wse_cj)
             end
             if isnan(dWSE_n)
                 gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
@@ -2972,9 +2988,10 @@ function step_sgs!(state::FlowState, dt::Float64)
     end
 
     # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
-    # WP2: --limiter positivity replaces the per-edge donor cap with one
-    # scale factor per donor cell, written back to flux_Q (Fix C).
-    positivity = state.limiter === :positivity
+    # WP2: --limiter positivity|hybrid replaces the per-edge donor cap with
+    # one scale factor per donor cell, written back to flux_Q (Fix C). (The
+    # R-A kernel has no per-edge volume limiter, so the two are the same here.)
+    positivity = state.limiter !== :legacy
     positivity && _positivity_scale!(edge_vol, edges.flux_Q, state.volume,
                                      edges.cell_i, edges.cell_j)
     dV = zeros(Float64, n)
@@ -3938,7 +3955,11 @@ Flow model options:
                      Research/diagnostic parameter; has no effect when
                      --face-flux-method diamond is selected (the diamond
                      construction has no separate alpha term).
-  --face-flux-method legacy|diamond
+  --face-flux-method legacy|diamond|diamond-wetdry
+                     (diamond-wetdry, WP2: as diamond, but the two-point
+                     face gradient is used where an edge's vertex stencil
+                     includes a dry cell, whose bed elevation would
+                     otherwise be taken as a water level.)
                      Selects how dWSE_n (the corrected driving head) is
                      constructed when --gradient-correction is on. Only
                      meaningful together with --gradient-correction on.
@@ -4005,6 +4026,8 @@ Flow model options:
                               s = min(1, V / total outflow), applied to all
                               of its outflows and written back to the stored
                               momentum. Mass-conservative and isotropic.
+                       hybrid keeps the per-edge volume limiter and uses the
+                              positivity scaling in place of the donor cap.
   --cfl-mode legacy|local
                      Timestep rule (WP2).
                        legacy (default) 0.7·sqrt(min area)/sqrt(g·h99).
@@ -4481,9 +4504,11 @@ function main(args=String[])
         :legacy
     elseif face_flux_method_val in ("diamond", "Diamond")
         :diamond
+    elseif face_flux_method_val in ("diamond-wetdry", "diamond_wetdry")
+        :diamond_wetdry
     else
-        println("ERROR: --face-flux-method requires 'legacy' or 'diamond' " *
-                "(got '$face_flux_method_val')\n")
+        println("ERROR: --face-flux-method requires 'legacy', 'diamond' or " *
+                "'diamond-wetdry' (got '$face_flux_method_val')\n")
         print_help(1)
     end
 
@@ -4511,8 +4536,10 @@ function main(args=String[])
         :legacy
     elseif limiter_val in ("positivity", "Positivity")
         :positivity
+    elseif limiter_val in ("hybrid", "Hybrid")
+        :hybrid
     else
-        println("ERROR: --limiter requires 'legacy' or 'positivity' " *
+        println("ERROR: --limiter requires 'legacy', 'positivity' or 'hybrid' " *
                 "(got '$limiter_val')\n")
         print_help(1)
     end
@@ -4552,7 +4579,7 @@ function main(args=String[])
                   "This SGS path is NOT yet validated (dry-cell gradient " *
                   "contamination is an open question — see HYDRAULICS.md §9.4)."
         end
-        if face_flux_method == :diamond
+        if face_flux_method in (:diamond, :diamond_wetdry)
             @warn "--face-flux-method diamond has no effect under --flow-model sgs " *
                   "(step_sgs! uses the legacy WLSQ + V̂ construction). " *
                   "Add --flow-model standard to exercise it."

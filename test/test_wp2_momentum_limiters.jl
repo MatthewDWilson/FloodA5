@@ -8,11 +8,13 @@
 #       (vector friction, diamond): no deflection
 #   P1  _positivity_scale!: scales every outflow of an overdrawn donor by
 #       V/Σout, leaves other edges alone, writes back the stored momentum
-#   P2  --limiter positivity in a point-source run: exact mass balance,
+#   P2  --limiter positivity|hybrid in a point-source run: exact mass balance,
 #       no negative volume
 #   C1  --cfl-mode local: ℓ = 4A/P equals dx on every Cartesian cell
 #       (interior and edge cells), dt = 0.7·dx/√(g·h_max)
-#   L1  Lake at rest with every WP2 option on
+#   D1  diamond_stencil_wet, and diamond-wetdry == diamond when all cells are wet
+#   G1  Cartesian ghost edges: one per missing side (phantom-edge fix)
+#   L1  Lake at rest with the WP2 options on
 #
 # Uses an in-process Cartesian mesh — no data files.
 #
@@ -102,6 +104,11 @@ end
         ("vector + blend + diamond", (; limiter = :positivity, friction_model = :vector,
                                         momentum_model = :blend, gradient_correction = true,
                                         face_flux_method = :diamond)),
+        ("hybrid limiter",           (; limiter = :hybrid)),
+        ("hybrid + diamond-wetdry + vector + local CFL",
+                                     (; limiter = :hybrid, friction_model = :vector,
+                                        gradient_correction = true,
+                                        face_flux_method = :diamond_wetdry, cfl_mode = :local)),
     ]
     state, added = _spread(; kw...)
     @test minimum(state.volume) >= 0.0
@@ -128,6 +135,34 @@ end
     @test_throws ArgumentError initialise_flow_model(_cart_mesh(), StandardFlow(); momentum_model = :vertex)
 end
 
+@testset "D1 — diamond-wetdry: stencil check and all-wet equivalence" begin
+    mesh = _cart_mesh(nr = 9, nc = 9, dx = 20.0)
+    n = length(mesh.cells)
+    mesh.static_vars["elevation"] = [0.01 * (i % 9) for i in 1:n]
+    st = initialise_flow_model(mesh, StandardFlow(); gradient_correction = true,
+                               face_flux_method = :diamond_wetdry)
+    tbl = st.diamond_table
+    depth = fill(0.5, n)
+    valid = findall(tbl.valid)
+    @test !isempty(valid)
+    @test all(e -> diamond_stencil_wet(tbl, e, depth, HFLOW_THRESHOLD), valid)
+    dry = div(n, 2) + 1; depth[dry] = 0.0
+    touching = [e for e in valid
+                if any(k -> dry in tbl.vertex_table[k].cell_indices, (tbl.va_key[e], tbl.vb_key[e]))]
+    @test !isempty(touching)
+    @test all(e -> !diamond_stencil_wet(tbl, e, depth, HFLOW_THRESHOLD), touching)
+    # Fully wet: diamond-wetdry is bit-identical to diamond
+    r_d  = frozen_isotropy(_cart_mesh(nr = 15, nc = 15, dx = 100.0); angles_deg = [10.0, 30.0],
+                           friction_model = :vector, gradient_correction = true,
+                           face_flux_method = :diamond)
+    r_wd = frozen_isotropy(_cart_mesh(nr = 15, nc = 15, dx = 100.0); angles_deg = [10.0, 30.0],
+                           friction_model = :vector, gradient_correction = true,
+                           face_flux_method = :diamond_wetdry)
+    @test r_wd.mean_defl == r_d.mean_defl && r_wd.cond == r_d.cond
+    @test_throws ArgumentError initialise_flow_model(_cart_mesh(), StandardFlow();
+                                                     face_flux_method = :exact)
+end
+
 @testset "G1 — Cartesian ghost edges: one per missing side" begin
     # Regression for the phantom-ghost-edge bug (shared north–south sides were
     # matched by a longitude-only key and could be missed): a 9×9 grid has
@@ -139,13 +174,17 @@ end
     @test count(state.boundary_mask) == 32
 end
 
-@testset "L1 — lake at rest, all WP2 options" begin
+@testset "L1 — lake at rest, WP2 options ($label)" for (label, kw) in [
+        ("blend + positivity + diamond", (; momentum_model = :blend, limiter = :positivity,
+                                             face_flux_method = :diamond)),
+        ("hybrid + diamond-wetdry",      (; limiter = :hybrid, face_flux_method = :diamond_wetdry)),
+    ]
     mesh = _cart_mesh()
     n    = length(mesh.cells)
     mesh.static_vars["elevation"] = [0.6 + 0.3 * sin(0.9 * i) + 0.2 * isodd(i) for i in 1:n]
     state = _closed!(initialise_flow_model(mesh, StandardFlow();
-                     friction_model = :vector, momentum_model = :blend, limiter = :positivity,
-                     cfl_mode = :local, gradient_correction = true, face_flux_method = :diamond))
+                     friction_model = :vector, cfl_mode = :local, gradient_correction = true,
+                     kw...))
     for i in 1:n
         state.water_depth[i] = 2.0 - state.elevation[i]
         state.volume[i]      = state.water_depth[i] * state.cell_area[i]

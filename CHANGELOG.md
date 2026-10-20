@@ -54,7 +54,16 @@ All options are opt-in; the defaults are bit-identical to before.
   cell, s = min(1, V / Σ outflow), applied to all of its outflows and written
   back to the stored momentum (`_positivity_scale!`), in place of the per-edge
   volume limiter (Fix B) and the per-edge donor cap. Mass-conservative and
-  isotropic. Standard and SGS solvers.
+  isotropic. Standard and SGS solvers. **Not stable on its own** on the
+  Carlisle DEM (velocity noise up to 5 m/s): the per-edge volume limiter is
+  doing real stabilising work.
+- `--limiter hybrid`: keeps the per-edge volume limiter and uses the
+  positivity scaling only in place of the per-edge donor cap. As smooth as
+  `legacy` on Carlisle res-18 and removes the face-count-dependent cap.
+- `--face-flux-method diamond-wetdry`: as `diamond`, but the two-point face
+  gradient is used where an edge's vertex stencil includes a dry cell (whose
+  bed elevation would otherwise be read as a water level). Bit-identical to
+  `diamond` when every cell is wet. `diamond_stencil_wet` in `DiamondFlux.jl`.
 - `--cfl-mode local`: dt = 0.7 · min over wet cells of ℓ_i/√(g h_i), with
   ℓ_i = 4A_i/P_i (`FlowState.cell_length`; equal to dx on a square cell),
   instead of √(min area) paired with the 99th-percentile depth. The SGS
