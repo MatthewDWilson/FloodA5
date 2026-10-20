@@ -31,6 +31,14 @@ python mesh/migrate_mesh_ids.py test/carlisle/carlisle_mesh18_standard.parquet t
 
 The migrated mesh gives bit-identical results. See `A5_QUIRKS.md` §11.
 
+To upgrade an existing installation, `julia setup.jl --upgrade` installs pya5 1.x
+into PyCall's Python (re-running `setup.jl` without it does not upgrade an
+installed pya5) and lists meshes under `test/` that still use 0.x IDs;
+`julia setup.jl --migrate-meshes` migrates them in place, keeping each original
+as `*_a5v0.parquet`. `--pya5 "pya5==0.7.3"` rolls back. FloodA5 uses PyCall's
+Python (by default Julia's own Conda.jl Python, `~/.julia/conda/3`), not any
+other conda environment; `julia setup.jl --python PATH` switches it.
+
 **CUDA (optional).** An NVIDIA CUDA GPU accelerates the point-in-polygon DEM
 sampling step. FloodA5 falls back to multi-threaded CPU automatically if no
 functional GPU is detected.

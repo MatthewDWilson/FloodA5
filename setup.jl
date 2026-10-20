@@ -17,6 +17,26 @@ What it does
 4. Checks for a functional CUDA GPU; warns and confirms CPU fallback if absent.
 5. Applies the Julia 1.12 Printf compatibility fix in FloodModel.jl if needed
    (replaces @sprintf with string interpolation; removes unused Printf import).
+
+Options (WP-M1, 2026-10)
+------------------------
+    julia setup.jl --upgrade            upgrade pya5 to 1.x (pya5>=1,<2) only
+    julia setup.jl --upgrade-all        also upgrade geopandas, pyarrow, shapely, numpy
+    julia setup.jl --pya5 "pya5==0.7.3" install a specific pya5 (e.g. to roll back)
+    julia setup.jl --python PATH        point PyCall at another Python (e.g. a conda
+                                        env's python.exe), rebuild PyCall, then stop:
+                                        re-run setup.jl to install into it
+    julia setup.jl --migrate-meshes     migrate every pya5 0.x ("a5-v0") GeoParquet
+                                        mesh under test/ to the 1.x ID scheme in place
+                                        (originals kept as *_a5v0.parquet)
+
+Without options the behaviour is as before: packages are installed only if
+missing, so re-running setup.jl does NOT upgrade an installed pya5.
+
+FloodA5 uses PyCall's Python for everything (cell queries and the mesh
+bridge subprocesses), which by default is Julia's own Conda.jl Python
+(~/.julia/conda/3), not any other conda environment. This script prints which
+one it is.
 """
 
 # ---------------------------------------------------------------------------
@@ -25,6 +45,24 @@ What it does
 
 using Pkg
 
+_has_opt(flag) = flag in ARGS
+function _opt_val(flag, default)
+    i = findfirst(==(flag), ARGS)
+    i === nothing && return default
+    i < length(ARGS) || error("$flag needs a value")
+    return ARGS[i + 1]
+end
+if _has_opt("--help") || _has_opt("-h")
+    println("Usage: julia setup.jl [--upgrade | --upgrade-all] [--pya5 SPEC] " *
+            "[--python PATH] [--migrate-meshes]\nSee the header of setup.jl.")
+    exit(0)
+end
+const UPGRADE_ALL = _has_opt("--upgrade-all")
+const UPGRADE     = UPGRADE_ALL || _has_opt("--upgrade")
+const PYA5_SPEC   = _opt_val("--pya5", UPGRADE ? "pya5>=1,<2" : "pya5")
+const NEW_PYTHON  = _opt_val("--python", nothing)
+const MIGRATE     = _has_opt("--migrate-meshes")
+
 println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 println("  FloodA5 — setup")
 println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
@@ -32,6 +70,21 @@ println("━━━━━━━━━━━━━━━━━━━━━━━�
 project_dir = @__DIR__
 println("[ 0/4 ] Activating project at: $project_dir")
 Pkg.activate(project_dir)
+
+# --python PATH: rebuild PyCall against that interpreter. A Julia session cannot
+# switch Python once PyCall is loaded, so stop here and ask for a re-run.
+if NEW_PYTHON !== nothing
+    isfile(NEW_PYTHON) || error("--python: $NEW_PYTHON does not exist")
+    println("\n[ * ] Rebuilding PyCall against $NEW_PYTHON …")
+    ENV["PYTHON"] = NEW_PYTHON
+    Pkg.build("PyCall")
+    println("""
+  ✓ PyCall rebuilt. FloodA5 will now use $NEW_PYTHON.
+    Re-run setup to install FloodA5's Python packages into it, e.g.:
+        julia setup.jl --upgrade
+""")
+    exit(0)
+end
 
 # ---------------------------------------------------------------------------
 # 1. Julia packages
@@ -85,23 +138,32 @@ py_packages = ["pya5", "geopandas", "pyarrow", "shapely", "numpy"]
 
 python_exe = PyCall.python
 println("  PyCall Python: $python_exe")
+occursin(joinpath(".julia", "conda"), python_exe) &&
+    println("    (Julia's own Conda.jl Python — FloodA5 does not use any other conda " *
+            "environment unless you run  julia setup.jl --python PATH)")
 
 for pkg in py_packages
-    print("  Installing $pkg … ")
-    result = run(ignorestatus(Cmd([python_exe, "-m", "pip", "install", "--quiet", pkg])))
+    spec  = pkg == "pya5" ? PYA5_SPEC : pkg
+    flags = ["--quiet"]
+    ((pkg == "pya5" && UPGRADE) || UPGRADE_ALL) && push!(flags, "--upgrade")
+    print("  Installing $spec$(("--upgrade" in flags) ? " (upgrade)" : "") … ")
+    result = run(ignorestatus(Cmd([python_exe, "-m", "pip", "install", flags..., spec])))
     if result.exitcode == 0
         println("✓")
     else
         println()
-        @warn "  pip install $pkg returned exit code $(result.exitcode) — check output above"
+        @warn "  pip install $spec returned exit code $(result.exitcode) — check output above"
     end
 end
 
-# Verify pya5 is importable
+# Verify pya5 is importable, and report its version and cell-ID scheme
 print("  Verifying pya5 import … ")
+global pya5_major = -1
 try
     pyimport("a5")
-    println("✓")
+    v = String(pyimport("importlib.metadata").version("pya5"))
+    global pya5_major = something(tryparse(Int, first(split(v, '.'))), 0)
+    println("✓  pya5 $v (cell-ID scheme $(pya5_major >= 1 ? "a5-v1" : "a5-v0"))")
 catch e
     @error "pya5 could not be imported after installation: $e"
     println("""
@@ -144,6 +206,64 @@ else
   If pya5 installed correctly above, this may be a PATH issue.
   Manual check: $(python_exe) $(bridge) check
 """)
+    end
+end
+
+# ---------------------------------------------------------------------------
+# 3b. Mesh cell-ID schemes (WP-M1)
+# ---------------------------------------------------------------------------
+# pya5 1.x uses different cell IDs from 0.x for the same cells, and FloodA5
+# refuses to load a mesh of the other scheme. List the GeoParquet meshes under
+# test/ by scheme and, with --migrate-meshes, migrate the 0.x ones in place.
+
+println("\n[ * ] Checking mesh cell-ID schemes under test/ …")
+meshes = String[]
+for (root, _, files) in walkdir(joinpath(project_dir, "test"))
+    for f in files
+        endswith(f, ".parquet") && !endswith(f, "_a5v0.parquet") &&
+            !occursin("_a5v1_tmp", f) && push!(meshes, joinpath(root, f))
+    end
+end
+if isempty(meshes)
+    println("  (no GeoParquet meshes found)")
+else
+    list_file = tempname() * ".txt"
+    write(list_file, join(meshes, "\n"))
+    py = """
+import sys, json
+sys.path.insert(0, r'$(joinpath(project_dir, "mesh"))')
+import a5_bridge as b, pyarrow.parquet as pq
+for p in open(r'$list_file').read().splitlines():
+    try:
+        s = b.read_id_scheme(p)
+        if s is None:
+            r = pq.read_table(p, columns=['resolution']).column('resolution').to_pylist()
+            s = 'cartesian' if r and all(x == 0 for x in r) else 'a5-v0'
+    except Exception as e:
+        s = 'unreadable'
+    print(s + '\\t' + p)
+"""
+    buf = IOBuffer()
+    run(pipeline(ignorestatus(Cmd([python_exe, "-c", py])), stdout = buf))
+    rm(list_file; force = true)
+    schemes = [Tuple(split(l, '\t'; limit = 2)) for l in split(String(take!(buf)), '\n') if occursin('\t', l)]
+    for s in sort(unique(first.(schemes)))
+        println("  $(rpad(s, 10)) $(count(x -> x[1] == s, schemes)) mesh(es)")
+    end
+    v0 = [String(p) for (s, p) in schemes if s == "a5-v0"]
+    if !isempty(v0) && pya5_major >= 1
+        if MIGRATE
+            println("  Migrating $(length(v0)) a5-v0 mesh(es) in place (originals kept as *_a5v0.parquet) …")
+            tool = joinpath(project_dir, "mesh", "migrate_mesh_ids.py")
+            res = run(ignorestatus(Cmd([python_exe, tool, "--in-place", v0...])))
+            res.exitcode == 0 ? println("  ✓ Migration complete") :
+                @warn "  migrate_mesh_ids.py reported failures (exit $(res.exitcode)) — see above"
+        else
+            println("  ⚠ $(length(v0)) mesh(es) use pya5 0.x IDs and will be refused under pya5 1.x.")
+            println("    Migrate them in place with:  julia setup.jl --migrate-meshes")
+        end
+    elseif !isempty(v0)
+        println("  (pya5 0.x installed: a5-v0 meshes are usable; nothing to migrate)")
     end
 end
 
