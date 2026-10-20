@@ -21,6 +21,16 @@ environments manually, the required packages are:
 pya5  geopandas  pyarrow  shapely  numpy
 ```
 
+FloodA5 works with pya5 0.7.3 and 1.x. pya5 1.0 changed the cell-ID encoding, so
+a mesh written with 0.7.x is refused under 1.x until you migrate it, using the
+Python that has pya5 1.x:
+
+```bash
+python mesh/migrate_mesh_ids.py test/carlisle/carlisle_mesh18_standard.parquet test/carlisle/carlisle_mesh18_standard_a5v1.parquet
+```
+
+The migrated mesh gives bit-identical results. See `A5_QUIRKS.md` §11.
+
 **CUDA (optional).** An NVIDIA CUDA GPU accelerates the point-in-polygon DEM
 sampling step. FloodA5 falls back to multi-threaded CPU automatically if no
 functional GPU is detected.

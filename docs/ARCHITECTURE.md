@@ -118,8 +118,11 @@ Julia module (`module A5Grid ... end`). Provides the mesh API used by
 
 Python subprocess called by `A5Grid.jl` for mesh generation. It:
 
-1. Calls `pya5.fill_polygon` + `pya5.uncompact` to enumerate cells at the target
-   resolution, covering both A5 sublattices by adding `grid_disk` neighbours.
+1. Calls `pya5.fill_polygon` + `pya5.uncompact` (pya5 0.x) or
+   `pya5.polygon_to_cells` + `pya5.uncompact` (pya5 1.x) to enumerate cells at
+   the target resolution, covering both A5 sublattices by adding `grid_disk`
+   neighbours. The cell-ID scheme is recorded in the output file's metadata
+   (`A5_QUIRKS.md` §11).
 2. Computes boundary polygons via `pya5.cell_to_boundary` for each cell.
 3. Normalises all cell IDs to 16-character zero-padded hex and all longitudes to
    [-180, 180].
@@ -456,7 +459,9 @@ Any mesh generated without this step will have zero edges and produce no flux.
 ### `grid_disk` returns compact results
 
 `pya5.grid_disk(cell, 1)` returns a compact result — a mix of cells at different
-resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`.
+resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`
+(pya5 0.x) or `pya5.uncompact(disk)` and drop compaction markers (pya5 1.x) — see
+`A5_QUIRKS.md` §11 and `A5Grid.grid_disk_neighbours`.
 
 ---
 
