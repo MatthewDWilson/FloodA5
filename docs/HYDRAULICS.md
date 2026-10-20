@@ -313,6 +313,10 @@ under `--flow-model sgs` has no effect (a startup warning is printed).
 
 ## 8. Current Status and Recommendation
 
+> **Superseded (2026-10):** the recommendation below predates WP1/WP2. Cell-vector
+> momentum checkerboards on the Carlisle DEM; see §15 for the current evidence
+> and recommended experimental configuration.
+
 **None of §7's corrections are the default.** All three default to the
 legacy, uncorrected Bates behaviour, unchanged from the model's original
 implementation. This is a deliberate, repeatedly-reaffirmed decision across
@@ -577,3 +581,104 @@ records are not part of this public release, but are retained internally
 and available on request. They are kept rather than discarded precisely
 because the negative results and dead ends are as load-bearing for future
 development as the things that worked.
+
+---
+
+## 15. Friction, Momentum and Limiter Consistency (WP1/WP2, 2026-10)
+
+From `FloodA5_Review_and_ForwardPlan_2026-10.md` §3–§4 and §9 (WP1, WP2). All
+options are opt-in; the defaults are bit-identical to before.
+
+### 15.1 Vector friction (`--friction-model vector`)
+
+The Bates/LISFLOOD-FP friction term uses only the face-normal discharge |q_n|.
+In the friction-dominated limit the face conductance then depends on face
+orientation: q_f ∝ g_n/√|g_n| instead of g_n/√|∇η|. On a Cartesian grid this
+deflects the flow by up to 12.8° and makes diagonal flow 2^¼ too conductive; it
+is a property of the continuum limit, so refinement cannot remove it (Cozzolino
+et al. 2021). Vector friction uses |q| = √(q_n² + q_t²), with q_t the
+face-tangential part of the averaged adjacent cell vectors (reconstructed every
+step by the Phase F WLSQ operator); the Froude limiter scales q_n by
+min(1, q_max/|q|). Implemented in all Bates kernels and the SGS R–A kernels.
+
+**Frozen-coefficient test through `step_standard!`** (uniform depth on a planar
+WSE, volumes reset each step; `test/frozen_isotropy_lib.jl`). Cartesian: component
+friction gives exactly the theoretical deflection atan(√tan φ) − φ (max 12.78°)
+and conductance ratio 2^¼ = 1.1892; vector friction gives 0.000° and 1.0000
+(`test_wp1_vector_friction.jl` V5, in CI). A5 planar meshes
+(`test/wp1_frozen_isotropy_mesh.jl`), max mean deflection / conductance ratio:
+
+| Gradient | Friction | Momentum | res 16 | res 18 |
+|---|---|---|---|---|
+| legacy two-point | component | edge θ=0.9 | 15.05° / 1.706 | 20.38° / 2.002 |
+| legacy two-point | vector | edge θ=0.9 | 15.52° / 1.719 | 20.56° / 2.001 |
+| diamond | component | edge θ=0.9 | 7.09° / 1.024 | 2.11° / 1.185 |
+| diamond | vector | edge θ=0.9 | 6.65° / 1.025 | 2.27° / 1.181 |
+| diamond | component | edge θ=1 | 6.58° / 1.111 | 6.58° / 1.111 |
+| **diamond** | **vector** | **edge θ=1** | **0.00° / 1.000** | **0.00° / 1.000** |
+| diamond | vector | cell | 0.17° / 1.001 | 0.04° / 1.000 |
+
+Both a consistent face gradient (diamond) and vector friction are needed, and
+Q-centring at θ = 0.9 — which averages a face with its "most collinear" faces,
+~144° apart on pentagons — by itself deflects the steady flow.
+
+**Full simulations.** Cartesian flat point spread (10 m³/s, closed, t = 3600 s;
+`test/run_wp1_matrix.sh`, `test/wp1_metrics.jl spread`), four-fold anisotropy A4:
+
+| dx | component, edge | vector, edge | vector, cell |
+|---|---|---|---|
+| 25 m | −0.063 | +0.047 | +0.092 |
+| 12.5 m | −0.089 | +0.024 | +0.033 |
+| 6.25 m | −0.101 | +0.012 | +0.015 |
+
+Component friction converges to a non-zero bias; vector friction to isotropy at
+first order. A5 planar slope (0.1 m³/s, closed, dt_max 2 s, t = 72 000 s;
+`wp1_metrics.jl planar`), N/S volume asymmetry and plume deflection:
+
+| Configuration | res 16 | res 18 |
+|---|---|---|
+| default (legacy, component, edge) | +0.68 / +15.3° | +0.866 / +14.0° |
+| legacy gradient, vector | +0.65 / +14.8° | +0.874 / +14.4° |
+| diamond, component, edge | −0.43 / −5.1° | −0.573 / −4.8° |
+| diamond, component, cell | −0.09 / −1.1° | −0.277 / −2.3° |
+| diamond, vector, edge | +0.154 / +1.9° | +0.078 / +1.3° |
+| diamond, vector, cell | +0.371 / +6.2° | +0.311 / +4.0° |
+| **diamond-wetdry, vector, edge, hybrid, local CFL** | +0.166 / +2.5° | **+0.050 / +0.5°** |
+
+With vector friction the residual decreases with refinement; with component
+friction it grows. Vector friction does nothing with the legacy gradient.
+
+### 15.2 Momentum, limiters and CFL on real terrain (WP2)
+
+Carlisle res-18, standard flow, three QVAR inflows + 10 mm/h rain, 12 h
+(`test/run_jobs.sh`, `test/wp2_checkerboard.jl`). Over fully wet interior
+cells: fraction that are strict local WSE extrema with |r| > 2 mm (checkerboard
+indicator) and rms velocity noise, end of run:
+
+| Change from the default | extrema | dv_rms (m/s) | |
+|---|---|---|---|
+| none (default) | 0.6% | 0.096 | smooth |
+| `--friction-model vector` | 0.3% | 0.092 | smooth |
+| `--cfl-mode local` | 0.5% | 0.096 | smooth; no early transient |
+| `--limiter hybrid` | 0.3% | 0.089 | smooth |
+| `--face-flux-method diamond` | 2.3% | 0.159 | bounded, not growing |
+| `--limiter positivity` | 10.9% | 0.525 (max 5.4) | **unstable** |
+| `--momentum-model blend` (θ=0.9) | 9.3% | 0.241 | **checkerboard** |
+| `--momentum-model cell` | 28.6% | 0.211 | **checkerboard** |
+| diamond-wetdry + vector + hybrid + local | 2.7% | 0.159 | bounded |
+
+- The per-edge volume limiter does real stabilising work: positivity scaling
+  alone only prevents negative volumes. `hybrid` keeps it and removes only the
+  face-count-dependent donor cap.
+- Cell-vector momentum (and blend, which mixes it in) checkerboards on real
+  terrain; it had been tested only on the planar slope.
+- The wet/dry diamond fallback did not reduce diamond's extra noise on
+  Carlisle (dry-cell vertex contamination is not its main source), but
+  improves the planar result at res-18.
+
+**Recommended experimental configuration:** `--gradient-correction on
+--face-flux-method diamond-wetdry --friction-model vector --limiter hybrid
+--cfl-mode local` (edge momentum, θ = 0.9). WP2 acceptance is only partly met:
+it is stable on Carlisle res-18 but noisier than the default, and the review's
+θ-blend and positivity replacements are not usable as proposed.
+
