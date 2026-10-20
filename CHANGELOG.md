@@ -38,6 +38,36 @@ Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP-M1: pya5 1.x support (`maint-pya5-1x`)
+
+Work package WP-M1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§9).
+pya5 0.7.3 behaviour is unchanged; pya5 1.x is now supported.
+
+#### Added
+- One code path per pya5 major version in `mesh/a5_bridge.py` (`A5_MAJOR`,
+  `_uncompact_to`, `_grid_disk_ring1`) and `mesh/A5Grid.jl`
+  (`pya5_version()`, `a5_id_scheme()`, version-aware `grid_disk_neighbours`).
+  Under 1.x the AOI seed set comes from `polygon_to_cells` (overlapping
+  containment): Carlisle res-18 mesh generation 1 m 02 s vs 13 m 13 s.
+- Cell-ID scheme recorded in every GeoParquet mesh (schema metadata key
+  `flooda5`: `a5_id_scheme`, `pya5_version`) and in the HDF5 `/mesh`
+  `id_scheme` attribute; new `A5Mesh.id_scheme` field (7th; the 6-argument
+  constructor defaults it to the installed pya5's scheme; Cartesian meshes
+  use `"cartesian"`).
+- ⚠ `load_mesh_geoparquet` refuses a mesh whose A5 ID scheme differs from the
+  installed pya5's (`check_id_scheme`; override with
+  `FLOODA5_ALLOW_ID_SCHEME_MISMATCH=1`). Existing meshes are `a5-v0`, so under
+  pya5 1.x they must be migrated first.
+- `mesh/migrate_mesh_ids.py`: rewrites `cell_id`/`neighbours` with
+  `a5.migrate`, verifying every centre. Verified on Carlisle res-18: a
+  simulation on the migrated mesh is bit-identical to the original, and a
+  mesh generated afresh under 1.x has the same cells and adjacency graph
+  (centroids within 1e-13°, areas within 6e-10 relative).
+- `A5Grid.migrate_cell_id`; `test/test_pya5_compat.jl` (in CI) with the fixture
+  `test/fixtures/a5_id_schemes.csv`; CI matrix over pya5 0.7.3 and 1.0.0
+  (pya5 removed from `ci/python-requirements.txt`); CI also runs on `maint-*`
+  branches.
+
 ### WP0: correctness and test infrastructure (`wp0-correctness`)
 
 Correctness and test-infrastructure work package WP0 from

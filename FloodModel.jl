@@ -754,6 +754,8 @@ function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh)
     HDF5.h5open(output.path, "w") do fid
         g = HDF5.create_group(fid, "mesh")
         g["cell_ids"]    = [c.id         for c in mesh.cells]
+        # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
+        HDF5.attributes(g)["id_scheme"] = mesh.id_scheme
         g["center_lons"] = [c.center_lon for c in mesh.cells]
         g["center_lats"] = [c.center_lat for c in mesh.cells]
         g["elevations"]  = get(mesh.static_vars, "elevation",

@@ -69,6 +69,16 @@ Development Roadmap in `README.md`.
 | `sgs_edge_area_curve` | n_bins × max_nb | Cross-sectional flow area at each elevation knot, per adjacency slot (m²). Stored as a flat array of length n_bins × 5; reshape to (n_bins, 5) on load. |
 | `sgs_edge_perim_curve` | n_bins × max_nb | Wetted perimeter at each elevation knot, per adjacency slot (m). Same layout as `sgs_edge_area_curve`. |
 
+### Cell-ID scheme metadata (WP-M1)
+
+The Parquet schema metadata carries a `flooda5` key with a JSON object, e.g.
+`{"a5_id_scheme": "a5-v1", "pya5_version": "1.0.0"}` (plus `migrated_from` /
+`migrated_by` after `mesh/migrate_mesh_ids.py`). `a5_id_scheme` is `a5-v0`
+(pya5 0.x cell IDs), `a5-v1` (pya5 1.x) or `cartesian`. Files without the key
+were written before WP-M1 by pya5 0.7.x. The same cell has different IDs in the
+two A5 schemes, so FloodA5 refuses to load a mesh of the other scheme — see
+`A5_QUIRKS.md` §11.
+
 ### Adjacency column
 
 | Column | dtype | Description |
@@ -107,7 +117,7 @@ Written by `--output`. Extension: `.h5` or `.hdf5`.
 
 | Dataset | Shape | dtype | Description |
 |---|---|---|---|
-| `/mesh/cell_ids` | (n_cells,) | string | 16-char zero-padded hex cell IDs |
+| `/mesh/cell_ids` | (n_cells,) | string | 16-char zero-padded hex cell IDs. The group attribute `id_scheme` (`a5-v0`, `a5-v1` or `cartesian`; since WP-M1) says which ID scheme they use |
 | `/mesh/elevations` | (n_cells,) | float64 | Bed elevation (m). `NaN` if not sampled. |
 | `/mesh/center_lons` | (n_cells,) | float64 | Cell centre longitude (degrees) |
 | `/mesh/center_lats` | (n_cells,) | float64 | Cell centre latitude (degrees) |

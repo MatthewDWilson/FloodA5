@@ -205,3 +205,38 @@ Several design decisions in the current single-resolution code anticipate Phase 
 | `FlowState.sgs_tables` is `Vector{Any}` | Placeholder | Will become `Vector{Union{SGSTable, Nothing}}` in Phase 3 |
 
 The primary Phase 3 data structure addition is `MultiResMesh`: a multi-level cell store with parent/child pointers and a coarse/fine interface flux handler.
+
+## 11. pya5 0.x vs 1.x — Cell IDs Changed (WP-M1, 2026-10)
+
+pya5 1.0 is a breaking release. FloodA5 supports both major versions, with one
+code path per version (`A5_MAJOR` in `mesh/a5_bridge.py`, `A5Grid._A5_MAJOR`):
+
+| | pya5 0.7.x | pya5 1.x |
+|---|---|---|
+| Cell-ID encoding (`a5_id_scheme`) | `a5-v0` | `a5-v1` — **same cells and geometry, different 64-bit IDs** |
+| Old → new ID | — | `a5.migrate(old_id)` |
+| `uncompact` | `uncompact(cells, target_resolution)` | `uncompact(cells)`; a compact set carries a compaction marker |
+| `grid_disk(c, 1)` | the cell and its 5 neighbours | the same 6 cells plus one compaction marker (`is_compaction_marker`) |
+| AOI → cells | `a5.geometry.fill_polygon` + `uncompact` | `polygon_to_cells(..., {"containment": "overlapping"})` + `uncompact` (native Rust, ~13× faster on Carlisle res-18) |
+
+**The hazard.** A 0.x ID is still a *valid* 1.x cell ID (`is_valid_cell` is
+true), just for a different cell: Carlisle's `6345f24758800000` resolves to
+(−2.93°, 54.90°) under 0.7.3 and to (−8.00°, 51.21°), in Ireland, under 1.0.
+Mixing versions therefore fails silently. FloodA5 guards against this:
+
+- Every GeoParquet mesh records its scheme in the schema metadata (key
+  `flooda5`, see `DATA_FORMATS.md` §1). Files without it predate WP-M1 and are
+  `a5-v0` (or `cartesian` if every cell has resolution 0).
+- `load_mesh_geoparquet` refuses a mesh whose A5 scheme differs from the
+  installed pya5's (`A5Grid.check_id_scheme`). Set
+  `FLOODA5_ALLOW_ID_SCHEME_MISMATCH=1` to downgrade this to a warning (for
+  inspecting a file — a simulation itself does not call pya5 with cell IDs,
+  but mesh generation, DEM re-sampling and `grid_disk` adjacency do).
+- `mesh/migrate_mesh_ids.py IN.parquet OUT.parquet` (needs pya5 ≥ 1.0)
+  rewrites `cell_id` and `neighbours` with `a5.migrate`, checks every migrated
+  centre against the stored one, keeps everything else (elevation, SGS
+  tables, row order), and records `a5_id_scheme = a5-v1`. A simulation on the
+  migrated mesh is bit-identical to one on the original (checked on Carlisle
+  res-18), and a mesh generated afresh under 1.x matches the migrated 0.7.3
+  mesh (same 29,902 cells and adjacency graph; centroids within 1e-13°, areas
+  within 6e-10 relative). Only the row order differs between the two.

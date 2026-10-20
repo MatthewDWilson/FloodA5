@@ -204,6 +204,6 @@ function generate_cartesian_mesh_bounds(min_lon::Float64, min_lat::Float64,
     mesh = A5Mesh(0, "", cells,
                   Dict{String,Vector{Float64}}("cell_size_m" => cell_size_m),
                   Dict{String,Matrix{Float64}}(),
-                  adjacency)
+                  adjacency, "cartesian")   # own row/column IDs, not pya5's
     return mesh
 end
