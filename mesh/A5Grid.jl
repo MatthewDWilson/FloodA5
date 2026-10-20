@@ -931,6 +931,22 @@ end
     return string(u, base=16, pad=16)
 end
 
+# Like _to_hex, but for contexts (mesh re-save/adjacency preservation) that
+# receive an already-string cell ID which may or may not be an A5 hex ID —
+# e.g. a Cartesian or other future backend's own ID scheme. Falls back to
+# the raw string rather than throwing, so non-A5 backends round-trip through
+# save_mesh_geoparquet/load_mesh_geoparquet without needing to imitate A5's
+# hex-ID convention. Mirrors FloodModel.jl's `_norm_cell_id` (same rationale,
+# duplicated here rather than shared because A5Grid is a self-contained
+# module included before FloodModel.jl's own definitions exist).
+@inline function _to_hex_safe(id::AbstractString)::String
+    try
+        return _to_hex(parse(UInt64, id, base=16))
+    catch
+        return String(id)
+    end
+end
+
 """    lonlat_to_cell(lon, lat, resolution) → String """
 function lonlat_to_cell(lon::Real, lat::Real, resolution::Int)::String
     cell_id = @py _a5.lonlat_to_cell((Float64(lon), Float64(lat)), resolution)
@@ -1451,7 +1467,7 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
         end
         # Neighbours: preserve adjacency through re-saves (e.g. after DEM sampling).
         # Look up by both raw ID and normalised ID to handle padding differences.
-        norm_id = _to_hex(parse(UInt64, c.id, base=16))
+        norm_id = _to_hex_safe(c.id)
         nbrs = get(adj_by_id, norm_id, get(adj_by_id, c.id, nothing))
         if nbrs !== nothing
             d["neighbours"] = nbrs
@@ -2083,6 +2099,15 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     elev_bins_mat  = Matrix{Float64}(undef, n_bins, n)
     vol_curve_mat  = Matrix{Float64}(undef, n_bins, n)
     area_curve_mat = Matrix{Float64}(undef, n_bins, n)
+    # NOTE (cartesian-formulation branch, deferred): these three matrices
+    # hardcode 5 (A5's pentagon valence) rather than deriving a per-mesh
+    # neighbour ceiling the way adj_matrix/wlsq_weights/mom_weights now do
+    # (see FlowState.max_neighbours in FloodModel.jl). SGS generalisation is
+    # intentionally out of scope for this refactor — deferred until the
+    # standard-flow Cartesian path is verified — but flagged here so it
+    # isn't missed: fixing this requires the same treatment (derive the
+    # ceiling from the mesh's own adjacency, thread it through the loops
+    # below and through the corresponding SGSTable consumers in this file).
     edge_sills_mat = fill(NaN, 5, n)   # up to 5 neighbours per pentagon
     # R-A flux tables: cross-sectional flow area and wetted perimeter per edge slot
     # Shape: (n_bins, 5, n_cells) — stored flat as (n_bins×5, n_cells) in parquet
@@ -2364,13 +2389,19 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         edge_perim = zeros(Float64, n_bins, 5)
     end
 
+    # WP0 fix (2026-10): the previous `get(dict, key, fill(NaN, n))[i]` form
+    # evaluated the `fill` default EAGERLY on every call, i.e. three length-n
+    # allocations per cell → O(n²) work and memory during SGS initialisation
+    # (~21 GB of allocation at 30k cells). Look the scalar up directly instead.
+    _sv(key) = haskey(mesh.static_vars, key) ? Float64(mesh.static_vars[key][i]) : NaN
+
     SGSTable(
         mesh.array_vars["sgs_elev_bins"][:, i],
         mesh.array_vars["sgs_vol_curve"][:, i],
         mesh.array_vars["sgs_area_curve"][:, i],
-        get(mesh.static_vars, "sgs_cell_area", fill(NaN, length(mesh.cells)))[i],
-        get(mesh.static_vars, "sgs_z_min",     fill(NaN, length(mesh.cells)))[i],
-        get(mesh.static_vars, "sgs_z_max",     fill(NaN, length(mesh.cells)))[i],
+        _sv("sgs_cell_area"),
+        _sv("sgs_z_min"),
+        _sv("sgs_z_max"),
         edge_area,
         edge_perim,
     )

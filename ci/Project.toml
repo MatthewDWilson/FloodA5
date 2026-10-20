@@ -1,0 +1,32 @@
+# Minimal environment for CI and headless (AI-assisted) test runs.
+#
+# The root Project.toml carries the full research stack (CUDA, GLMakie, Wflow,
+# Rasters, …), which takes a long time to install/precompile and needs an
+# OpenGL context for GLMakie. The simulation core and the unit tests need only
+# the packages below (FloodModel.jl / A5Grid.jl / DiamondFlux.jl imports), when
+# run with FLOODA5_NO_VIS=1 so the visualisation modules are stubbed.
+#
+#   julia --project=ci -e 'using Pkg; Pkg.instantiate()'
+#   FLOODA5_NO_VIS=1 julia --project=ci test/test_wp0_regressions.jl
+#
+# Versions are pinned (compat) to those in the root Manifest.toml at the time of
+# writing, so CI exercises the same package versions as local development.
+
+[deps]
+ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+ArchGDAL = "0.10.12"
+HDF5 = "0.17.3"
+JSON3 = "1.14.3"
+PyCall = "1.96.4"
+julia = "1.12"

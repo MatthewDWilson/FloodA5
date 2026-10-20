@@ -4,8 +4,11 @@
 #
 # Design
 # ------
-# Boundary cells are mesh cells with fewer than N_SIDES (5) edge-sharing
-# neighbours.  Their "missing" edges face the exterior of the domain.
+# Boundary cells are mesh cells with fewer neighbours than the mesh's own
+# maximum (5 for A5 pentagons, 4 for a Cartesian grid, passed in as
+# `n_sides` below and derived per-mesh in initialise_flow_model — see
+# FlowState.max_neighbours). Their "missing" edges face the exterior of the
+# domain.
 # Currently these are implicit closed walls.  This module makes the BC
 # type explicit per ghost edge, defaulting to ZeroGradient (open outflow).
 #
@@ -169,9 +172,12 @@ end
 """
     _ghost_edge_sides(boundary) → Vector{Tuple{Int,Int}}
 
-Return the (v1_idx, v2_idx) index pairs for each side of a pentagon polygon.
-Pentagon boundaries are stored as 5 vertices + closing repeat (6 entries).
-Returns 5 side pairs (closing side connects vertex 5 back to vertex 1).
+Return the (v1_idx, v2_idx) index pairs for each side of a cell polygon.
+Works for any polygon vertex count (5 for A5 pentagons, 4 for a Cartesian
+cell, etc.) — `nv` is read from `boundary` itself, nothing here assumes a
+pentagon. Boundaries are stored as `nv` vertices + optional closing repeat
+(the repeat, if present, is stripped below). Returns `nv` side pairs (the
+closing side connects the last vertex back to the first).
 """
 function _ghost_edge_sides(boundary::Vector{Vector{Float64}})
     nv = length(boundary)
@@ -215,7 +221,9 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                               )::Tuple{BitVector, Vector{GhostEdge}, Vector{BCType}}
     n             = length(cells)
     use_sgs       = !isempty(sgs_tables)
-    _norm(id)     = A5Grid._to_hex(parse(UInt64, id, base=16))
+    # _norm_cell_id (FloodModel.jl) falls back to the raw ID for any backend
+    # whose cell IDs aren't hex-parseable A5 IDs — see its docstring.
+    _norm(id)     = _norm_cell_id(id)
 
     # Count actual neighbours per cell from EdgeList
     n_neighbours  = zeros(Int, n)

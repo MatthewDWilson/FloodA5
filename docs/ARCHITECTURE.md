@@ -478,9 +478,15 @@ resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`.
   occurring every time, so a clean run is not a guarantee. If mesh generation
   ever crashes with a low-level fault rather than a Julia error, retry with
   `--threads 1`.
-- **Simulation loop** — safe with any thread count. The edge flux loop uses
-  `Threads.@threads` over the `EdgeList`; there are no write hazards because
-  the loop accumulates into per-edge `edge_vol` arrays before scattering to cells.
+- **Simulation loop** — safe with any thread count, and (since WP0, 2026-10)
+  deterministic across thread counts. The edge flux loop uses
+  `Threads.@threads` over the `EdgeList`; each iteration writes only its own
+  edge's slots (`edge_vol[e]`, `edges.flux[e]`), and Q-centring reads a
+  start-of-step snapshot of the momentum array rather than the live array.
+  (Before WP0 it read the live array, which other threads were overwriting —
+  a data race that made results depend on edge order and thread scheduling.)
+  The cell-volume scatter is serial; `_compute_velocity!` is a per-cell gather.
+  `test/check_determinism.jl` verifies identical results for 1 vs N threads.
 - **Ghost-edge Phase E** — serial (ghost edges are owned by single cells).
 - **Cell queries** (`lonlat_to_cell` etc.) — thread-safe via `ReentrantLock(_pycall_lock)`.
 

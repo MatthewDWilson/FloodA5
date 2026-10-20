@@ -76,6 +76,12 @@ over collinear neighbours naturally cancels it. For a coherent flow field
 
 `theta` is normally `state.q_centre_theta` (set via --q-centre-theta, default
 0.9). Passing `theta = 1.0` disables smoothing entirely (q_eff = flux[e]).
+
+Thread safety (WP0, 2026-10): `flux` must be a READ-ONLY snapshot of the
+previous step's values while the threaded edge loop runs. Passing the live
+`edges.flux` array (which the same loop overwrites) is a data race: the
+result then depends on edge order and thread scheduling. `step_standard!`
+and `step_sgs!` pass a start-of-step copy.
 """
 @inline function _q_centred(flux  :: Vector{Float64},
                               e    :: Int,
@@ -187,10 +193,17 @@ stability fixes that match the CAESAR-Lisflood qroute() implementation:
   Prevents supercritical discharge and suppresses the checkerboard instability
   on irregular/pentagonal meshes where each edge has an independent q_prev.
 
-**Fix B — Volume limiter** (CAESAR: depth/4 threshold → depth/5 cap per edge)
-  Caps |Q × dt| at `depth_donor × width / 5.0`, so no more than ~20% of the
-  donor cell's water can leave via one edge per step.  On A5 cells `width` is
-  the natural spatial scale (shared edge length).
+**Fix B — Volume limiter** (CAESAR: depth/4 threshold → depth/5 cap per edge
+  on A5, where the mesh has 5 neighbours per interior cell)
+  Caps |Q × dt| at `depth_donor × width / (vol_limit_divisor × dt)`, so no
+  more than `1/vol_limit_divisor` of the donor cell's water can leave via
+  one edge per step. `vol_limit_divisor` defaults to `5.0` (A5's own
+  neighbour count, i.e. today's exact original behaviour) but the caller
+  should pass the mesh's own neighbour ceiling (`state.max_neighbours` —
+  e.g. `4.0` for a Cartesian grid) so the ~20%-per-edge reasoning reflects
+  this mesh's actual connectivity rather than an A5-specific assumption
+  baked into the default. On any mesh, `width` is the natural spatial scale
+  (shared edge length).
 
 **Fix C — Consistent q_stored**
   Returns the *post-limiting* unit discharge as `q_stored` for writing back to
@@ -216,7 +229,9 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
                                       cos_theta    :: Float64,
                                       n_mann       :: Float64,
                                       dt           :: Float64,
-                                      depth_donor  :: Float64)::Tuple{Float64,Float64}
+                                      depth_donor  :: Float64;
+                                      vol_limit_divisor :: Float64 = 5.0
+                                      )::Tuple{Float64,Float64}
     h_flow = max(wse_i, wse_j) - z_sill
     if h_flow <= HFLOW_THRESHOLD
         # Edge is dry — zero out stale momentum so adjacent cells don't
@@ -242,9 +257,16 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     q_max = h_flow * sqrt(_G * h_flow) * FROUDE_LIMIT
     q_new = clamp(q_new, -q_max, q_max)
 
-    # Fix B: Volume limiter — no more than 1/5 of donor depth per edge per step
+    # Fix B: Volume limiter — no more than 1/vol_limit_divisor of donor depth
+    # per edge per step. vol_limit_divisor defaults to 5.0 (A5's neighbour
+    # count, matching the original CAESAR-derived behaviour exactly) but the
+    # caller should pass the mesh's own max_neighbours (e.g. 4.0 for a
+    # Cartesian grid) so the cap reflects "no more than 1/n_sides of this
+    # cell's donor depth", not an A5-specific assumption. Kept as a plain
+    # scalar argument (not a FlowState/mesh reference) so this function
+    # stays data-structure-independent — see the module-level docstring.
     if depth_donor > 0.0
-        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_vol_max = (depth_donor * width) / (vol_limit_divisor * dt)
         q_new = clamp(q_new, -q_vol_max, q_vol_max)
     end
 
@@ -358,7 +380,8 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
                                                 L           :: Float64,
                                                 n_mann      :: Float64,
                                                 dt          :: Float64,
-                                                depth_donor :: Float64
+                                                depth_donor :: Float64;
+                                                vol_limit_divisor :: Float64 = 5.0
                                                 )::Tuple{Float64,Float64}
     if h_flow <= HFLOW_THRESHOLD
         # See _bates_flux_limited's matching comment: zero out stale
@@ -380,9 +403,11 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
     q_max = h_flow_safe * sqrt(_G * h_flow_safe) * FROUDE_LIMIT
     q_new = clamp(q_new, -q_max, q_max)
 
-    # Fix B: Volume limiter — unchanged from the legacy kernel.
+    # Fix B: Volume limiter — same vol_limit_divisor convention as
+    # _bates_flux_limited (see that function's comment); unchanged in
+    # spirit from the legacy kernel, just no longer hardcoded to A5's 5.
     if depth_donor > 0.0
-        q_vol_max = (depth_donor * width) / (5.0 * dt)
+        q_vol_max = (depth_donor * width) / (vol_limit_divisor * dt)
         q_new = clamp(q_new, -q_vol_max, q_vol_max)
     end
 
@@ -402,17 +427,24 @@ end
 Return the adjacency slot (1..max_nb) of cell `cj` in cell `ci`'s neighbour list,
 as stored in `adj_matrix` (shape max_nb × n_cells, 0 = unused slot).
 
-Returns 1 as a safe fallback if the pair is not found — this should not occur for
-valid EdgeList edges, but avoids a bounds error if called on a boundary edge whose
-neighbour is outside the mesh.
+Returns 1 as a fallback if the pair is not found — this should not occur for
+valid EdgeList edges. `initialise_flow_model` now verifies at start-up (SGS
+runs only) that every edge's slot is found in both directions, so this
+fallback is unreachable on a validated mesh.
+
+`max_nb` defaults to `size(adj_matrix, 1)` (the mesh's own neighbour ceiling).
+WP0 fix (2026-10): the default was previously the literal `5`, and `step_sgs!`
+called this without the argument, so on a mesh with more than 5 neighbours
+slot 6+ was never searched and slot 1 was returned silently — i.e. the wrong
+SGS edge curve was used with no error.
 """
 @inline function _adjacency_slot(adj_matrix::Matrix{Int},
                                   ci::Int, cj::Int,
-                                  max_nb::Int=5)::Int
+                                  max_nb::Int=size(adj_matrix, 1))::Int
     for s in 1:max_nb
         adj_matrix[s, ci] == cj && return s
     end
-    return 1   # safe fallback; should not occur for valid edges
+    return 1   # fallback; unreachable on a mesh validated at init (see above)
 end
 
 
@@ -563,7 +595,11 @@ function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Fl
     # We apply the terrain-range cap here so that overfull channel cells do not force
     # the whole domain to tiny dt — the cap is (z_max - z_min) per cell.
     # The 99th-percentile is used instead of the absolute maximum for the same reason.
-    is_sgs = method == SGSFlow
+    # WP0 fix (2026-10): was `method == SGSFlow`, which compares an instance
+    # (e.g. SGSFlow(0.03)) with the type and is therefore always false — the
+    # SGS terrain-range depth cap below was never applied, so overfull
+    # channel cells set dt for the whole domain. `isa` is the intended test.
+    is_sgs = method isa SGSFlow
     wet_depths = Float64[]
     for i in eachindex(state.cell_ids)
         h = state.water_depth[i]
