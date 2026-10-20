@@ -644,11 +644,25 @@ pentagonal cells.  The 99th-percentile wet-cell depth is used rather than
 the absolute maximum so that a single extreme cell (e.g. an overfull channel
 cell extrapolating above z_max) cannot force a tiny dt for the whole domain.
 
+**`state.cfl_mode === :local`** (WP2, 2026-10; `--cfl-mode local`). The
+legacy form pairs the *smallest* cell anywhere in the mesh with the 99th-
+percentile depth of *any* wet cell, which is neither conservative (the deepest
+1% are ignored) nor local. The local form is a per-cell max-reduction:
+
+    dt = courant × min_i ℓ_i / √(g × h_i)     over wet cells (h_i > 1e-4 m)
+
+with ℓ_i = `state.cell_length[i]` = 4A_i/P_i (the hydraulic diameter: equal to
+dx on a square cell, so the Courant number keeps its LISFLOOD-FP meaning;
+the review's 2A/P is half of this and would halve dt at the same courant).
+The SGS terrain-range depth cap still applies, so overfull channel cells do
+not set dt. Falls back to √A if `cell_length` is empty (hand-built FlowState).
+
 Note: this function reads FlowState fields and is therefore not a pure scalar
 kernel.  It lives in flow2d.jl because it is tightly coupled to the physics
 constants and CFL formulation, but it cannot be used independently of FlowState.
 """
 function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Float64
+    state.cfl_mode === :local && return _cfl_dt_local(state, method, courant)
     dx_min = Inf
     for i in eachindex(state.cell_ids)
         dx = sqrt(state.cell_area[i])
@@ -687,6 +701,90 @@ function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Fl
     h_cfl < 1e-6 && return 60.0
 
     return courant * dx_min / sqrt(_G * h_cfl)
+end
+
+
+"""
+    _cfl_dt_local(state, method, courant) → Float64
+
+Per-cell CFL max-reduction for `cfl_mode === :local` — see `_cfl_dt`.
+"""
+function _cfl_dt_local(state::FlowState, method::FlowMethod, courant::Float64)::Float64
+    is_sgs   = method isa SGSFlow && !isempty(state.sgs_tables)
+    has_len  = length(state.cell_length) == length(state.cell_ids)
+    rate_max = 0.0                            # max √(g h_i)/ℓ_i  (s⁻¹)
+    for i in eachindex(state.cell_ids)
+        h = state.water_depth[i]
+        h > 1e-4 || continue                  # also skips NaN
+        if is_sgs
+            tbl = state.sgs_tables[i]
+            isnan(tbl.z_min) || (h = min(h, max(0.0, tbl.z_max - tbl.z_min)))
+            h > 1e-4 || continue
+        end
+        ℓ = has_len ? state.cell_length[i] : sqrt(state.cell_area[i])
+        ℓ > 0.0 || continue
+        rate = sqrt(_G * h) / ℓ
+        rate > rate_max && (rate_max = rate)
+    end
+    rate_max > 0.0 || return 60.0             # all cells dry — safe default
+    return courant / rate_max
+end
+
+
+# ---------------------------------------------------------------------------
+# Positivity-preserving donor scaling (WP2)
+# ---------------------------------------------------------------------------
+
+"""
+    _positivity_scale!(edge_vol, q_store, volume, cell_i, cell_j)
+
+Positivity-preserving donor scaling (WP2, 2026-10; `--limiter positivity`),
+replacing the per-edge volume limiter (Fix B, h_donor·w/(N·dt)) and the
+per-edge donor cap (V/(2N)). Both of those depend on the face count and edge
+width and cut individual faces, so they act anisotropically
+(FloodA5_Review_and_ForwardPlan_2026-10.md §4.2).
+
+Instead, after all face fluxes are computed, every outflow of a cell is scaled
+by the same factor
+
+    s_i = min(1, V_i / Σ_outflows(i) · dt)
+
+so that no cell can lose more than it holds. This is mass-conservative (each
+edge volume is applied to both cells after scaling), isotropic (all of a
+cell's outflows are scaled together) and mesh-general — the standard wet–dry
+positivity treatment in finite-volume schemes.
+
+`edge_vol[e]` is the signed edge volume for this step (> 0: cell_j donates to
+cell_i, the Phase B convention). `q_store` is the momentum array written in
+Phase A (`edges.flux` for standard flow, `edges.flux_Q` for SGS R-A); scaled
+edges are written back so the stored momentum matches the transfer (Fix C).
+`volume` is the start-of-step volume. Serial (Phase B is serial).
+"""
+function _positivity_scale!(edge_vol :: Vector{Float64}, q_store :: Vector{Float64},
+                            volume   :: Vector{Float64},
+                            cell_i   :: Vector{Int}, cell_j :: Vector{Int})
+    out = zeros(Float64, length(volume))
+    @inbounds for e in eachindex(edge_vol)
+        ev = edge_vol[e]
+        if ev > 0.0
+            out[cell_j[e]] += ev
+        elseif ev < 0.0
+            out[cell_i[e]] -= ev
+        end
+    end
+    @inbounds for e in eachindex(edge_vol)
+        ev = edge_vol[e]
+        iszero(ev) && continue
+        d = ev > 0.0 ? cell_j[e] : cell_i[e]
+        o = out[d]
+        V = max(volume[d], 0.0)
+        if o > V
+            s = V / o                          # o > V ≥ 0, so o > 0
+            edge_vol[e] = ev * s
+            q_store[e] *= s
+        end
+    end
+    return edge_vol
 end
 
 

@@ -60,6 +60,10 @@ configs = [
     ("vector_edge",          (; friction_model = :vector)),
     ("vector_diamond_cell",  (; friction_model = :vector, gradient_correction = true,
                                 face_flux_method = :diamond, momentum_model = :cell)),
+    # WP2: blend momentum, positivity limiter (serial donor scaling in Phase B)
+    ("wp2_blend_positivity", (; friction_model = :vector, momentum_model = :blend,
+                                limiter = :positivity, gradient_correction = true,
+                                face_flux_method = :diamond)),
 ]
 
 with_logger(ConsoleLogger(stderr, Logging.Warn)) do

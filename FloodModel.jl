@@ -530,6 +530,20 @@ mutable struct FlowState
     # whatever the momentum model. Set via --friction-model. See flow2d.jl
     # "Friction model" and FloodA5_Review_and_ForwardPlan_2026-10.md §3.
     friction_model :: Symbol
+    # ── Limiters and CFL (WP2, 2026-10) ────────────────────────────────────
+    # limiter: :legacy (default — per-edge volume limiter Fix B + per-edge
+    # donor cap in Phase B) or :positivity (one positivity-preserving scale
+    # factor per donor cell, applied to all of its outflows; see flow2d.jl
+    # _positivity_scale!). Set via --limiter.
+    limiter        :: Symbol
+    # cfl_mode: :legacy (default — √(min area) with the 99th-percentile depth)
+    # or :local (per-cell max-reduction of √(g h_i)/ℓ_i; see _cfl_dt).
+    # Set via --cfl-mode.
+    cfl_mode       :: Symbol
+    # cell_length: ℓ_i = 4A_i/P_i (m), the per-cell CFL length for
+    # cfl_mode = :local; P_i includes ghost (domain-edge) faces. Built in
+    # initialise_flow_model; empty for hand-built states (→ √A fallback).
+    cell_length    :: Vector{Float64}
 end
 
 # ---------------------------------------------------------------------------
@@ -583,6 +597,29 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       qvec_u, qvec_v, cell_edge_index, mom_weights,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, :component)
+end
+
+# WP2 (2026-10): `limiter`, `cfl_mode` and `cell_length` were appended as
+# fields 34–36. The 33-argument form defaults them to the pre-WP2 behaviour
+# (:legacy, :legacy, no per-cell length).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, :legacy, :legacy, Float64[])
 end
 
 """
@@ -1727,9 +1764,17 @@ function initialise_flow_model(mesh::A5Mesh,
                                 gradient_correction_alpha :: Float64 = 1.0,
                                 momentum_model            :: Symbol  = :edge,
                                 face_flux_method          :: Symbol  = :legacy,
-                                friction_model            :: Symbol  = :component)::FlowState
+                                friction_model            :: Symbol  = :component,
+                                limiter                   :: Symbol  = :legacy,
+                                cfl_mode                  :: Symbol  = :legacy)::FlowState
     friction_model in (:component, :vector) ||
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
+    momentum_model in (:edge, :cell, :blend) ||
+        throw(ArgumentError("momentum_model must be :edge, :cell or :blend (got :$momentum_model)"))
+    limiter in (:legacy, :positivity) ||
+        throw(ArgumentError("limiter must be :legacy or :positivity (got :$limiter)"))
+    cfl_mode in (:legacy, :local) ||
+        throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1952,8 +1997,22 @@ function initialise_flow_model(mesh::A5Mesh,
     n_mom_degen = count(i -> all(==(0.0), view(mom_weights, :, i)), 1:n)
     @info "Cell-vector momentum weights built in $(round(time()-t_mom, digits=3))s — " *
           "$(n - n_mom_degen)/$n cells with a valid 2D momentum stencil" *
-          (momentum_model == :cell ? " (momentum_model=cell: active)" :
-                                    " (momentum_model=edge: precomputed but inactive)")
+          " (momentum_model=$momentum_model, friction_model=$friction_model)"
+
+    # ── Per-cell CFL length ℓ_i = 4A_i/P_i (WP2, cfl_mode = :local) ───────
+    # P_i sums the cell's interior faces and its ghost (domain-edge) faces.
+    perimeter = zeros(Float64, n)
+    for e in 1:edges.n_edges
+        w = edges.width[e]
+        isfinite(w) || continue
+        perimeter[edges.cell_i[e]] += w
+        perimeter[edges.cell_j[e]] += w
+    end
+    for ge in ghost_edges
+        isfinite(ge.width) && (perimeter[ge.cell_index] += ge.width)
+    end
+    cell_length = [perimeter[i] > 0.0 ? 4.0 * areas[i] / perimeter[i] : sqrt(areas[i])
+                   for i in 1:n]
 
     # ── Diamond face-flux table (Phase C, directional-bias-reformulation) ──
     # Built only when explicitly requested — unlike wlsq_weights, this is
@@ -2004,6 +2063,9 @@ function initialise_flow_model(mesh::A5Mesh,
         diamond_table,
         max_nb,    # max_neighbours — mesh-derived, see this field's docstring
         friction_model,
+        limiter,
+        cfl_mode,
+        cell_length,
     )
 end
 
@@ -2433,8 +2495,14 @@ function step_standard!(state::FlowState, dt::Float64)
     # flux of OTHER (collinear) edges. Reading the live array was a data race
     # (results depended on edge order and thread scheduling). Q-centring now
     # reads this start-of-step copy. Under :cell momentum, Phase A never reads
-    # edges.flux, so no copy is needed and the alias is harmless.
-    flux_prev = state.momentum_model === :cell ? edges.flux : copy(edges.flux)
+    # edges.flux, and under :blend (WP2) it reads only its own edge's flux
+    # before writing it, so no copy is needed and the alias is harmless.
+    flux_prev = state.momentum_model === :edge ? copy(edges.flux) : edges.flux
+
+    # WP2 (2026-10): with --limiter positivity the per-edge volume limiter
+    # (Fix B) is disabled — the kernels skip it when depth_donor ≤ 0 — and
+    # positivity is enforced per donor cell in Phase B instead.
+    positivity = state.limiter === :positivity
 
     # WP1 (2026-10): vector friction. qvec_u/qvec_v hold the cell discharge
     # vectors reconstructed by Phase F at the end of the previous step (zero
@@ -2457,8 +2525,10 @@ function step_standard!(state::FlowState, dt::Float64)
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
 
-        # Identify donor depth for the volume limiter (higher-WSE side donates)
-        depth_donor = wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
+        # Identify donor depth for the volume limiter (higher-WSE side donates);
+        # 0.0 disables the per-edge volume limiter under --limiter positivity.
+        depth_donor = positivity ? 0.0 :
+                      wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
 
         # ── q_prev: edge-scalar (legacy) or face projection of cell vector ──
         # When momentum_model == :cell, the face unit discharge predictor is
@@ -2471,9 +2541,25 @@ function step_standard!(state::FlowState, dt::Float64)
         # with optional Q-centred smoothing (theta). Q-centred is disabled
         # for the cell-vector path (already spatially coupled via the vector
         # reconstruction; adding theta would double-smooth).
+        #
+        # When momentum_model == :blend (WP2, 2026-10), the face's own stored
+        # discharge is blended with the face-normal projection of the averaged
+        # cell vector, using θ = q_centre_theta:
+        #   q_prev_eff = θ·q_f + (1−θ)·q_proj
+        # This replaces Q-centring's "most collinear face" average, which on
+        # pentagons mixes faces ~144° apart (non-parallel components) and by
+        # itself deflects the steady flow (WP1 frozen-coefficient test). It is
+        # mesh-general and unifies the two models in one parameter: θ = 1 is
+        # pure edge momentum (no smoothing), θ = 0 is exactly :cell. On a
+        # Cartesian grid q_proj = (q_w + 2q_f + q_e)/4, so it acts like
+        # Q-centring there. Review §4.2.
+        q_proj = state.momentum_model === :edge ? 0.0 :
+                 -0.5 * ((state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_x[e] +
+                         (state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_y[e])
         q_prev_eff = if state.momentum_model === :cell
-            -0.5 * ((state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_x[e] +
-                    (state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_y[e])
+            q_proj
+        elseif state.momentum_model === :blend
+            state.q_centre_theta * flux_prev[e] + (1.0 - state.q_centre_theta) * q_proj
         else
             _q_centred(flux_prev, e,
                        edges.collinear_i[e], edges.collinear_j[e],
@@ -2589,6 +2675,12 @@ function step_standard!(state::FlowState, dt::Float64)
     # mass-conservation guard (should rarely trigger).
     # state.volume[] is still the start-of-step snapshot (Phase A did not
     # modify it), so the donor-limit comparison is consistent.
+    #
+    # WP2: under --limiter positivity the per-edge donor cap is replaced by
+    # one scale factor per donor cell (all of its outflows together; written
+    # back to edges.flux — Fix C). See _positivity_scale!.
+    positivity && _positivity_scale!(edge_vol, edges.flux, state.volume,
+                                     edges.cell_i, edges.cell_j)
     dV = zeros(Float64, n)
     @inbounds for e in 1:ne
         ev = edge_vol[e]
@@ -2597,10 +2689,12 @@ function step_standard!(state::FlowState, dt::Float64)
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
-        if ev > 0.0
-            ev = min(ev,  state.volume[cj] / _donor_edge_divisor(state))   # cj is donor
-        else
-            ev = max(ev, -state.volume[ci] / _donor_edge_divisor(state))   # ci is donor
+        if !positivity
+            if ev > 0.0
+                ev = min(ev,  state.volume[cj] / _donor_edge_divisor(state))   # cj is donor
+            else
+                ev = max(ev, -state.volume[ci] / _donor_edge_divisor(state))   # ci is donor
+            end
         end
 
         dV[ci] += ev   # ci gains when ev > 0
@@ -2628,8 +2722,9 @@ function step_standard!(state::FlowState, dt::Float64)
     # 2026-08-14) or --friction-model vector (qvec supplies the face-
     # tangential discharge q_t for the friction term; WP1, 2026-10). Under
     # :edge momentum + :vector friction, edges.flux remains the momentum
-    # state and qvec is used only for q_t. See _reconstruct_qvec!.
-    if state.momentum_model === :cell || state.friction_model === :vector
+    # state and qvec is used only for q_t. Under :blend (WP2) qvec supplies
+    # the projected part of the blend. See _reconstruct_qvec!.
+    if state.momentum_model !== :edge || state.friction_model === :vector
         _reconstruct_qvec!(state, false)
     end
 end
@@ -2877,6 +2972,11 @@ function step_sgs!(state::FlowState, dt::Float64)
     end
 
     # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
+    # WP2: --limiter positivity replaces the per-edge donor cap with one
+    # scale factor per donor cell, written back to flux_Q (Fix C).
+    positivity = state.limiter === :positivity
+    positivity && _positivity_scale!(edge_vol, edges.flux_Q, state.volume,
+                                     edges.cell_i, edges.cell_j)
     dV = zeros(Float64, n)
     @inbounds for e in 1:ne
         ev = edge_vol[e]
@@ -2889,7 +2989,9 @@ function step_sgs!(state::FlowState, dt::Float64)
         # The R-A form is self-stabilising so this should rarely bind.
         # Fix C (full): back-propagate clipped Q to flux_Q so q_prev next
         # step reflects what was actually transferred.
-        if ev > 0.0
+        if positivity
+            # already scaled above
+        elseif ev > 0.0
             ev_capped = min(ev, state.volume[cj] / _donor_edge_divisor(state))
             if ev_capped < ev
                 edges.flux_Q[e] = ev_capped / dt
@@ -3259,6 +3361,8 @@ function run_flood_model(;
     momentum_model            :: Symbol  = :edge,
     face_flux_method          :: Symbol  = :legacy,
     friction_model            :: Symbol  = :component,
+    limiter                   :: Symbol  = :legacy,
+    cfl_mode                  :: Symbol  = :legacy,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -3485,7 +3589,9 @@ function run_flood_model(;
                                         gradient_correction_alpha = gradient_correction_alpha,
                                         momentum_model            = momentum_model,
                                         face_flux_method          = face_flux_method,
-                                        friction_model            = friction_model)
+                                        friction_model            = friction_model,
+                                        limiter                   = limiter,
+                                        cfl_mode                  = cfl_mode)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
@@ -3494,7 +3600,8 @@ function run_flood_model(;
           "alpha = $(gradient_correction_alpha), " *
           "momentum_model = $(momentum_model), " *
           "face_flux_method = $(face_flux_method), " *
-          "friction_model = $(friction_model))"
+          "friction_model = $(friction_model), " *
+          "limiter = $(limiter), cfl_mode = $(cfl_mode))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3851,7 +3958,7 @@ Flow model options:
                                 (expected to be extremely rare).
                      See FloodA5_DirectionalBias_ReformulationPlan_v4.md
                      and FloodA5_PhaseB_Complete_PhaseC_Handoff.md.
-  --momentum-model edge|cell
+  --momentum-model edge|cell|blend
                      Selects how stored inter-step momentum (q_prev in the
                      Bates equation) is represented.
                        edge   (default) legacy per-edge scalar — one
@@ -3866,6 +3973,12 @@ Flow model options:
                               the two directional-bias correction levers
                               tested — see
                               FloodA5_DirectionalBias_TechnicalSummary.md §4, §6.
+                       blend  (WP2) q_prev = θ·q_face + (1−θ)·(projection
+                              of the averaged cell vector), θ from
+                              --q-centre-theta. Replaces Q-centring's
+                              "most collinear face" average, which is not
+                              mesh-general. θ = 1 is pure edge momentum,
+                              θ = 0 is exactly 'cell'.
                      NOTE: only wired into the standard-flow solver
                      (step_standard!). Has no effect under
                      --flow-model sgs (a warning is printed if selected
@@ -3883,6 +3996,20 @@ Flow model options:
                               vectors (rebuilt every step). Rotationally
                               consistent; standard and SGS solvers.
                      See FloodA5_Review_and_ForwardPlan_2026-10.md §3.
+  --limiter legacy|positivity
+                     Wet–dry / overdraft limiting (WP2).
+                       legacy (default) per-edge volume limiter
+                              (h_donor·w/(N·dt)) plus a per-edge donor cap
+                              (V/(2N)); both depend on face count and width.
+                       positivity  one scale factor per donor cell,
+                              s = min(1, V / total outflow), applied to all
+                              of its outflows and written back to the stored
+                              momentum. Mass-conservative and isotropic.
+  --cfl-mode legacy|local
+                     Timestep rule (WP2).
+                       legacy (default) 0.7·sqrt(min area)/sqrt(g·h99).
+                       local  0.7·min over wet cells of l_i/sqrt(g·h_i),
+                              l_i = 4·area/perimeter (= dx on a square).
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
@@ -4278,6 +4405,8 @@ function main(args=String[])
     momentum_model_val,            args = _pop_flag(args, "--momentum-model")
     face_flux_method_val,          args = _pop_flag(args, "--face-flux-method")
     friction_model_val,            args = _pop_flag(args, "--friction-model")
+    limiter_val,                   args = _pop_flag(args, "--limiter")
+    cfl_mode_val,                  args = _pop_flag(args, "--cfl-mode")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -4311,15 +4440,18 @@ function main(args=String[])
         print_help(1)
     end
 
-    # --momentum-model edge|cell  (default: edge — legacy per-face scalar)
+    # --momentum-model edge|cell|blend  (default: edge — legacy per-face
+    # scalar; blend added in WP2, 2026-10)
     momentum_model = if momentum_model_val === nothing
         :edge
     elseif momentum_model_val in ("edge", "Edge")
         :edge
     elseif momentum_model_val in ("cell", "Cell")
         :cell
+    elseif momentum_model_val in ("blend", "Blend")
+        :blend
     else
-        println("ERROR: --momentum-model requires 'edge' or 'cell' " *
+        println("ERROR: --momentum-model requires 'edge', 'cell' or 'blend' " *
                 "(got '$momentum_model_val')\n")
         print_help(1)
     end
@@ -4373,6 +4505,27 @@ function main(args=String[])
         print_help(1)
     end
 
+    # --limiter legacy|positivity and --cfl-mode legacy|local (WP2, 2026-10;
+    # defaults: legacy, unchanged behaviour). Both solvers.
+    limiter = if limiter_val === nothing || limiter_val in ("legacy", "Legacy")
+        :legacy
+    elseif limiter_val in ("positivity", "Positivity")
+        :positivity
+    else
+        println("ERROR: --limiter requires 'legacy' or 'positivity' " *
+                "(got '$limiter_val')\n")
+        print_help(1)
+    end
+    cfl_mode = if cfl_mode_val === nothing || cfl_mode_val in ("legacy", "Legacy")
+        :legacy
+    elseif cfl_mode_val in ("local", "Local")
+        :local
+    else
+        println("ERROR: --cfl-mode requires 'legacy' or 'local' " *
+                "(got '$cfl_mode_val')\n")
+        print_help(1)
+    end
+
     # --momentum-model cell and --face-flux-method diamond (and, by
     # extension, --gradient-correction on/--gradient-correction-alpha) are
     # only wired into step_standard!'s Phase A — step_sgs! is untouched by
@@ -4382,8 +4535,8 @@ function main(args=String[])
     # sgs is the default and a user could easily combine these flags without
     # realising they have no effect.
     if flow_method == :sgs
-        if momentum_model == :cell
-            @warn "--momentum-model cell has no effect under --flow-model sgs " *
+        if momentum_model in (:cell, :blend)
+            @warn "--momentum-model $momentum_model has no effect under --flow-model sgs " *
                   "(step_sgs! does not use the cell-vector momentum reconstruction). " *
                   "Add --flow-model standard to exercise it, or ignore this warning " *
                   "if sgs was intended and this flag was left over from a template."
@@ -4549,6 +4702,8 @@ function main(args=String[])
         momentum_model            = momentum_model,
         face_flux_method          = face_flux_method,
         friction_model            = friction_model,
+        limiter                   = limiter,
+        cfl_mode                  = cfl_mode,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,

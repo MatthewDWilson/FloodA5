@@ -33,10 +33,47 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
-Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
-`cartesian-formulation`. No version number assigned yet; under
-`VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
-0.2.0), to be decided by the maintainer.
+WP0 and the `cartesian-formulation` work it is based on were merged to `main`
+on 2026-10-20; WP1 and WP2 are on their own branches. No version number
+assigned yet; under `VERSIONING.md`'s policy the new CLI flags make this a
+MINOR bump (likely 0.2.0), to be decided by the maintainer.
+
+### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
+
+Work package WP2 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.2, §9).
+All options are opt-in; the defaults are bit-identical to before.
+
+#### Added
+- `--momentum-model blend`: q_prev = θ·q_face + (1−θ)·(face-normal projection
+  of the averaged adjacent cell vectors), θ = `--q-centre-theta`. Replaces
+  Q-centring's "most collinear face" average, which on pentagons mixes faces
+  about 144° apart and by itself deflects the steady flow (WP1 finding).
+  θ = 1 reproduces edge momentum without Q-centring and θ = 0 reproduces
+  `cell` exactly (tested). Standard solver only.
+- `--limiter positivity`: one positivity-preserving scale factor per donor
+  cell, s = min(1, V / Σ outflow), applied to all of its outflows and written
+  back to the stored momentum (`_positivity_scale!`), in place of the per-edge
+  volume limiter (Fix B) and the per-edge donor cap. Mass-conservative and
+  isotropic. Standard and SGS solvers.
+- `--cfl-mode local`: dt = 0.7 · min over wet cells of ℓ_i/√(g h_i), with
+  ℓ_i = 4A_i/P_i (`FlowState.cell_length`; equal to dx on a square cell),
+  instead of √(min area) paired with the 99th-percentile depth. The SGS
+  terrain-range depth cap still applies.
+- `FlowState` fields 34–36 (`limiter`, `cfl_mode`, `cell_length`), with a
+  backward-compatible 33-argument constructor.
+- `test/test_wp2_momentum_limiters.jl` (in CI); a WP2 case in
+  `test/check_determinism.jl`.
+
+#### Fixed
+- ⚠ **Phantom ghost edges on Cartesian meshes** (`_build_ghost_edges`). Shared
+  polygon sides were matched with a key ordered by longitude only, so a
+  north–south side (lon1 == lon2) could keep a different vertex order in the
+  two polygons and fail to match, becoming an extra "missing" side. On the
+  dx = 25 m square mesh this created 423 ghost edges instead of 244 (open
+  boundary width 10.6 km instead of 6.1 km): open-boundary Cartesian runs had
+  too much outflow width. Sides are now matched in both vertex orders.
+  A5 meshes are unaffected (Carlisle res-18 and planar res-16 ghost edges
+  identical before and after). Regression test G1.
 
 ### WP1: vector friction (`wp1-vector-friction`)
 
