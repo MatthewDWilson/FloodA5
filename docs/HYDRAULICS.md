@@ -487,7 +487,8 @@ accumulates ghost-edge outflow (see `boundaryinputs/boundary_conditions.jl`).
 | Water-depth pre-sync needed | Yes | No |
 | Requires SGS tables | No | Yes (`build_sgs_tables!` at mesh-build time) |
 | Stability limiters | Fix A/B/C (§6) | SGS-specific dry-cell + h_flow-cap equivalents (§9.2), or self-stabilising R-A (§9.3) |
-| `--gradient-correction`, `--face-flux-method`, `--momentum-model` | **Yes** | **No effect** (§7, §9.4) |
+| `--gradient-correction` | **Yes** | Legacy WLSQ + V̂ only, **unvalidated** (§9.4) |
+| `--face-flux-method`, `--momentum-model` | **Yes** | **No effect** (§7, §9.4) |
 | Ghost-edge (open boundary) flux | Uncorrected kernel regardless of flags (§8 item 2) | Uncorrected kernel |
 
 ---
