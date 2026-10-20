@@ -96,6 +96,56 @@ and `step_sgs!` pass a start-of-step copy.
     return theta * q0 + (1.0 - theta) * q_nb / n_nb
 end
 
+# ---------------------------------------------------------------------------
+# Friction model (WP1, 2026-10): component vs vector
+# ---------------------------------------------------------------------------
+# The Bates (2010) / LISFLOOD-FP "ACC" friction term uses only the face-normal
+# discharge |q_n| in the denominator ("component" or decoupled friction). In
+# the friction-dominated limit this makes the face conductance depend on face
+# orientation: on a Cartesian grid diagonal flow is 2^¼ too conductive and the
+# flow is deflected up to 12.8° from the gradient; on A5 the deflection is
+# systematic and does not cancel north/south. Refinement cannot remove it
+# (it is a property of the scheme's continuum limit). See
+# FloodA5_Review_and_ForwardPlan_2026-10.md §3.1–§3.2 and Cozzolino et al.
+# (2021, Adv. Water Resour. 152:103919).
+#
+# "Vector" friction uses the full discharge magnitude |q| = √(q_n² + q_t²),
+# where q_t is the face-tangential discharge from the reconstructed cell
+# vectors (Phase F), the mesh-general form of LISFLOOD-FP's "qvect" option.
+# The same magnitude is used by the Froude limiter, which then scales q_n by
+# min(1, q_max/|q|) instead of clamping the normal component alone.
+#
+# Selected per run via --friction-model component|vector (FlowState.
+# friction_model). The kernels take `q_t` and `vector_friction` as keyword
+# arguments; with the defaults (q_t = 0, vector_friction = false) every kernel
+# is bit-identical to its pre-WP1 behaviour.
+
+"""
+    _friction_q(q_n, q_t, vector_friction) → Float64
+
+Discharge magnitude used in the friction denominator: `|q_n|` (component,
+Bates 2010) or `√(q_n² + q_t²)` (vector). Works for unit discharge (m²/s) and
+volumetric discharge (m³/s) alike.
+"""
+@inline _friction_q(q_n::Float64, q_t::Float64, vector_friction::Bool) =
+    vector_friction ? sqrt(q_n * q_n + q_t * q_t) : abs(q_n)
+
+"""
+    _froude_cap(q_new, q_t, q_max, vector_friction) → Float64
+
+Froude limiter (Fix A). Component: clamp the normal discharge to ±q_max.
+Vector: scale the normal discharge by min(1, q_max/|q|), |q| = √(q_new² + q_t²),
+so the cap acts on the discharge vector's magnitude rather than on one
+face-normal component (which is anisotropic in the same way as component
+friction).
+"""
+@inline function _froude_cap(q_new::Float64, q_t::Float64, q_max::Float64,
+                             vector_friction::Bool)::Float64
+    vector_friction || return clamp(q_new, -q_max, q_max)
+    q_mag = sqrt(q_new * q_new + q_t * q_t)
+    return q_mag > q_max ? q_new * (q_max / q_mag) : q_new
+end
+
 """
     _bates_flux(q_prev, wse_i, wse_j, z_sill, width, L, cos_theta, n_mann, dt) → Float64
 
@@ -162,7 +212,9 @@ normal.  cos θ is stored in EdgeList.cos_theta (1.0 = orthogonal).
                               L          :: Float64,
                               cos_theta  :: Float64,
                               n_mann     :: Float64,
-                              dt         :: Float64)::Float64
+                              dt         :: Float64;
+                              q_t             :: Float64 = 0.0,
+                              vector_friction :: Bool    = false)::Float64
     h_flow = max(wse_i, wse_j) - z_sill
     h_flow <= HFLOW_THRESHOLD && return 0.0
     h_flow  = max(h_flow, 1e-6)   # floor to avoid h^(10/3) underflow → NaN denominator
@@ -173,8 +225,8 @@ normal.  cos θ is stored in EdgeList.cos_theta (1.0 = orthogonal).
 
     # Bates et al. (2010) eq. 9 — unit discharge q (m²/s)
     numerator   = q_prev - _G * h_flow * dt * dWSE / L_eff
-    denominator = 1.0 + _G * h_flow * dt * n_mann^2 * abs(q_prev) /
-                  h_flow^(10.0/3.0)
+    denominator = 1.0 + _G * h_flow * dt * n_mann^2 *
+                  _friction_q(q_prev, q_t, vector_friction) / h_flow^(10.0/3.0)
     q_new = numerator / denominator
 
     return q_new * width
@@ -230,7 +282,9 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
                                       n_mann       :: Float64,
                                       dt           :: Float64,
                                       depth_donor  :: Float64;
-                                      vol_limit_divisor :: Float64 = 5.0
+                                      vol_limit_divisor :: Float64 = 5.0,
+                                      q_t               :: Float64 = 0.0,
+                                      vector_friction   :: Bool    = false
                                       )::Tuple{Float64,Float64}
     h_flow = max(wse_i, wse_j) - z_sill
     if h_flow <= HFLOW_THRESHOLD
@@ -247,15 +301,15 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     ct    = max(cos_theta, 0.1)
     L_eff = max(L * ct, 1.0)
 
-    # Bates et al. (2010) eq. 9
+    # Bates et al. (2010) eq. 9 (component or vector friction — see _friction_q)
     numerator   = q_prev - _G * h_flow * dt * dWSE / L_eff
-    denominator = 1.0 + _G * h_flow * dt * n_mann^2 * abs(q_prev) /
-                  h_flow^(10.0/3.0)
+    denominator = 1.0 + _G * h_flow * dt * n_mann^2 *
+                  _friction_q(q_prev, q_t, vector_friction) / h_flow^(10.0/3.0)
     q_new = numerator / denominator
 
     # Fix A: Froude limiter — cap at subcritical limit (Fr ≤ FROUDE_LIMIT)
     q_max = h_flow * sqrt(_G * h_flow) * FROUDE_LIMIT
-    q_new = clamp(q_new, -q_max, q_max)
+    q_new = _froude_cap(q_new, q_t, q_max, vector_friction)
 
     # Fix B: Volume limiter — no more than 1/vol_limit_divisor of donor depth
     # per edge per step. vol_limit_divisor defaults to 5.0 (A5's neighbour
@@ -345,14 +399,16 @@ FloodA5_NonOrthogonal_Correction_Plan.md §10.6.2 for the rationale).
                                         width  :: Float64,
                                         L      :: Float64,
                                         n_mann :: Float64,
-                                        dt     :: Float64)::Float64
+                                        dt     :: Float64;
+                                        q_t             :: Float64 = 0.0,
+                                        vector_friction :: Bool    = false)::Float64
     h_flow <= HFLOW_THRESHOLD && return 0.0
     h_flow_safe = max(h_flow, 1e-6)   # floor to avoid h^(10/3) underflow
     L_safe      = max(L, 1.0)         # guard degenerate zero-distance pairs
 
     numerator   = q_prev - _G * h_flow_safe * dt * dWSE_n / L_safe
-    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 * abs(q_prev) /
-                  h_flow_safe^(10.0/3.0)
+    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 *
+                  _friction_q(q_prev, q_t, vector_friction) / h_flow_safe^(10.0/3.0)
     q_new = numerator / denominator
 
     return q_new * width
@@ -381,7 +437,9 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
                                                 n_mann      :: Float64,
                                                 dt          :: Float64,
                                                 depth_donor :: Float64;
-                                                vol_limit_divisor :: Float64 = 5.0
+                                                vol_limit_divisor :: Float64 = 5.0,
+                                                q_t               :: Float64 = 0.0,
+                                                vector_friction   :: Bool    = false
                                                 )::Tuple{Float64,Float64}
     if h_flow <= HFLOW_THRESHOLD
         # See _bates_flux_limited's matching comment: zero out stale
@@ -392,8 +450,8 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
     L_safe      = max(L, 1.0)
 
     numerator   = q_prev - _G * h_flow_safe * dt * dWSE_n / L_safe
-    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 * abs(q_prev) /
-                  h_flow_safe^(10.0/3.0)
+    denominator = 1.0 + _G * h_flow_safe * dt * n_mann^2 *
+                  _friction_q(q_prev, q_t, vector_friction) / h_flow_safe^(10.0/3.0)
     q_new = numerator / denominator
 
     # Fix A: Froude limiter — cap at subcritical limit (Fr ≤ FROUDE_LIMIT).
@@ -401,7 +459,7 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
     # legacy kernel — the Froude cap is a function of flow depth and is
     # unaffected by the gradient-direction correction.
     q_max = h_flow_safe * sqrt(_G * h_flow_safe) * FROUDE_LIMIT
-    q_new = clamp(q_new, -q_max, q_max)
+    q_new = _froude_cap(q_new, q_t, q_max, vector_friction)
 
     # Fix B: Volume limiter — same vol_limit_divisor convention as
     # _bates_flux_limited (see that function's comment); unchanged in
@@ -492,7 +550,9 @@ Returns 0.0 for dry edges: A ≤ 1e-6 m² or h_flow ≤ HFLOW_THRESHOLD.
                                    L         :: Float64,
                                    cos_theta :: Float64,
                                    n_mann    :: Float64,
-                                   dt        :: Float64)::Float64
+                                   dt        :: Float64;
+                                   Q_t             :: Float64 = 0.0,
+                                   vector_friction :: Bool    = false)::Float64
     h_flow = max(wse_i, wse_j) - z_sill
     (h_flow <= HFLOW_THRESHOLD || A <= 1e-6) && return 0.0
 
@@ -502,8 +562,10 @@ Returns 0.0 for dry edges: A ≤ 1e-6 m² or h_flow ≤ HFLOW_THRESHOLD.
     ct    = max(cos_theta, 0.1)
     L_eff = max(L * ct, 1.0)
 
+    # Q_t: face-tangential discharge (m³/s) for vector friction — see _friction_q
     numerator   = Q_prev - _G * A * dt * dWSE / L_eff
-    denominator = 1.0 + _G * dt * n_mann^2 * abs(Q_prev) / (R^(4.0/3.0) * A)
+    denominator = 1.0 + _G * dt * n_mann^2 *
+                  _friction_q(Q_prev, Q_t, vector_friction) / (R^(4.0/3.0) * A)
     return numerator / denominator
 end
 
@@ -543,14 +605,17 @@ Selected by `step_sgs!` Phase A when `state.gradient_correction == true`.
                                              dWSE_n :: Float64,
                                              L      :: Float64,
                                              n_mann :: Float64,
-                                             dt     :: Float64)::Float64
+                                             dt     :: Float64;
+                                             Q_t             :: Float64 = 0.0,
+                                             vector_friction :: Bool    = false)::Float64
     (h_flow <= HFLOW_THRESHOLD || A <= 1e-6) && return 0.0
 
     R_safe = max(R, 1e-4)
     L_safe = max(L, 1.0)
 
     numerator   = Q_prev - _G * A * dt * dWSE_n / L_safe
-    denominator = 1.0 + _G * dt * n_mann^2 * abs(Q_prev) / (R_safe^(4.0/3.0) * A)
+    denominator = 1.0 + _G * dt * n_mann^2 *
+                  _friction_q(Q_prev, Q_t, vector_friction) / (R_safe^(4.0/3.0) * A)
     return numerator / denominator
 end
 

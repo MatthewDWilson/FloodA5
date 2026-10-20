@@ -56,6 +56,10 @@ configs = [
     ("wlsq_edge",            (; gradient_correction = true)),
     ("diamond_cell",         (; gradient_correction = true, face_flux_method = :diamond,
                                 momentum_model = :cell)),
+    # WP1: vector friction runs the threaded Phase F reconstruction every step
+    ("vector_edge",          (; friction_model = :vector)),
+    ("vector_diamond_cell",  (; friction_model = :vector, gradient_correction = true,
+                                face_flux_method = :diamond, momentum_model = :cell)),
 ]
 
 with_logger(ConsoleLogger(stderr, Logging.Warn)) do

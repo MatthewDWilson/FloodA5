@@ -522,6 +522,14 @@ mutable struct FlowState
     # is always available on demand — count(!iszero, view(adj_matrix,:,i))
     # — so no separate per-cell array is stored here.
     max_neighbours :: Int
+    # ── Friction model (WP1, 2026-10) ──────────────────────────────────────
+    # :component (default, Bates 2010 / LISFLOOD-FP ACC: friction uses the
+    # face-normal |q_n| only) or :vector (friction and the Froude limiter use
+    # |q| = √(q_n² + q_t²), with q_t from the reconstructed cell vectors).
+    # Under :vector the cell-vector reconstruction (Phase F) runs every step
+    # whatever the momentum model. Set via --friction-model. See flow2d.jl
+    # "Friction model" and FloodA5_Review_and_ForwardPlan_2026-10.md §3.
+    friction_model :: Symbol
 end
 
 # ---------------------------------------------------------------------------
@@ -552,6 +560,29 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       qvec_u, qvec_v, cell_edge_index, mom_weights,
                       momentum_model, face_flux_method, diamond_table,
                       N_SIDES)
+end
+
+# WP1 (2026-10): `friction_model` was appended as the 33rd field. Same pattern
+# as the 31-argument overload above: the 32-argument form (with
+# max_neighbours) defaults it to :component, the pre-WP1 behaviour.
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, :component)
 end
 
 """
@@ -1695,7 +1726,10 @@ function initialise_flow_model(mesh::A5Mesh,
                                 gradient_correction       :: Bool    = false,
                                 gradient_correction_alpha :: Float64 = 1.0,
                                 momentum_model            :: Symbol  = :edge,
-                                face_flux_method          :: Symbol  = :legacy)::FlowState
+                                face_flux_method          :: Symbol  = :legacy,
+                                friction_model            :: Symbol  = :component)::FlowState
+    friction_model in (:component, :vector) ||
+        throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1969,6 +2003,7 @@ function initialise_flow_model(mesh::A5Mesh,
         face_flux_method,
         diamond_table,
         max_nb,    # max_neighbours — mesh-derived, see this field's docstring
+        friction_model,
     )
 end
 
@@ -2401,6 +2436,11 @@ function step_standard!(state::FlowState, dt::Float64)
     # edges.flux, so no copy is needed and the alias is harmless.
     flux_prev = state.momentum_model === :cell ? edges.flux : copy(edges.flux)
 
+    # WP1 (2026-10): vector friction. qvec_u/qvec_v hold the cell discharge
+    # vectors reconstructed by Phase F at the end of the previous step (zero
+    # before the first step, which reduces to component friction).
+    vector_friction = state.friction_model === :vector
+
     Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
@@ -2439,6 +2479,14 @@ function step_standard!(state::FlowState, dt::Float64)
                        edges.collinear_i[e], edges.collinear_j[e],
                        state.q_centre_theta)
         end
+
+        # Face-tangential discharge for vector friction: the average of the
+        # two adjacent cell vectors projected onto the face tangent
+        # t̂ = (−nf_y, nf_x). Only its magnitude enters (via q_n² + q_t²), so
+        # the tangent's orientation does not matter.
+        q_t = vector_friction ?
+              0.5 * ((state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_x[e] -
+                     (state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_y[e]) : 0.0
 
         if state.gradient_correction
             # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
@@ -2519,14 +2567,16 @@ function step_standard!(state::FlowState, dt::Float64)
                 edges.width[e], edges.L[e],
                 min(state.manning_n[ci], state.manning_n[cj]), dt,
                 depth_donor;
-                vol_limit_divisor = Float64(state.max_neighbours))
+                vol_limit_divisor = Float64(state.max_neighbours),
+                q_t = q_t, vector_friction = vector_friction)
         else
             Q, q_stored = _bates_flux_limited(
                 q_prev_eff, wse_ci, wse_cj, edges.sill[e],
                 edges.width[e], edges.L[e], edges.cos_theta[e],
                 min(state.manning_n[ci], state.manning_n[cj]), dt,
                 depth_donor;
-                vol_limit_divisor = Float64(state.max_neighbours))
+                vol_limit_divisor = Float64(state.max_neighbours),
+                q_t = q_t, vector_friction = vector_friction)
         end
 
         edges.flux[e] = q_stored   # Fix C: post-limiting q → consistent q_prev
@@ -2572,35 +2622,50 @@ function step_standard!(state::FlowState, dt::Float64)
     _compute_velocity!(state)
 
     # ── Phase F: cell-vector momentum reconstruction ───────────────────────
-    # Only active when --momentum-model cell is set. Projects the post-limiter
-    # per-edge unit discharges (edges.flux) back onto a per-cell 2D vector
-    # (qvec_u, qvec_v) via the pre-computed WLSQ projection matrix mom_weights.
-    #
-    # Observation model: for every edge e adjacent to cell i,
-    #   qvec_i · n̂_f = −flux[e]
-    # where n̂_f = (nf_x[e], nf_y[e]) always points from cell_i→cell_j.
-    # This holds for BOTH cells adjacent to the edge (see _build_mom_weights!).
-    #
-    # The reconstructed (qvec_u, qvec_v) replaces edges.flux as the momentum
-    # state feeding Phase A q_prev_eff on the next step — breaking the per-edge
-    # directional-feedback mechanism identified in the alpha sweep (2026-08-14).
-    # edges.flux is still updated each step (Fix C) for the WLSQ input here and
-    # as a diagnostic record; it is no longer the primary momentum state.
-    if state.momentum_model === :cell
-        n_cells = length(state.cell_ids)
-        max_nb  = state.max_neighbours
-        @inbounds for i in 1:n_cells
-            qu = 0.0;  qv = 0.0
-            for s in 1:max_nb
-                e = state.cell_edge_index[s, i]
-                e == 0 && continue
-                obs = -edges.flux[e]   # observation: qvec_i · n̂_f = -flux[e]
-                qu += state.mom_weights[s,          i] * obs
-                qv += state.mom_weights[max_nb + s, i] * obs
-            end
-            state.qvec_u[i] = qu
-            state.qvec_v[i] = qv
+    # Active when --momentum-model cell is set (qvec is then the momentum
+    # state feeding Phase A q_prev_eff on the next step — breaking the
+    # per-edge directional-feedback mechanism identified in the alpha sweep,
+    # 2026-08-14) or --friction-model vector (qvec supplies the face-
+    # tangential discharge q_t for the friction term; WP1, 2026-10). Under
+    # :edge momentum + :vector friction, edges.flux remains the momentum
+    # state and qvec is used only for q_t. See _reconstruct_qvec!.
+    if state.momentum_model === :cell || state.friction_model === :vector
+        _reconstruct_qvec!(state, false)
+    end
+end
+
+"""
+    _reconstruct_qvec!(state, use_flux_Q)
+
+Phase F: rebuild the per-cell discharge vectors `qvec_u`, `qvec_v` (m²/s,
+local equirectangular frame) from the post-limiter face discharges via the
+pre-computed WLSQ projection `mom_weights`.
+
+Observation model: for every edge e adjacent to cell i,
+  qvec_i · n̂_f = −q_e
+where n̂_f = (nf_x[e], nf_y[e]) always points from cell_i→cell_j (this holds
+for BOTH cells adjacent to the edge — see `_build_mom_weights!`). `q_e` is
+`edges.flux[e]` (standard flow) or, with `use_flux_Q = true`,
+`edges.flux_Q[e] / width[e]` (SGS R-A kernel, volumetric Q).
+
+Per-cell gather with no shared writes, so it is threaded and deterministic
+(WP1, 2026-10: previously an inline serial loop in step_standard!, :cell only).
+"""
+function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
+    edges  = state.edges
+    max_nb = state.max_neighbours
+    Threads.@threads for i in 1:length(state.cell_ids)
+        qu = 0.0;  qv = 0.0
+        @inbounds for s in 1:max_nb
+            e = state.cell_edge_index[s, i]
+            e == 0 && continue
+            q_e = use_flux_Q ? edges.flux_Q[e] / max(edges.width[e], 1e-9) : edges.flux[e]
+            obs = -q_e         # observation: qvec_i · n̂_f = −q_e
+            qu += state.mom_weights[s,          i] * obs
+            qv += state.mom_weights[max_nb + s, i] * obs
         end
+        state.qvec_u[i] = qu
+        state.qvec_v[i] = qv
     end
 end
 
@@ -2691,6 +2756,8 @@ function step_sgs!(state::FlowState, dt::Float64)
     # matching comment in step_standard! (same data race on edges.flux_Q).
     flux_Q_prev = copy(edges.flux_Q)
     max_nb_sgs  = state.max_neighbours
+    # WP1 (2026-10): vector friction — see the matching comment in step_standard!.
+    vector_friction = state.friction_model === :vector
 
     Threads.@threads for e in 1:ne
         ci = edges.cell_i[e]
@@ -2746,6 +2813,13 @@ function step_sgs!(state::FlowState, dt::Float64)
                                  edges.collinear_i[e], edges.collinear_j[e],
                                  state.q_centre_theta)
 
+        # Face-tangential discharge for vector friction, as volumetric Q:
+        # qvec is reconstructed from the face unit discharges flux_Q/width
+        # (Phase F below), so the matching tangential Q is q_t·width.
+        Q_t = vector_friction ?
+              0.5 * ((state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_x[e] -
+                     (state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_y[e]) * edges.width[e] : 0.0
+
         Q_new = if state.gradient_correction
             # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
             # (2026-08-18 — matches step_standard!'s corrected branch; see
@@ -2788,13 +2862,13 @@ function step_sgs!(state::FlowState, dt::Float64)
             _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,
                                         dWSE_n, edges.L[e],
                                         0.5 * (state.manning_n[ci] + state.manning_n[cj]),
-                                        dt)
+                                        dt; Q_t = Q_t, vector_friction = vector_friction)
         else
             _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
                               A_edge, R_edge,
                               edges.L[e], edges.cos_theta[e],
                               0.5 * (state.manning_n[ci] + state.manning_n[cj]),
-                              dt)
+                              dt; Q_t = Q_t, vector_friction = vector_friction)
         end
 
         # Fix C: store Q (m³/s) as momentum state for next step.
@@ -2843,6 +2917,9 @@ function step_sgs!(state::FlowState, dt::Float64)
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
     _compute_velocity!(state)
+
+    # ── Phase F: cell discharge vectors for vector friction (WP1) ─────────
+    vector_friction && _reconstruct_qvec!(state, true)
 end
 
 # ---------------------------------------------------------------------------
@@ -3181,6 +3258,7 @@ function run_flood_model(;
     gradient_correction_alpha :: Float64 = 1.0,
     momentum_model            :: Symbol  = :edge,
     face_flux_method          :: Symbol  = :legacy,
+    friction_model            :: Symbol  = :component,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -3406,7 +3484,8 @@ function run_flood_model(;
                                         gradient_correction       = gradient_correction,
                                         gradient_correction_alpha = gradient_correction_alpha,
                                         momentum_model            = momentum_model,
-                                        face_flux_method          = face_flux_method)
+                                        face_flux_method          = face_flux_method,
+                                        friction_model            = friction_model)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
@@ -3414,7 +3493,8 @@ function run_flood_model(;
           "gradient_correction = $(gradient_correction), " *
           "alpha = $(gradient_correction_alpha), " *
           "momentum_model = $(momentum_model), " *
-          "face_flux_method = $(face_flux_method))"
+          "face_flux_method = $(face_flux_method), " *
+          "friction_model = $(friction_model))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3791,6 +3871,18 @@ Flow model options:
                      --flow-model sgs (a warning is printed if selected
                      together with sgs).
                      See FloodA5_FlowDirectionFixes_Handover.md.
+  --friction-model component|vector
+                     Discharge magnitude used by the friction term and the
+                     Froude limiter (WP1).
+                       component (default) |q_n|, the face-normal discharge
+                              only: Bates (2010) / LISFLOOD-FP ACC. Makes
+                              face conductance depend on face orientation
+                              (directional bias that refinement cannot remove).
+                       vector |q| = sqrt(q_n^2 + q_t^2), with the tangential
+                              discharge q_t from the reconstructed cell
+                              vectors (rebuilt every step). Rotationally
+                              consistent; standard and SGS solvers.
+                     See FloodA5_Review_and_ForwardPlan_2026-10.md §3.
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
@@ -4185,6 +4277,7 @@ function main(args=String[])
     gradient_correction_alpha_val, args = _pop_flag(args, "--gradient-correction-alpha")
     momentum_model_val,            args = _pop_flag(args, "--momentum-model")
     face_flux_method_val,          args = _pop_flag(args, "--face-flux-method")
+    friction_model_val,            args = _pop_flag(args, "--friction-model")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -4264,6 +4357,21 @@ function main(args=String[])
 
     flow_method ∉ (:sgs, :standard) &&
         (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
+
+    # --friction-model component|vector  (WP1, 2026-10; default: component —
+    # Bates 2010 face-normal friction, unchanged behaviour). Applies to both
+    # the standard and the SGS solver.
+    friction_model = if friction_model_val === nothing
+        :component
+    elseif friction_model_val in ("component", "Component")
+        :component
+    elseif friction_model_val in ("vector", "Vector")
+        :vector
+    else
+        println("ERROR: --friction-model requires 'component' or 'vector' " *
+                "(got '$friction_model_val')\n")
+        print_help(1)
+    end
 
     # --momentum-model cell and --face-flux-method diamond (and, by
     # extension, --gradient-correction on/--gradient-correction-alpha) are
@@ -4440,6 +4548,7 @@ function main(args=String[])
         gradient_correction_alpha = gradient_correction_alpha,
         momentum_model            = momentum_model,
         face_flux_method          = face_flux_method,
+        friction_model            = friction_model,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,

@@ -38,6 +38,37 @@ Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP1: vector friction (`wp1-vector-friction`)
+
+Work package WP1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§3, §9).
+Opt-in; the default (`component`) is bit-identical to the previous behaviour.
+
+#### Added
+- `--friction-model component|vector` (`FlowState.friction_model`, the 33rd
+  field; backward-compatible 31- and 32-argument constructors default it to
+  `:component`). `vector` uses the full discharge magnitude
+  |q| = √(q_n² + q_t²) in the friction term of every Bates kernel and the SGS
+  R–A kernels, with q_t the face-tangential component of the averaged
+  adjacent cell vectors. The Froude limiter then scales q_n by
+  min(1, q_max/|q|). Removes the orientation-dependent face conductance of
+  Bates/LISFLOOD-FP component friction (2^¼ diagonal excess and up to 12.8°
+  flow deflection on a Cartesian grid, independent of resolution).
+- Phase F (cell-vector reconstruction) factored into `_reconstruct_qvec!`
+  (threaded, deterministic) and run every step under vector friction, for
+  both `step_standard!` and `step_sgs!`.
+- `test/test_wp1_vector_friction.jl` (in CI): kernel tests, lake at rest, and
+  a frozen-coefficient friction-limit isotropy test through `step_standard!`
+  that reproduces the component-friction theory exactly (12.78°, 2^¼) and
+  shows none under vector friction.
+- `test/frozen_isotropy_lib.jl`, `test/wp1_frozen_isotropy_mesh.jl` (the same
+  test on any GeoParquet mesh), `test/wp1_metrics.jl` (§3.4 metrics:
+  harmonic anisotropy, sector radii, planar N/S asymmetry) and
+  `test/run_wp1_matrix.sh` (the WP1 run matrix).
+- `test/check_determinism.jl`: two vector-friction cases.
+
+#### Known limitations
+- Ghost (open-boundary) edges still use component friction.
+
 ### WP0: correctness and test infrastructure (`wp0-correctness`)
 
 Correctness and test-infrastructure work package WP0 from
