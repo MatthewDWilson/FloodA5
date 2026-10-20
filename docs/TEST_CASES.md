@@ -469,6 +469,40 @@ water flows east — which is expected, not a finding.)
 
 ---
 
+## 6. Mesh Families (WP3, 2026-10)
+
+The "arbitrary polygon" claim needs more than A5 and Cartesian meshes
+(`FloodA5_Review_and_ForwardPlan_2026-10.md` §6.1). `mesh/mesh_families.py`
+writes FloodA5 GeoParquet meshes that load with `--meshload`:
+
+```bash
+python mesh/mesh_families.py hex     --aoi test/square/square_domain.geojson --dx 25 --out hex25.parquet
+python mesh/mesh_families.py rotcart --aoi test/square/square_domain.geojson --dx 25 --angle 30 --out rot25.parquet
+python mesh/mesh_families.py voronoi --aoi test/square/square_domain.geojson --dx 25 --jitter 0.3 --lloyd 5 --out cvt25.parquet
+python mesh/mesh_families.py voronoi --aoi test/square/square_domain.geojson --dx 25 --jitter 0.45 --centre centroid --out vor25.parquet
+python mesh/mesh_families.py import  --input any_polygons.gpkg --out imported.parquet
+```
+
+| Family | Valence | Faces orthogonal to centre line? |
+|---|---|---|
+| `hex` | 6 | yes |
+| `rotcart` | 4 | yes (a non-axis-aligned orthogonal grid) |
+| `voronoi` (generator centres) | mixed, mostly 5–7 | yes (Voronoi property) |
+| `voronoi --centre centroid` | mixed | no — a general non-orthogonal polygon mesh |
+| `import` | any | depends on the input |
+
+Generic meshes use the ID scheme `polygon` (row-index IDs). Adjacency is built
+from shared polygon edges, so meshes with hanging nodes are not supported.
+SGS is not yet available on these meshes (its tables are per A5 slot).
+
+A Cartesian grid aligned with a raster in its own projected CRS (for
+LISFLOOD-FP comparisons) comes from `--meshgen-cartesian dem.tif` (or `.asc`),
+which also takes the bed elevation from the raster.
+
+Tier 0 on every family is `test/test_mesh_families.jl` (in CI).
+
+---
+
 ## Adding New Test Cases
 
 New test cases should be placed in `test/<domain_name>/` and documented here.
@@ -479,3 +513,4 @@ Aim to include:
 3. Command-line examples to reproduce the simulation from scratch.
 4. Pass/fail criteria or comparison data where available.
 5. A brief note on expected run time and hardware requirements.
+

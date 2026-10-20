@@ -207,3 +207,86 @@ function generate_cartesian_mesh_bounds(min_lon::Float64, min_lat::Float64,
                   adjacency, "cartesian")   # own row/column IDs, not pya5's
     return mesh
 end
+
+"""
+    generate_cartesian_mesh_raster(raster_path; elevation=true) → A5Mesh
+
+Projected-CRS Cartesian mesh aligned cell-for-cell with a raster (WP3,
+2026-10) — e.g. a LISFLOOD-FP DEM in British National Grid — so a FloodA5 run
+and a LISFLOOD-FP run share exactly the same cells. Every raster pixel becomes
+one cell: its four corners and its centre are transformed from the raster's
+CRS to EPSG:4326 (GDAL), so the cells are exact squares in the projected CRS
+(and slightly non-rectangular in lon/lat), unlike `generate_cartesian_mesh`,
+which builds squares in degrees about one reference latitude. Neighbouring
+cells share the same transformed corner points, so shared edges match
+exactly. IDs and adjacency follow the same row/column scheme as
+`generate_cartesian_mesh_bounds` (row 0 = southernmost).
+
+With `elevation = true` the raster's band-1 values become
+`static_vars["elevation"]` (nodata → NaN), so no DEM re-sampling is needed and
+the bed elevations are the raster's own. `static_vars["cell_size_m"]` is the
+raster pixel size in its CRS units (metres for a projected CRS).
+
+Requires a north-up raster (no rotation terms); pixels may be non-square. A
+raster with no CRS is treated as EPSG:4326.
+"""
+function generate_cartesian_mesh_raster(raster_path::String; elevation::Bool = true)::A5Mesh
+    r = A5Grid._load_dem_raster(raster_path)
+    gt = r.gt
+    (gt[3] == 0.0 && gt[5] == 0.0) ||
+        error("generate_cartesian_mesh_raster: rotated rasters are not supported ($raster_path)")
+    ncols, nrows = r.nx, r.ny
+    x0, px = gt[1], gt[2]                      # west edge, pixel width
+    y0, py = gt[4], gt[6]                      # north edge, pixel height (< 0)
+    n = nrows * ncols
+
+    # Corner lattice (nrows+1) × (ncols+1) and pixel centres, in raster CRS,
+    # transformed together. Corner (i, j): i = 0..nrows from the top, j = 0..ncols.
+    nk  = (nrows + 1) * (ncols + 1)
+    xs  = Vector{Float64}(undef, nk + n); ys = similar(xs)
+    @inbounds for i in 0:nrows, j in 0:ncols
+        k = i * (ncols + 1) + j + 1
+        xs[k] = x0 + j * px; ys[k] = y0 + i * py
+    end
+    @inbounds for i in 0:(nrows-1), j in 0:(ncols-1)
+        k = nk + i * ncols + j + 1
+        xs[k] = x0 + (j + 0.5) * px; ys[k] = y0 + (i + 0.5) * py
+    end
+    if !isempty(r.proj)
+        zs = zeros(length(xs))
+        ArchGDAL.createcoordtrans(A5Grid._crs_gis(r.proj), A5Grid._crs_gis(4326)) do xform
+            ArchGDAL.transform!(xs, ys, zs, xform)
+        end
+    end
+    corner(i, j) = (k = i * (ncols + 1) + j + 1; [xs[k], ys[k]])
+
+    _cell_id(rw::Int, c::Int) = A5Grid._to_hex((UInt64(rw) << 32) | UInt64(c))
+    cells     = Vector{A5Cell}(undef, n)
+    elev      = fill(NaN, n)
+    adjacency = Dict{String,Vector{String}}()
+    sizehint!(adjacency, n)
+    @inbounds for i in 0:(nrows-1), j in 0:(ncols-1)
+        rw  = nrows - 1 - i                    # row 0 = south, as the bounds generator
+        idx = rw * ncols + j + 1
+        k   = nk + i * ncols + j + 1
+        # CCW from the south-west corner (corner row i+1 is the southern edge)
+        boundary = [corner(i + 1, j), corner(i + 1, j + 1), corner(i, j + 1),
+                    corner(i, j), corner(i + 1, j)]
+        id = _cell_id(rw, j)
+        cells[idx] = A5Cell(id, 0, xs[k], ys[k], boundary)
+        v = r.band[j + 1, i + 1]
+        elev[idx] = (isfinite(v) && !(isfinite(r.nodata_val) && v == r.nodata_val)) ? v : NaN
+        nbrs = String[]
+        rw > 0         && push!(nbrs, _cell_id(rw - 1, j))
+        rw < nrows - 1 && push!(nbrs, _cell_id(rw + 1, j))
+        j > 0          && push!(nbrs, _cell_id(rw, j - 1))
+        j < ncols - 1  && push!(nbrs, _cell_id(rw, j + 1))
+        adjacency[id] = nbrs
+    end
+    sv = Dict{String,Vector{Float64}}("cell_size_m" => fill(abs(px), n))
+    elevation && (sv["elevation"] = elev)
+    @info "Raster-aligned Cartesian grid: $nrows rows × $ncols cols = $n cells " *
+          "(pixel $(abs(px)) × $(abs(py)) in the raster CRS" *
+          (elevation ? "; elevation from the raster" : "") * ")"
+    return A5Mesh(0, "", cells, sv, Dict{String,Matrix{Float64}}(), adjacency, "cartesian")
+end

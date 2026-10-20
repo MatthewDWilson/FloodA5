@@ -3243,7 +3243,15 @@ function run_flood_model(;
         @info "Mesh out   : $(mesh_out === nothing ? "(not saved)" : mesh_out)"
         @info "Generating Cartesian grid mesh (cartesian-formulation branch, no Python bridge)..."
         t0 = time()
-        m = if mesh_out !== nothing
+        # WP3: a raster (GeoTIFF / ASCII grid) instead of an AOI GeoJSON gives
+        # a grid aligned cell-for-cell with that raster in its own projected
+        # CRS, with the raster as the bed elevation (--dx is ignored).
+        m = if any(ext -> endswith(lowercase(aoi_path), ext), (".tif", ".tiff", ".asc"))
+            @info "Raster-aligned Cartesian grid from $aoi_path (projected CRS; --dx ignored)"
+            mr = generate_cartesian_mesh_raster(aoi_path)
+            mesh_out !== nothing && save_mesh(mr, mesh_out)
+            mr
+        elseif mesh_out !== nothing
             fmt = endswith(mesh_out, ".parquet") ? :geoparquet : :geojson
             generate_cartesian_mesh(aoi_path, dx_m; lat_ref=lat_ref,
                                     output_path=mesh_out, format=fmt)
@@ -3675,6 +3683,10 @@ Mesh options (choose one):
                      BOUNDING BOX (not clipped to its polygon shape — see
                      mesh/CartesianGrid.jl). Pure Julia, no Python bridge.
                      Requires --dx. cartesian-formulation branch.
+                     Given a raster (.tif/.tiff/.asc) instead, generates a
+                     grid aligned cell-for-cell with it in the raster's own
+                     (projected) CRS, with the raster as bed elevation; --dx
+                     is not needed (WP3; for LISFLOOD-FP comparisons).
   --dx       METRES  Cartesian cell size (required with --meshgen-cartesian).
                      Cells are exactly square in metres only at
                      --cartesian-lat-ref (default: the AOI's own
@@ -4404,7 +4416,8 @@ function main(args=String[])
                  "mutually exclusive\n"); print_help(1))
     has_gen && meshres_val === nothing &&
         (println("ERROR: --meshgen requires --meshres\n"); print_help(1))
-    has_gen_cart && dx_val === nothing &&
+    _is_raster(p) = any(ext -> endswith(lowercase(p), ext), (".tif", ".tiff", ".asc"))
+    has_gen_cart && dx_val === nothing && !_is_raster(meshgen_cart_val) &&
         (println("ERROR: --meshgen-cartesian requires --dx <metres>\n"); print_help(1))
     !isempty(args) &&
         (println("ERROR: unexpected arguments: $(join(args, " "))\n"); print_help(1))
@@ -4412,7 +4425,7 @@ function main(args=String[])
     mesh_source = if has_gen
         (:generate, meshgen_val, parse(Int, meshres_val), meshout_val)
     elseif has_gen_cart
-        dx_m    = parse(Float64, dx_val)
+        dx_m    = dx_val !== nothing ? parse(Float64, dx_val) : NaN   # NaN: raster mode
         lat_ref = cart_lat_ref_val !== nothing ? parse(Float64, cart_lat_ref_val) : nothing
         (:generate_cartesian, meshgen_cart_val, dx_m, lat_ref, meshout_val)
     else

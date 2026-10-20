@@ -611,17 +611,16 @@ def mesh_to_geoparquet(cells: List[dict], output_path: str,
     boundaries = [c["boundary"] for c in cells]
 
     # Vectorised geometry construction (Shapely ≥ 2.0)
+    # The vectorised path needs every ring to have the same vertex count (true
+    # for A5 pentagons and Cartesian squares). WP3 fix (2026-10): it used to
+    # pad shorter rings with (0, 0) vertices — a spike to the origin in every
+    # cell of a mixed-valence mesh (Voronoi, imported polygons) — and to
+    # overwrite an unclosed ring's last vertex. Ragged meshes now build each
+    # polygon individually; shapely closes unclosed rings itself.
     try:
         import shapely
-        if hasattr(shapely, "polygons"):
-            max_verts = max(len(b) for b in boundaries)
-            coords_np = np.zeros((len(boundaries), max_verts, 2), dtype=np.float64)
-            for i, b in enumerate(boundaries):
-                arr = np.array(b, dtype=np.float64)
-                coords_np[i, :len(b)] = arr
-                if arr[0].tolist() != arr[-1].tolist():
-                    coords_np[i, len(b)-1] = arr[0]
-            geometries = shapely.polygons(coords_np)
+        if hasattr(shapely, "polygons") and len({len(b) for b in boundaries}) == 1:
+            geometries = shapely.polygons(np.array(boundaries, dtype=np.float64))
         else:
             raise AttributeError
     except (AttributeError, Exception):

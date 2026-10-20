@@ -38,6 +38,44 @@ Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP3 (part 1): mesh families and raster-aligned Cartesian grids (`wp3-mesh-families`)
+
+Work package WP3 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§6.1, §9),
+the parts that do not touch the solver: SGS generalisation (per-edge-side
+curves) is left until WP1/WP2 are merged.
+
+#### Added
+- `mesh/mesh_families.py`: FloodA5 GeoParquet meshes of other families —
+  regular hexagons, rotated Cartesian, Voronoi (jittered, optionally Lloyd-
+  relaxed to centroidal; generator or centroid centres) — and an importer for
+  any polygon GeoParquet/GeoJSON/GeoPackage (reprojected to EPSG:4326).
+  Edge-based adjacency; ID scheme `polygon`.
+- `generate_cartesian_mesh_raster` (`mesh/CartesianGrid.jl`) and
+  `--meshgen-cartesian FILE.tif|.asc`: a Cartesian grid aligned cell-for-cell
+  with a raster in its own (projected) CRS, with the raster as the bed
+  elevation — for LISFLOOD-FP comparisons. Note: FloodA5 measures cell areas
+  on its spherical metric, 0.38% below the British National Grid pixel area
+  near Carlisle (uniform).
+- `test/test_mesh_families.jl` (in CI): Tier 0 on every family — closure
+  Σ w·n̂ = 0, valence, orthogonality where guaranteed, lake at rest under the
+  legacy, WLSQ, diamond and cell-momentum options, exact mass balance, import
+  round trip, raster-aligned grid.
+
+#### Fixed
+- `a5_bridge.mesh_to_geoparquet` padded polygons with fewer vertices than the
+  longest with (0, 0) vertices (a spike to the origin) and overwrote an
+  unclosed ring's last vertex. Only meshes with mixed vertex counts were
+  affected (not A5 or Cartesian meshes).
+- Domain-boundary detection (`_build_ghost_edges`): a cell is on the boundary
+  if its polygon has more sides than neighbours. It was "fewer neighbours
+  than the mesh maximum", which on a mixed-valence mesh gave a max-valence
+  edge cell no ghost edge. Identical on A5 and Cartesian meshes (ghost
+  edges unchanged on Carlisle res-18 and planar res-16).
+- Degenerate-face guards in `A5Grid._edge_geometry`: 1 mm instead of 1 m.
+  A 1 m face is normal on a Voronoi mesh (and on A5 at resolution ≥ 22); such
+  faces got a zero normal. A5 edge geometry is bit-identical on the Carlisle
+  and planar meshes.
+
 ### WP-M1: pya5 1.x support (`maint-pya5-1x`)
 
 Work package WP-M1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§9).
