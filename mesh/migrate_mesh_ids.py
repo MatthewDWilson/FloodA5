@@ -15,8 +15,13 @@ the schema metadata records `{"a5_id_scheme": "a5-v1", "migrated_from":
 
 Requires pya5 >= 1.0. Usage:
     python mesh/migrate_mesh_ids.py IN.parquet OUT.parquet [--tol-deg 1e-9]
+    python mesh/migrate_mesh_ids.py --in-place FILE.parquet [FILE2.parquet ...]
 
-Prints one JSON line with a summary; exits non-zero on any failure.
+`--in-place` migrates each file under its own name and keeps the original as
+`<name>_a5v0.parquet` (and `<name>_a5v0.prj`); files that are already "a5-v1",
+Cartesian or other non-A5 meshes are skipped.
+
+Prints one JSON line per mesh; exits non-zero on any failure.
 """
 
 import json
@@ -87,13 +92,54 @@ def migrate_mesh(in_path: str, out_path: str, tol_deg: float = 1e-9) -> dict:
             "a5_id_scheme": "a5-v1"}
 
 
+def migrate_in_place(path: str, tol_deg: float = 1e-9) -> dict:
+    """Migrate `path` under its own name, keeping the original as *_a5v0.*"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import a5_bridge as bridge
+    import pyarrow.parquet as pq
+    scheme = bridge.read_id_scheme(path)
+    if scheme is None:
+        # Pre-WP-M1 file: an A5 mesh unless every cell has resolution 0 (Cartesian)
+        res = pq.read_table(path, columns=["resolution"]).column("resolution").to_pylist()
+        scheme = "cartesian" if res and all(r == 0 for r in res) else "a5-v0"
+    if scheme != "a5-v0":
+        return {"status": "skipped", "input": path, "a5_id_scheme": scheme}
+    stem = os.path.splitext(path)[0]
+    backup = stem + "_a5v0.parquet"
+    if os.path.exists(backup):
+        raise RuntimeError(f"backup {backup} already exists; not overwriting it")
+    tmp = stem + "_a5v1_tmp.parquet"
+    info = migrate_mesh(path, tmp, tol_deg)
+    os.replace(path, backup)
+    os.replace(tmp, path)
+    prj, tmp_prj = stem + ".prj", stem + "_a5v1_tmp.prj"
+    if os.path.isfile(tmp_prj):
+        if os.path.isfile(prj):
+            shutil.copyfile(prj, stem + "_a5v0.prj")
+        os.replace(tmp_prj, prj)
+    info.update(output=path, backup=backup)
+    return info
+
+
 def main():
     args = sys.argv[1:]
     tol = 1e-9
     if "--tol-deg" in args:
         i = args.index("--tol-deg"); tol = float(args[i + 1]); del args[i:i + 2]
+    if args and args[0] == "--in-place":
+        if len(args) < 2:
+            _fail("Usage: migrate_mesh_ids.py --in-place FILE.parquet [FILE2.parquet ...]")
+        failed = False
+        for path in args[1:]:
+            try:
+                print(json.dumps(migrate_in_place(path, tol)), flush=True)
+            except Exception as e:
+                print(json.dumps({"error": str(e), "input": path}), flush=True)
+                failed = True
+        sys.exit(1 if failed else 0)
     if len(args) != 2:
-        _fail("Usage: migrate_mesh_ids.py IN.parquet OUT.parquet [--tol-deg 1e-9]")
+        _fail("Usage: migrate_mesh_ids.py IN.parquet OUT.parquet [--tol-deg 1e-9]  |  "
+              "--in-place FILE.parquet ...")
     try:
         print(json.dumps(migrate_mesh(args[0], args[1], tol)), flush=True)
     except Exception as e:
