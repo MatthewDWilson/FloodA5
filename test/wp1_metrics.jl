@@ -34,8 +34,14 @@ function _frames(f)
     return ks, ts
 end
 
+# Coordinates (m) about the CENTRE OF THE SOURCE CELL — the mesh cell nearest
+# (lon0, lat0), which is where FloodA5 injects. Using the nominal source point
+# instead adds a fixed offset (the cell centre is up to half a cell away) that
+# reads as a large deflection while the plume is small.
 function _xy(f, lon0, lat0)
     lon = read(f["mesh/center_lons"]); lat = read(f["mesh/center_lats"])
+    k = argmin((lon .- lon0) .^ 2 .* cosd(lat0)^2 .+ (lat .- lat0) .^ 2)
+    lon0, lat0 = lon[k], lat[k]
     x = deg2rad.(lon .- lon0) .* _R_EARTH .* cosd(lat0)
     y = deg2rad.(lat .- lat0) .* _R_EARTH
     return x, y
@@ -80,22 +86,42 @@ function _asym(f, k, y, x)
     VN = sum(v[y .> 50.0]); VS = sum(v[y .< -50.0])
     h = read(f["frames"][k]["water_depth"]); h[.!isfinite.(h)] .= 0.0
     r = hypot.(x, y); φ = atan.(y, x)
-    return (VN + VS > 1e-9 ? (VN - VS) / (VN + VS) : 0.0), _harmonic(h, r, φ, 2; sinus = true)
+    # Plume deflection: bearing of the volume centroid from the source,
+    # degrees north of the downslope (+x, east) axis. Less sensitive than
+    # the N/S split to how coarse cells happen to straddle the source latitude.
+    defl = atand(sum(v .* y), sum(v .* x))
+    return (VN + VS > 1e-9 ? (VN - VS) / (VN + VS) : 0.0),
+           _harmonic(h, r, φ, 2; sinus = true), defl
 end
 
-function planar(paths; t_target, lon0, lat0)
-    @printf("%-52s %8s %8s %8s   %9s %8s\n", "file", "t (s)", "asym", "A2",
-            "max|asym|", "at t (s)")
+function planar(paths; t_target, lon0, lat0, t_sweep = nothing)
+    if t_sweep === nothing
+        @printf("%-52s %8s %8s %8s %8s   %9s %8s\n", "file", "t (s)", "asym", "A2",
+                "defl°", "max|asym|", "(t>=3600)")
+    else
+        @printf("%-46s %s\n", "file", join([@sprintf("  t=%-6.0f asym/defl°", t) for t in t_sweep]))
+    end
     for p in paths
         h5open(p) do f
             ks, ts = _frames(f)
             x, y = _xy(f, lon0, lat0)
-            series = [_asym(f, k, y, x)[1] for k in ks]
+            if t_sweep !== nothing
+                cols = String[]
+                for t in t_sweep
+                    k = ks[argmin(abs.(ts .- t))]
+                    a, _, d = _asym(f, k, y, x)
+                    push!(cols, @sprintf("  %+7.3f / %+6.2f  ", a, d))
+                end
+                @printf("%-46s %s\n", basename(p), join(cols))
+                return
+            end
+            late   = findall(>=(3600.0), ts)        # skip the first hour (few wet cells)
+            series = [_asym(f, ks[j], y, x)[1] for j in late]
             k = t_target === nothing ? ks[end] : ks[argmin(abs.(ts .- t_target))]
-            a, A2 = _asym(f, k, y, x)
+            a, A2, d = _asym(f, k, y, x)
             imax = argmax(abs.(series))
-            @printf("%-52s %8.0f %+8.4f %+8.4f   %9.4f %8.0f\n", basename(p),
-                    read(f["frames"][k]["t"]), a, A2, abs(series[imax]), ts[imax])
+            @printf("%-52s %8.0f %+8.4f %+8.4f %+8.2f   %9.4f %8.0f\n", basename(p),
+                    read(f["frames"][k]["t"]), a, A2, d, abs(series[imax]), ts[late[imax]])
         end
     end
 end
@@ -108,7 +134,9 @@ lat0  = parse(Float64, _arg("--lat", "0.0"))
 if mode == "spread"
     spread(paths; t_target = t_str === nothing ? Inf : parse(Float64, t_str), lon0, lat0)
 elseif mode == "planar"
-    planar(paths; t_target = t_str === nothing ? nothing : parse(Float64, t_str), lon0, lat0)
+    sw = _arg("--sweep", nothing)                  # e.g. --sweep 7200,36000,72000
+    planar(paths; t_target = t_str === nothing ? nothing : parse(Float64, t_str), lon0, lat0,
+           t_sweep = sw === nothing ? nothing : parse.(Float64, split(sw, ",")))
 else
     error("mode must be 'spread' or 'planar'")
 end
