@@ -2065,7 +2065,9 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
     x2, y2 = to_xy(elon2, elat2)
     ex, ey  = x2 - x1, y2 - y1
     e_len   = sqrt(ex^2 + ey^2)
-    e_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate edge guard
+    # Degenerate-length guards: 1 mm (WP3, 2026-10; was 1 m, which is a
+    # normal face length on Voronoi meshes and on A5 at resolution >= 22).
+    e_len < 1e-3 && return (NaN, 0.0, 0.0)   # degenerate edge guard
 
     # Rotate the edge vector 90° to get a normal candidate. This has NO
     # guaranteed orientation relative to i/j — it depends only on the
@@ -2079,7 +2081,7 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
     cj_x, cj_y = to_xy(lon_j, lat_j)
     dx, dy      = cj_x - ci_x, cj_y - ci_y
     d_len       = sqrt(dx^2 + dy^2)
-    d_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate distance guard
+    d_len < 1e-3 && return (NaN, 0.0, 0.0)   # degenerate distance guard
 
     dx_hat, dy_hat = dx / d_len, dy / d_len
 

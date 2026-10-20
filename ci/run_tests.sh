@@ -11,6 +11,7 @@ export JULIA_NUM_THREADS="${JULIA_NUM_THREADS:-2}"
 TESTS=(
   test/test_wp0_regressions.jl
   test/test_pya5_compat.jl
+  test/test_mesh_families.jl
   test/test_edge_geometry.jl
   test/test_noc_correction.jl
   test/test_sgs_unit.jl

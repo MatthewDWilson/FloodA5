@@ -232,7 +232,17 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
         n_neighbours[edges_list.cell_j[e]] += 1
     end
 
-    boundary_mask = BitVector(n_neighbours[i] < n_sides for i in 1:n)
+    # A cell is on the domain boundary if its polygon has more sides than it
+    # has neighbours (some side is not shared). WP3 (2026-10): this used to be
+    # `n_neighbours < n_sides` (the mesh's maximum valence), which is the same
+    # thing on A5 and Cartesian meshes, where every interior cell has the full
+    # count, but on a mixed-valence mesh (Voronoi, imported polygons) it gave a
+    # max-valence cell on the domain edge no ghost edge at all, and flagged
+    # interior cells with fewer neighbours (harmless: no unshared side found).
+    _poly_sides(c) = (nv = length(c.boundary);
+                      nv >= 2 && c.boundary[nv][1] ≈ c.boundary[1][1] &&
+                                 c.boundary[nv][2] ≈ c.boundary[1][2] ? nv - 1 : nv)
+    boundary_mask = BitVector(n_neighbours[i] < _poly_sides(cells[i]) for i in 1:n)
     n_boundary    = count(boundary_mask)
     n_boundary == 0 && @info "No boundary cells found (fully enclosed domain)."
     n_boundary  > 0 && @info "Boundary cells: $n_boundary / $n ($(round(100n_boundary/n, digits=1))%)"
