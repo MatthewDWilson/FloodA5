@@ -767,12 +767,15 @@ positivity treatment in finite-volume schemes.
 cell_i, the Phase B convention). `q_store` is the momentum array written in
 Phase A (`edges.flux` for standard flow, `edges.flux_Q` for SGS R-A); scaled
 edges are written back so the stored momentum matches the transfer (Fix C).
-`volume` is the start-of-step volume. Serial (Phase B is serial).
+`volume` is the start-of-step volume. Serial (Phase B is serial). `out` is a
+work array of length(volume), overwritten (WP4: passed in to avoid a per-step
+allocation).
 """
 function _positivity_scale!(edge_vol :: Vector{Float64}, q_store :: Vector{Float64},
                             volume   :: Vector{Float64},
-                            cell_i   :: Vector{Int}, cell_j :: Vector{Int})
-    out = zeros(Float64, length(volume))
+                            cell_i   :: Vector{Int}, cell_j :: Vector{Int};
+                            out      :: Vector{Float64} = zeros(Float64, length(volume)))
+    fill!(out, 0.0)
     @inbounds for e in eachindex(edge_vol)
         ev = edge_vol[e]
         if ev > 0.0

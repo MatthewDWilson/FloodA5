@@ -1850,6 +1850,35 @@ interpolated from the pre-computed edge_perim_curves.
 end
 
 """
+    edge_area_radius(table, slot, wse) → (A, R)
+
+`(flow_area_from_wse(t, slot, wse), hydraulic_radius_from_wse(t, slot, wse))`
+with one bracket search instead of three (WP4, 2026-10). Bit-identical to the
+separate calls: same bracket, same interpolation weights, same edge cases.
+"""
+@inline function edge_area_radius(t::SGSTable, slot::Int, wse::Float64)::Tuple{Float64,Float64}
+    eb = t.elev_bins; ca = t.edge_area_curves; cp = t.edge_perim_curves
+    nb = length(eb)
+    a_end = ca[nb, slot]; p_end = cp[nb, slot]
+    if wse <= eb[1]
+        A = 0.0; Pw = 0.0
+    elseif wse >= eb[nb]
+        A  = a_end <= 0.0 ? 0.0 : a_end
+        Pw = p_end <= 0.0 ? 0.0 : p_end
+    else
+        lo, hi = 1, nb
+        @inbounds while hi - lo > 1
+            mid = (lo + hi) >>> 1
+            eb[mid] <= wse ? lo = mid : hi = mid
+        end
+        @inbounds frac = (wse - eb[lo]) / (eb[hi] - eb[lo] + 1e-15)
+        @inbounds A  = a_end <= 0.0 ? 0.0 : ca[lo, slot] + frac * (ca[hi, slot] - ca[lo, slot])
+        @inbounds Pw = p_end <= 0.0 ? 0.0 : cp[lo, slot] + frac * (cp[hi, slot] - cp[lo, slot])
+    end
+    return A, (Pw < 1e-6 ? 0.0 : A / Pw)
+end
+
+"""
     hydraulic_radius_from_wse(table, slot, wse) → Float64
 
 Hydraulic radius R = A/P (m) at the shared edge in adjacency `slot` at WSE `wse`.
