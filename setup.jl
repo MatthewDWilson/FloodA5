@@ -246,7 +246,10 @@ for p in open(r'$list_file').read().splitlines():
     buf = IOBuffer()
     run(pipeline(ignorestatus(Cmd([python_exe, "-c", py])), stdout = buf))
     rm(list_file; force = true)
-    schemes = [Tuple(split(l, '\t'; limit = 2)) for l in split(String(take!(buf)), '\n') if occursin('\t', l)]
+    # rstrip: Python on Windows ends lines with "\r\n", which would leave a
+    # trailing '\r' on every path.
+    schemes = [Tuple(split(rstrip(l, '\r'), '\t'; limit = 2))
+               for l in split(String(take!(buf)), '\n') if occursin('\t', l)]
     for s in sort(unique(first.(schemes)))
         println("  $(rpad(s, 10)) $(count(x -> x[1] == s, schemes)) mesh(es)")
     end
