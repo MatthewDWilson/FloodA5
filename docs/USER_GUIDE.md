@@ -232,7 +232,7 @@ All arguments are named flags; position does not matter.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--flow-model sgs\|standard` | `sgs` | Flow routing method. `sgs`: sub-grid hypsometric (R-A kernel). `standard`: diffusive wave on mean cell elevation. |
+| `--flow-model sgs\|standard` | `sgs` | Flow routing method. `sgs`: sub-grid hypsometric (R-A kernel). `standard`: the same local-inertial scheme on the mean cell elevation (no sub-grid tables). |
 | `--sgs-bins N` | 100 | Elevation bins for SGS hypsometric curves. |
 | `--sgs-samples N` | 512 | Halton points per cell for SGS cross-section pre-processing. |
 | `--manning-n N` | 0.03 | Global Manning's roughness coefficient (s/m^(1/3)). |

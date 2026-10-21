@@ -186,11 +186,11 @@ end
     FlowMethod — abstract supertype for solver selection.
 
   StandardFlow(; manning_n=0.03)
-      Diffusive-wave solver on mean cell elevation.  WSE = bed + depth.
+      Local-inertial (Bates 2010) solver on mean cell elevation.  WSE = bed + depth.
       Fast; suitable for initial runs and validation.
 
   SGSFlow(; manning_n=0.03)
-      Diffusive-wave solver with sub-grid hypsometric storage tables.
+      Local-inertial solver with sub-grid hypsometric storage tables.
       Allows partial cell wetting.  Requires `build_sgs_tables!` to have
       been run; tables are loaded from the `.sgs.h5` companion file and
       stored in `FlowState.sgs_tables` at initialisation time.
@@ -2302,7 +2302,7 @@ initialise_flow_model(mesh::A5Mesh) = initialise_flow_model(mesh, StandardFlow()
 
 
 # ---------------------------------------------------------------------------
-# Diffusive wave physics — Bates et al. (2010) inertial formulation
+# Local-inertial physics — Bates et al. (2010) inertial formulation
 # ---------------------------------------------------------------------------
 # Pure physics kernels (_bates_flux, _bates_flux_limited, _manning_flux_ra,
 # _adjacency_slot, _cfl_dt) and their constants (_G, HFLOW_THRESHOLD,
@@ -2612,7 +2612,7 @@ const _step_debug_count = Ref{Int}(0)
 """
     step_standard!(state, dt)
 
-Advance the standard diffusive-wave model by one timestep `dt`.
+Advance the standard (local-inertial) model by one timestep `dt`.
 
 ## Parallel two-phase design
 
@@ -3033,7 +3033,7 @@ end
 """
     step_sgs!(state, dt)
 
-Advance the SGS diffusive-wave model by one timestep `dt`.
+Advance the SGS (local-inertial, R–A kernel) model by one timestep `dt`.
 
 Uses the same parallel A/B/C/D phase structure as `step_standard!` — see
 that function's docstring for the thread-safety rationale.  The SGS-specific
@@ -3596,8 +3596,8 @@ Main application entry point.
   - `FileDEM(path)`        — sample from a local GeoTIFF
 
 `flow_method` is one of:
-  - `:standard`  — diffusive wave on mean cell elevation (fast)
-  - `:sgs`       — diffusive wave with sub-grid hypsometric lookup (accurate)
+  - `:standard`  — local inertial on mean cell elevation (fast)
+  - `:sgs`       — local inertial with sub-grid hypsometric lookup (accurate)
 """
 
 """
@@ -4250,7 +4250,7 @@ Flow model options:
                        sgs       Sub-Grid Sampling — hypsometric volume lookup.
                                  Captures partial wetting, ditches, channels.
                                  Requires DEM for pre-processing (auto-run).
-                       standard  Diffusive wave on mean cell elevation (fast).
+                       standard  Local inertial on mean cell elevation (fast).
   --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
   --sgs-samples N    Halton points per cell for SGS pre-processing (default: 512).
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
