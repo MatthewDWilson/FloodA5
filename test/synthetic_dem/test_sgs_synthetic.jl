@@ -136,6 +136,15 @@ volume into the downstream zone via centre-lon misclassification.
 
 cell_width_deg is estimated from the domain extent and expected cell count.
 """
+# The synthetic domain is a closed bowl: every assertion (the notch filling
+# T1/T2, the comparison T3 and the mass balance T4, which ignores boundary
+# outflow) assumes no water leaves through the domain edge. Open boundaries
+# became the default after this test was written (WP3 fix, 2026-10).
+function _closed(state)
+    for k in eachindex(state.ghost_cell_bc); state.ghost_cell_bc[k] = Closed; end
+    return state
+end
+
 function partition_cells(mesh)
     emb_lon = LON0 + EMB_POS_FRAC * (LON1 - LON0)
     # Estimate one cell-width in degrees from domain extent / sqrt(n_cells)
@@ -232,7 +241,7 @@ end
 # that if source WSE is still below the notch sill, downstream is empty.
 @testset "T1 — SGS: no downstream flow before notch sill" begin
     mesh  = A5Grid.load_mesh_geoparquet(MESH_SGS)
-    state = initialise_flow_model(mesh, SGSFlow())
+    state = _closed(initialise_flow_model(mesh, SGSFlow()))
     up_idx, dn_idx = partition_cells(mesh)
     inj_idx, _, _  = _find_nearest_cell(mesh, INJ_LON, INJ_LAT)
 
@@ -264,7 +273,7 @@ end
 # ---------------------------------------------------------------------------
 @testset "T2 — SGS: downstream flow after notch sill" begin
     mesh  = A5Grid.load_mesh_geoparquet(MESH_SGS)
-    state = initialise_flow_model(mesh, SGSFlow())
+    state = _closed(initialise_flow_model(mesh, SGSFlow()))
     up_idx, dn_idx = partition_cells(mesh)
     inj_idx, _, _  = _find_nearest_cell(mesh, INJ_LON, INJ_LAT)
 
@@ -320,8 +329,8 @@ end
 @testset "T3 — SGS routes more water through sub-cell notch than standard" begin
     mesh_sgs = A5Grid.load_mesh_geoparquet(MESH_SGS)
     mesh_std = A5Grid.load_mesh_geoparquet(MESH_STD)
-    state_sgs = initialise_flow_model(mesh_sgs, SGSFlow())
-    state_std = initialise_flow_model(mesh_std, StandardFlow())
+    state_sgs = _closed(initialise_flow_model(mesh_sgs, SGSFlow()))
+    state_std = _closed(initialise_flow_model(mesh_std, StandardFlow()))
 
     up_sgs, dn_sgs = partition_cells(mesh_sgs)
     up_std, dn_std = partition_cells(mesh_std)
@@ -368,8 +377,8 @@ end
     for (solver_sym, mesh_file) in ((:sgs, MESH_SGS), (:standard, MESH_STD))
         mesh  = A5Grid.load_mesh_geoparquet(mesh_file)
         state = solver_sym == :sgs ?
-                initialise_flow_model(mesh, SGSFlow()) :
-                initialise_flow_model(mesh, StandardFlow())
+                _closed(initialise_flow_model(mesh, SGSFlow())) :
+                _closed(initialise_flow_model(mesh, StandardFlow()))
 
         up_idx, dn_idx = partition_cells(mesh)
         inj_idx, _, _  = _find_nearest_cell(mesh, INJ_LON, INJ_LAT)

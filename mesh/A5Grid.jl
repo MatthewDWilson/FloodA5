@@ -1746,15 +1746,19 @@ struct SGSTable
     z_max            :: Float64           # maximum terrain elevation m
     # Per-edge hydraulic geometry for the R-A flux kernel.
     # Rows = n_bins elevation knots (same as elev_bins).
-    # Cols = adjacency slots 1..5 (unused slots hold zeros).
+    # Cols = adjacency slots 1..n_slots, where slot k is the k-th entry of the
+    # cell's neighbour list (mesh.adjacency — the order FloodModel's adj_matrix
+    # uses); n_slots = the mesh's longest neighbour list (5 on A5, 6 on hex…).
+    # Unused slots hold zeros. (WP3, 2026-10: was a fixed 5 in grid_disk order,
+    # which did not match the neighbour list — see build_sgs_tables!.)
     # edge_area_curves[k, s]  = cross-sectional flow area (m²) through slot-s edge
     #                           at WSE = elev_bins[k].
     # edge_perim_curves[k, s] = wetted perimeter (m) at same WSE.
     # Both are zero when the mesh was built without R-A tables (legacy parquet).
     # The R-A flux kernel (_manning_flux_ra) requires these; falls back to Bates
     # form if they are all zero.
-    edge_area_curves :: Matrix{Float64}   # (n_bins × 5)
-    edge_perim_curves:: Matrix{Float64}   # (n_bins × 5)
+    edge_area_curves :: Matrix{Float64}   # (n_bins × n_slots)
+    edge_perim_curves:: Matrix{Float64}   # (n_bins × n_slots)
 end
 
 """
@@ -2149,13 +2153,30 @@ Output arrays in `mesh.array_vars`:
   "sgs_elev_bins"   — (n_bins × n_cells)  elevation knot points (m)
   "sgs_vol_curve"   — (n_bins × n_cells)  cumulative volume (m³)
   "sgs_area_curve"  — (n_bins × n_cells)  cumulative wetted area (m²)
-  "sgs_edge_sills"  — (5 × n_cells)       sill elevation per neighbour slot
+  "sgs_edge_sills"  — (n_slots × n_cells) sill elevation per neighbour slot
+  "sgs_edge_area_curve", "sgs_edge_perim_curve" — (n_bins·n_slots × n_cells)
+                      R-A edge curves, column-major (bin fastest)
+
+Slot k of a cell is the k-th entry of its neighbour list `mesh.adjacency[id]`
+— the same order `initialise_flow_model` uses for `adj_matrix`, including
+list entries that are not in the mesh (they take a slot but get no curve).
+`n_slots` is the longest neighbour list, so any valence is supported. If the
+mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only)
+and stored in `mesh.adjacency`, so the saved neighbour list matches the slots.
+
+WP3 fix (2026-10): slots used to follow `grid_disk_neighbours` order, which
+differs from the stored neighbour list for ~95% of A5 cells (and counted
+out-of-mesh `grid_disk` cells), so the SGS sill and R-A curves of most edges
+belonged to a different neighbour. Tables built by this version carry
+`static_vars["sgs_layout"] = 2`; `initialise_flow_model` refuses older ones
+(see mesh/repair_sgs_slot_order.py).
 
 Output scalars in `mesh.static_vars`:
   "sgs_cell_area"   — total plan area of each cell (m²)
   "sgs_z_min"       — minimum DEM elevation in cell
   "sgs_z_max"       — maximum DEM elevation in cell
   "sgs_n_bins"      — n_bins (stored as Float64 for parquet compatibility)
+  "sgs_layout"      — 2 (neighbour-list slot order, any valence)
 
 The arrays are automatically persisted when you call `save_mesh_geoparquet`.
 """
@@ -2196,20 +2217,23 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     elev_bins_mat  = Matrix{Float64}(undef, n_bins, n)
     vol_curve_mat  = Matrix{Float64}(undef, n_bins, n)
     area_curve_mat = Matrix{Float64}(undef, n_bins, n)
-    # NOTE (cartesian-formulation branch, deferred): these three matrices
-    # hardcode 5 (A5's pentagon valence) rather than deriving a per-mesh
-    # neighbour ceiling the way adj_matrix/wlsq_weights/mom_weights now do
-    # (see FlowState.max_neighbours in FloodModel.jl). SGS generalisation is
-    # intentionally out of scope for this refactor — deferred until the
-    # standard-flow Cartesian path is verified — but flagged here so it
-    # isn't missed: fixing this requires the same treatment (derive the
-    # ceiling from the mesh's own adjacency, thread it through the loops
-    # below and through the corresponding SGSTable consumers in this file).
-    edge_sills_mat = fill(NaN, 5, n)   # up to 5 neighbours per pentagon
+    # Neighbour lists define the slots (see the docstring). Computed before
+    # Step 1 so the slot count is known.
+    if isempty(mesh.adjacency)
+        @info "  No adjacency on the mesh — computing it via grid_disk..."
+        gd = grid_disk_neighbours_batch([c.id for c in mesh.cells])
+        in_mesh = Set(c.id for c in mesh.cells)
+        for c in mesh.cells
+            mesh.adjacency[c.id] = [nb for nb in get(gd, c.id, String[]) if nb in in_mesh]
+        end
+    end
+    _nbrs(c) = get(mesh.adjacency, c.id, get(mesh.adjacency, _to_hex_safe(c.id), String[]))
+    n_slots = max(1, maximum(length(_nbrs(c)) for c in mesh.cells))
+    edge_sills_mat = fill(NaN, n_slots, n)
     # R-A flux tables: cross-sectional flow area and wetted perimeter per edge slot
-    # Shape: (n_bins, 5, n_cells) — stored flat as (n_bins×5, n_cells) in parquet
-    edge_area_mat  = zeros(Float64, n_bins, 5, n)   # m²
-    edge_perim_mat = zeros(Float64, n_bins, 5, n)   # m
+    # Shape: (n_bins, n_slots, n_cells) — stored flat as (n_bins×n_slots, n_cells)
+    edge_area_mat  = zeros(Float64, n_bins, n_slots, n)   # m²
+    edge_perim_mat = zeros(Float64, n_bins, n_slots, n)   # m
     cell_areas     = Vector{Float64}(undef, n)
     z_mins         = Vector{Float64}(undef, n)
     z_maxs         = Vector{Float64}(undef, n)
@@ -2332,12 +2356,11 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     # ── Step 2: Edge sill elevations ──────────────────────────────────────
     @info "  Sampling edge sill elevations..."
 
-    # Build a cell_id → index map
+    # Build a cell_id → index map (raw and normalised IDs)
     id_to_idx = Dict{String,Int}(cell.id => i for (i, cell) in enumerate(mesh.cells))
-
-    # We need true topological neighbours; build adjacency via grid_disk
-    @info "  Building exact adjacency via grid_disk..."
-    adj = grid_disk_neighbours_batch([c.id for c in mesh.cells])
+    for (i, cell) in enumerate(mesh.cells)
+        id_to_idx[_to_hex_safe(cell.id)] = i
+    end
 
     # For each cell, sample the DEM along each shared edge.
     # NOTE: must be serial (not Threads.@threads). The ArchGDAL coordinate transform
@@ -2348,12 +2371,9 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     # wall time; the edge sill loop is fast even serially at res 18 (29,902 cells).
     for ci in 1:n
         cell_i = mesh.cells[ci]
-        nbrs   = get(adj, cell_i.id, String[])
-        slot   = 0
-        for nb_id in nbrs
-            slot += 1
-            slot > 5 && break
-            ci_nb = get(id_to_idx, nb_id, 0)
+        nbrs   = _nbrs(cell_i)
+        for (slot, nb_id) in enumerate(nbrs)   # slot = position in the neighbour list
+            ci_nb = get(id_to_idx, nb_id, get(id_to_idx, _to_hex_safe(nb_id), 0))
             ci_nb == 0 && continue
 
             cell_j  = mesh.cells[ci_nb]
@@ -2443,14 +2463,15 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     mesh.array_vars["sgs_area_curve"]      = area_curve_mat
     mesh.array_vars["sgs_edge_sills"]      = edge_sills_mat
 
-    # R-A flux tables: reshape (n_bins, 5, n) → (n_bins×5, n) for parquet storage
-    mesh.array_vars["sgs_edge_area_curve"]  = reshape(edge_area_mat,  n_bins*5, n)
-    mesh.array_vars["sgs_edge_perim_curve"] = reshape(edge_perim_mat, n_bins*5, n)
+    # R-A flux tables: reshape (n_bins, n_slots, n) → (n_bins×n_slots, n) for parquet
+    mesh.array_vars["sgs_edge_area_curve"]  = reshape(edge_area_mat,  n_bins*n_slots, n)
+    mesh.array_vars["sgs_edge_perim_curve"] = reshape(edge_perim_mat, n_bins*n_slots, n)
 
     mesh.static_vars["sgs_cell_area"] = cell_areas
     mesh.static_vars["sgs_z_min"]     = z_mins
     mesh.static_vars["sgs_z_max"]     = z_maxs
     mesh.static_vars["sgs_n_bins"]    = fill(Float64(n_bins), n)
+    mesh.static_vars["sgs_layout"]    = fill(2.0, n)   # neighbour-list slot order
 
     n_ok = count(isfinite, z_mins)
     @info "SGS tables built in $(round(time()-t0, digits=1))s: " *
@@ -2479,8 +2500,9 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
     # (pre sgs_ra_flux branch) lack these columns.  Fill with zeros and warn
     # once — the R-A kernel will detect all-zero curves and fall back to Bates.
     if haskey(mesh.array_vars, "sgs_edge_area_curve")
-        edge_area  = reshape(mesh.array_vars["sgs_edge_area_curve"][:,  i], n_bins, 5)
-        edge_perim = reshape(mesh.array_vars["sgs_edge_perim_curve"][:, i], n_bins, 5)
+        n_slots    = size(mesh.array_vars["sgs_edge_area_curve"], 1) ÷ n_bins
+        edge_area  = reshape(mesh.array_vars["sgs_edge_area_curve"][:,  i], n_bins, n_slots)
+        edge_perim = reshape(mesh.array_vars["sgs_edge_perim_curve"][:, i], n_bins, n_slots)
     else
         edge_area  = zeros(Float64, n_bins, 5)
         edge_perim = zeros(Float64, n_bins, 5)

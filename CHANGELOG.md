@@ -39,6 +39,36 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP3 (part 2): SGS on general meshes, and the SGS slot-order fix (`wp3b-sgs-general`)
+
+#### Fixed
+- ⚠ **SGS edge sills and R–A edge curves belonged to the wrong neighbour for
+  most cells** (`build_sgs_tables!`). The tables stored slots in
+  `grid_disk_neighbours` order (including cells outside the mesh), while the
+  solver reads slot *k* as the *k*-th entry of the cell's stored neighbour
+  list. Rebuilding the build-time order with pya5 0.7.3 showed the two differ
+  for 90–96% of cells (Carlisle res-16: 1,757 of 1,958; planar res-18: 15,879
+  of 16,567). Effect: wrong sills acted as phantom dams — on the synthetic
+  notch DEM the upstream pond rose to 2.4 m, nearly 1 m above the 1.505 m
+  embankment crest, before the fix, and fills to the notch and spills after
+  it. Affects every SGS result to date.
+  - Slots now follow the neighbour list, for any valence; tables carry
+    `static_vars["sgs_layout"] = 2`. `initialise_flow_model` refuses older SGS
+    tables (`FLOODA5_ALLOW_OLD_SGS_LAYOUT=1` overrides).
+  - `mesh/repair_sgs_slot_order.py` repairs existing meshes without the DEM
+    (needs pya5 0.x and the original 0.x mesh, e.g. `*_a5v0.parquet`); the
+    repaired Carlisle res-16 tables are bit-identical to a rebuild with the
+    fixed builder.
+- `test/synthetic_dem/test_sgs_synthetic.jl` now closes the domain boundaries,
+  as its assertions (and the T4 mass balance, which ignores outflow) assume;
+  it predates the open-boundary default. T0–T4 pass with the fixed tables.
+
+#### Added
+- SGS on meshes with more than five neighbours (`n_slots` from the mesh).
+  `test/test_sgs_general.jl` (in CI): SGS tables on a hexagonal mesh — sill
+  symmetry across every edge, curves within edge lengths, lake at rest, mass
+  balance, refusal of the old layout.
+
 ### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
 
 Work package WP2 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.2, §9).

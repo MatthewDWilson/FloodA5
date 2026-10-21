@@ -1519,13 +1519,10 @@ function _build_edge_list(cells       :: Vector{A5Cell},
             # for SGS runs; for standard runs this defaults to bed elevation.
             #
             # SGS sill lookup: sill_matrix[slot, cell] stores the minimum
-            # DEM elevation along the shared edge, indexed by adjacency slot.
-            # The slot ordering in sill_matrix was set during build_sgs_tables!
-            # using grid_disk_neighbours_batch(), which may differ from the
-            # adjacency ordering stored in the parquet adj columns and loaded
-            # into the adj dict here.  To guard against ordering mismatches
-            # we search BOTH the lo-cell and hi-cell perspectives and take
-            # whichever returns a valid (non-NaN) result first.
+            # DEM elevation along the shared edge, indexed by adjacency slot
+            # = position in the cell's neighbour list (the same order as
+            # `adj` here, since the WP3 fix to build_sgs_tables!; older
+            # tables are refused at load). Try the lo-cell side, then hi.
             sls[e] = if sill_matrix !== nothing
                 s = NaN
                 # Try lo → hi
@@ -1888,6 +1885,22 @@ function initialise_flow_model(mesh::A5Mesh,
         haskey(mesh.array_vars, "sgs_elev_bins") ||
             error("SGS tables not found in mesh — call build_sgs_tables! first.")
         @info "Loading SGS tables from mesh array_vars..."
+        # WP3 (2026-10): tables built before the fix store edge curves and
+        # sills in grid_disk order, which does not match the neighbour list
+        # for most cells (wrong neighbour's sill/R-A curve). Refuse them.
+        if !haskey(mesh.static_vars, "sgs_layout")
+            msg = "This mesh's SGS tables use the pre-2026-10 slot layout: edge " *
+                  "sills and R-A curves were stored in grid_disk order, which " *
+                  "differs from the neighbour list for most cells, so most edges " *
+                  "would use another neighbour's values. Rebuild the SGS tables " *
+                  "(--meshgen ... --flow-model sgs, or build_sgs_tables!) or repair " *
+                  "them with mesh/repair_sgs_slot_order.py."
+            if get(ENV, "FLOODA5_ALLOW_OLD_SGS_LAYOUT", "") == "1"
+                @warn msg * " (continuing: FLOODA5_ALLOW_OLD_SGS_LAYOUT=1)"
+            else
+                error(msg)
+            end
+        end
         sgs_tables = [sgs_table(mesh, i) for i in 1:n]
 
         if haskey(mesh.array_vars, "sgs_edge_sills")
