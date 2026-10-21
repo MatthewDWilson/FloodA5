@@ -17,26 +17,23 @@ Note: this model is still in an experimental phase and should not be used in pro
 Key characteristics:
 
 - **Uniform five-connectivity** — every interior cell has exactly five edge-sharing
-  neighbours, eliminating the axis-aligned bias of a rectangular grid in principle.
-  In practice, A5 pentagon edges are not perpendicular to the cell-centre-to-cell-centre
-  vector (non-orthogonality angle ~16–38°), and the default Bates (2010) formulation —
-  derived for an orthogonal Cartesian grid — shows a measurable residual directional
-  bias as a result. **Three opt-in, experimental corrections are implemented and
-  under active validation** (a non-orthogonal gradient correction, a face-local
-  "diamond" reconstruction, and a cell-vector momentum representation); none is yet
-  the default, and none fully eliminates the bias on its own. See
-  [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §7–§8 for the full picture, current
-  recommendation, and open questions.
+  neighbours, avoiding the axis-aligned preference of a rectangular grid in
+  principle. A5 faces are not perpendicular to the line between cell centres
+  (non-orthogonality ~16–38°), and the original Bates (2010) scheme, derived for an
+  orthogonal grid, is directionally biased on them. The bias has two causes — the
+  face-normal water-surface gradient and the face-normal-only friction term — and
+  **the default configuration corrects both** (a "diamond" face gradient and vector
+  friction), cutting the planar-slope north/south asymmetry from 0.87 to about 0.05.
+  See [Solvers](#solvers) and [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §15.
 - **Sub-Grid Sampling (SGS)** — hypsometric volume curves built from LiDAR allow
   partial wetting of cells and accurate routing through channels narrower than a cell.
-- **A second, plain Cartesian mesh backend** (experimental, `cartesian-formulation`
-  branch) — a rectangular, 4-connected grid generator (`--meshgen-cartesian`, pure
-  Julia, no Python bridge) that runs through exactly the same solver. It exists so the
-  flux and momentum code can be tested on a provably orthogonal grid, separating
-  grid-geometry effects from solver effects, and as the basis for a like-for-like
-  benchmark against LISFLOOD-FP. It is not a replacement for A5; SGS is not yet
-  supported on it, and a small residual directional bias found on it is still under
-  investigation (see [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §14).
+- **Other mesh types through the same solver** — a rectangular Cartesian backend
+  (`--meshgen-cartesian`, pure Julia; given a raster it builds a grid aligned
+  cell-for-cell with it in its own projected CRS, for comparisons with LISFLOOD-FP),
+  and hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
+  (`mesh/mesh_families.py`). The solver and the SGS tables work for any number of
+  neighbours per cell. The Cartesian grid also serves as an orthogonal reference that
+  separates grid-geometry effects from solver effects.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
   use WGS 84 (EPSG:4326); no projected CRS selection required.
 - **LISFLOOD-FP compatible inputs** — reads `.bci`/`.bdy` boundary condition files
@@ -51,7 +48,7 @@ Key characteristics:
 | Document | Contents |
 |---|---|
 | [docs/METHODS.md](docs/METHODS.md) | Physics: A5 grid, SGS, Bates formulation, R-A flux, boundary conditions |
-| [docs/HYDRAULICS.md](docs/HYDRAULICS.md) | Full flux-kernel derivations, stability limiters, and the current state of the directional-bias correction work (opt-in flags, what's validated, what isn't) |
+| [docs/HYDRAULICS.md](docs/HYDRAULICS.md) | Flux-kernel derivations, stability limiters, the directional-bias work, and (§15) the evidence behind the current defaults, including what was tried and rejected |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Full CLI reference, workflow walkthrough, worked examples |
 | [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md) | GeoParquet schema, HDF5 layout, `.bci`/`.bdy` format |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module map, extension points, developer orientation |
@@ -68,14 +65,12 @@ available on request. The documents above summarise the current state of
 the model; they don't duplicate that history, but do point to it where it's
 relevant (e.g. `HYDRAULICS.md`'s directional-bias sections).
 
-**Current defaults:** the model runs with the original, uncorrected Bates
-(2010) formulation unless you explicitly opt in to the directional-bias
-corrections above (`--gradient-correction`, `--face-flux-method`,
-`--momentum-model` — standard-flow solver only, see
-[docs/USER_GUIDE.md](docs/USER_GUIDE.md) §4.3a). This is deliberate: the
-corrections have real, measured benefit but are not yet validated on a
-real DEM and at least one combination is known to make the bias worse
-under some conditions. See [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §8.
+**Current defaults (since October 2026):** `--scheme recommended`, i.e. the
+directional-bias corrections, vector friction, a local CFL timestep and
+consistent Q-centring — see [Solvers](#solvers). `--scheme legacy` reproduces
+the original Bates (2010) configuration exactly. Results from earlier versions
+differ: the October 2026 changes (listed in [CHANGELOG.md](CHANGELOG.md) and
+marked ⚠ there) include two bugs that affected all earlier SGS and A5 results.
 
 ---
 
@@ -92,8 +87,9 @@ meshes are migrated with `julia setup.jl --upgrade` then
 `julia setup.jl --migrate-meshes` (see [docs/USER_GUIDE.md §1](docs/USER_GUIDE.md)
 and [docs/A5_QUIRKS.md §11](docs/A5_QUIRKS.md)).
 
-Optional: an NVIDIA CUDA GPU accelerates the point-in-polygon DEM sampling step at
-high resolutions.
+Optional: an NVIDIA CUDA GPU accelerates the point-in-polygon sampling step of
+mesh generation at high resolutions. CUDA.jl is loaded only when that step needs
+it; `FLOODA5_NO_CUDA=1` disables it.
 
 ### 2. Install
 
@@ -137,6 +133,7 @@ FloodA5/
 │   ├── DiamondFlux.jl         # Diamond face-normal gradient reconstruction
 │   ├── a5_bridge.py           # Python bridge: pya5 calls (0.x and 1.x), GeoParquet I/O
 │   ├── migrate_mesh_ids.py    # pya5 0.x → 1.x cell-ID migration for existing meshes
+│   ├── repair_sgs_slot_order.py # Repair SGS tables built before the 2026-10 slot-order fix
 │   ├── mesh_families.py       # Hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
 │   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
 ├── surfacewater/
@@ -153,9 +150,11 @@ FloodA5/
 │   └── cesium/                # CesiumJS static files
 ├── test/
 │   ├── carlisle/              # Carlisle 2005 flood domain and boundary files
+│   ├── planar_embankment/     # Planar-slope (flow-direction) test case
 │   ├── square/                # Square domain test case
 │   ├── synthetic_dem/         # Synthetic DEM SGS validation suite
-│   └── *.jl                   # Unit and integration tests
+│   └── *.jl                   # Unit and integration tests, diagnostics, benchmarks
+├── ci/                        # CI environment and test runner (run_tests.sh)
 ├── examples/
 │   └── example_aoi.geojson    # Example area of interest (centred at 0°N, 0°E)
 └── docs/                      # Documentation
@@ -191,42 +190,58 @@ volume via a pre-computed hypsometric curve. The edge flux uses a Manning hydrau
 radius (R-A) formulation rather than the wide-channel approximation, giving
 physically correct friction scaling in confined channels. Requires a DEM.
 
-**`--flow-model standard`** — Diffusive wave on mean cell elevation. Faster and
-useful for initial exploration or validation without a DEM.
+**`--flow-model standard`** — the same local-inertial scheme on the mean cell
+elevation (no sub-grid tables). Faster, and useful for exploration or for runs
+without a DEM.
 
-Both solvers use the Bates et al. (2010) inertial formulation with:
-- Wave-speed CFL timestep (Courant number 0.7)
-- Froude limiter (Fr ≤ 0.8) and a per-edge volume limiter
-- Q-centred spatial momentum smoothing (θ = 0.9, standard flow)
-- Consistent momentum state (`q_prev` matches actual transferred flux, both solvers)
+Both solvers use the Bates et al. (2010) local-inertial formulation with a
+Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7)
+and a momentum state that matches the flux actually transferred.
 
-**Directional-bias corrections (on by default since 2026-10-21; `--scheme
-legacy` turns them off).** The bias has two
-causes, and both need fixing: the face-normal gradient on non-orthogonal faces
-(`--gradient-correction on --face-flux-method diamond`), and the Bates /
-LISFLOOD-FP friction term, which uses only the face-normal discharge
-(`--friction-model vector`; this one also affects Cartesian grids, and grid
-refinement cannot remove it). Together they cut the planar-slope N/S asymmetry
-on A5 from 0.87 to 0.05, decreasing with refinement. The default
-`--scheme recommended` uses, for standard flow,
-`--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent`,
-and for SGS `--friction-model vector --cfl-mode local --q-centre-theta 1`.
+**Default numerical options: `--scheme recommended`.** Any option you don't set
+takes the value for your flow model; explicit flags always win, and
+`--scheme legacy` restores the original configuration.
 
-**Q-centring on A5 before 2026-10-22 acted as an artificial resistance**
-(most collinear partner faces were added with the wrong sign), so A5 runs
-with θ < 1 under-convey: on Carlisle about twice the water stays in the
-domain compared with a Cartesian grid. `--q-centre-mode consistent` fixes
-this and is the default; see HYDRAULICS.md §15.4.
+| Option | `standard` | `sgs` | `--scheme legacy` |
+|---|---|---|---|
+| Face gradient | diamond, two-point next to dry cells (`--gradient-correction on --face-flux-method diamond-wetdry`) | two-point | two-point |
+| Friction | vector, \|q\| (`--friction-model vector`) | vector | face-normal only |
+| Wet/dry limiter | hybrid (`--limiter hybrid`) | per-edge (legacy) | per-edge |
+| Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | smallest cell, 99th-percentile depth |
+| Momentum smoothing | consistent Q-centring, θ = 0.9 (`--q-centre-mode consistent`) | none (`--q-centre-theta 1`) | Q-centring θ = 0.9 as originally written |
 
-**SGS results before 2026-10-21 are affected by a table bug** (edge sills and
-R–A curves attached to the wrong neighbour for most cells); old SGS meshes are
-refused until rebuilt or repaired — see [CHANGELOG.md](CHANGELOG.md).
+Why these:
+- **Directional bias** has two causes: the face-normal gradient on
+  non-orthogonal faces, and the Bates/LISFLOOD-FP friction term, which uses
+  only the face-normal discharge (this one also biases Cartesian grids, and
+  refinement cannot remove it). Fixing both cuts the planar-slope N/S
+  asymmetry on A5 from 0.87 to about 0.05, decreasing with refinement.
+- **Q-centring as originally written is wrong on A5:** about two thirds of
+  the "collinear" partner faces it averages were added with the wrong sign,
+  so it acted as an artificial, timestep-dependent resistance. On the
+  Carlisle test about twice as much water stayed in the domain as on a
+  Cartesian grid. The consistent form maps each partner face onto the
+  edge's own direction; on Cartesian grids it is exactly LISFLOOD-FP's
+  Q-centring.
 
-See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md) for the evidence (including
-the options that were tried and rejected) and
-[docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md) for the CLI flags.
+> **Results from before October 2026 are affected** by that Q-centring defect
+> (A5, both solvers) and, for SGS, by a table bug that attached edge sills and
+> R–A curves to the wrong neighbour for most cells. Old SGS meshes are refused
+> until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
 
-See [docs/METHODS.md](docs/METHODS.md) for full details.
+Known limitations: with the default options, the standard solver still shows
+more grid-scale water-surface noise in deep channels than the legacy scheme
+did (the old Q-centring suppressed it, at the cost of conveyance). Results on
+the Carlisle test are also sensitive to the Courant number. Both are open; see
+[docs/HYDRAULICS.md §15.3–15.4](docs/HYDRAULICS.md), which also records the
+options that were tried and rejected. The CLI flags are documented in
+[docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md), and the physics in
+[docs/METHODS.md](docs/METHODS.md).
+
+**Performance.** Each time step is multi-threaded (`julia --threads auto`).
+Carlisle res-18 (30,000 cells, river inflows plus 10 mm/h rain, 8 threads)
+runs at roughly 500 simulated hours per wall-clock hour with the standard
+solver and 125 with SGS; mostly dry domains run much faster.
 
 ---
 
@@ -278,14 +293,20 @@ See [docs/DATA_FORMATS.md](docs/DATA_FORMATS.md) for the full HDF5 schema.
 
 ## Testing
 
-The unit and regression set that CI runs (Linux, pya5 0.7.3 and 1.0.0):
+The unit and regression set that CI runs on every push (GitHub Actions, Linux,
+pya5 0.7.3 and 1.0.0) is listed in `ci/run_tests.sh`. It covers the solver
+options and their defaults, Q-centring, vector friction, limiters, SGS on
+general meshes, the mesh families, pya5 compatibility, open boundaries and the
+performance fast paths. Set `FLOODA5_NO_VIS=1` for test and batch runs to skip
+loading the visualisers.
 
 ```bash
-bash ci/run_tests.sh .                                     # Git Bash / Linux / macOS
+FLOODA5_NO_VIS=1 bash ci/run_tests.sh .                    # Git Bash / Linux / macOS
 julia --project=. -t 1 test/check_determinism.jl           # compare FINGERPRINT lines with -t 4
+julia --project=. -t 8 test/benchmark_baseline.jl          # step benchmark
 ```
 
-Individual tests and benchmarks:
+Other individual tests and benchmarks:
 
 ```bash
 # SGS unit tests (5-cell chain, hypsometric lookups)
@@ -334,45 +355,42 @@ future work identified through the project's testing and development history
 so far — it is not a commitment or a timeline, and items may be reordered,
 combined, or dropped as understanding improves.
 
+**Done in October 2026** (details in [CHANGELOG.md](CHANGELOG.md)):
+the directional bias explained and corrected (diamond face gradient + vector
+friction), and made the default; a consistent, mesh-general Q-centring; SGS on
+meshes with any number of neighbours; generic polygon mesh families; and a first
+round of CPU performance work (3–4× faster on Carlisle, 10× for the SGS
+point-source benchmark).
+
 **Physics and correctness**
-- Further testing and correction of the flow-direction bias described in
-  [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §7–§8, including investigation of
-  how the Froude/volume stability limiters interact with the directional-bias
-  corrections (currently the leading suspect for the bias that remains even
-  with correction enabled)
-- Extending the directional-bias corrections (or an SGS-appropriate
-  equivalent) to the SGS solver, which none of them currently touch
-- Making the open-boundary (ghost-edge) flux calculation consistent with
-  whichever interior flux method is selected, rather than always using the
-  uncorrected kernel at domain edges
+- Damping of grid-scale water-surface noise in deep channels that does not
+  cost conveyance (the remaining weakness of the standard solver's defaults),
+  or a symmetric form of the diamond face gradient
+- A study of the timestep (Courant number) sensitivity seen on the Carlisle
+  test, on both A5 and Cartesian meshes
+- Validating the gradient correction for the SGS solver (vector friction and the
+  local CFL already apply to it)
+- Making the open-boundary (ghost-edge) flux consistent with the interior
+  options (it still uses the original kernel and face-normal friction)
 - Additional SGS methodology development, including further validation of
   the hydraulic-radius (R-A) flux kernel and extending sub-grid sampling to
   more general channel/culvert geometries
 - An independent, minimal Riemann-solver (e.g. HLL) reference implementation
-  on the same A5 mesh, to benchmark the reduced-complexity Bates/Manning
-  formulation against full shallow-water physics on cases where the two are
-  expected to agree closely
-- ~~Resolving the directional bias found on the Cartesian backend~~ — explained
-  (2026-10): it is the component-wise friction term, and `--friction-model
-  vector` removes it, converging to isotropy at first order (see
-  [docs/HYDRAULICS.md](docs/HYDRAULICS.md) §15)
-- A like-for-like benchmark against LISFLOOD-FP itself on a matched Cartesian
-  mesh (raster-aligned projected-CRS grids are now available with
-  `--meshgen-cartesian dem.tif`)
-- A stable mesh-general replacement for Q-centring and the per-edge volume
-  limiter (the θ-blend and positivity-only alternatives tried in 2026-10 were
-  not stable on real terrain; see HYDRAULICS.md §15.2)
-- Generalising the SGS solver beyond A5's five-neighbour assumption, so the
-  sub-grid method can also be checked for flow-direction bias on other grids
-- Additional mesh backends (e.g. hexagonal DGGS such as IGEO7, and HEALPix),
-  which the mesh-agnostic `max_neighbours` refactor was designed to enable.
-  Generic hexagonal, rotated-Cartesian and Voronoi meshes (and imported
-  polygon meshes) are already supported for the standard solver
-  (`mesh/mesh_families.py`, [docs/TEST_CASES.md](docs/TEST_CASES.md) §6)
-- Analytical benchmarks not yet run against the corrected flux kernels:
-  Thacker (1981) planar-surface oscillation, circular dam-break (also the
-  key demonstration case for A5's rotational-symmetry advantage over a
-  rectangular grid)
+  on the same mesh, to benchmark the reduced-complexity Bates/Manning
+  formulation against full shallow-water physics where the two should agree
+- A like-for-like benchmark against LISFLOOD-FP on a matched Cartesian mesh
+  (raster-aligned grids are available with `--meshgen-cartesian dem.tif`)
+- Further mesh families: hexagonal DGGS (H3, IGEO7) and HEALPix
+- Analytical benchmarks: Thacker (1981) planar-surface oscillation and a
+  circular dam break (also the key demonstration of A5's rotational symmetry)
+
+**Performance**
+- Restructuring as a Julia package with precompilation (start-up and
+  first-step compilation now dominate short runs), flat SGS tables, and
+  non-allocating threading
+- An active-cell list so that dry parts of the domain cost nothing, and
+  spatially ordered cells for memory locality
+- A GPU backend for the time-step kernels, from the same code
 
 **Visualisation**
 - Continued development of the CesiumJS (or a similar) web-based viewer —
@@ -392,8 +410,6 @@ combined, or dropped as understanding improves.
   rainfall, infiltration, and evaporation sources
   and additional hydrograph input formats (WaterML 2.0, CF-NetCDF)
 - NetCDF/UGRID output alongside the existing HDF5 format
-- GPU-accelerated flux solver kernel (GPU acceleration currently applies only
-  to SGS mesh pre-processing, not the simulation loop)
 - Ensemble and calibration tooling (Manning's n sweeps, skill scores such as
   NSE, KGE, F2 against observed flood outlines)
 - LiDAR DEM ingestion and validation for a real-world New Zealand catchment,
