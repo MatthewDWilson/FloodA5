@@ -3,7 +3,12 @@
 # WP2 acceptance diagnostic: checkerboarding and noise in FloodA5 HDF5 output
 # (standard flow: WSE = elevation + depth). Analysis only.
 #
-#   FLOODA5_NO_VIS=1 julia --project=. test/wp2_checkerboard.jl MESH.parquet [--every N] [--series] RUN.h5 ...
+#   FLOODA5_NO_VIS=1 julia --project=. test/wp2_checkerboard.jl MESH.parquet [--every N] [--series] [--sgs] RUN.h5 ...
+#
+# --sgs: SGS output, where water_depth is measured from the cell's lowest DEM
+# point, so WSE = sgs_z_min + depth (sgs_z_min from MESH) instead of the mean
+# elevation + depth. If the run's cell IDs do not match MESH (e.g. a run on the
+# pya5 0.x copy of a migrated mesh), cells are matched by row order.
 #
 # Over "fully wet interior" cells (depth > 5 cm, and every neighbour too):
 #   r_rms    rms of r_i = WSE_i − mean(WSE of neighbours), mm. Smooth fields
@@ -22,9 +27,13 @@ using HDF5, Printf, Statistics
 
 _arg(name, default) = (i = findfirst(==(name), ARGS); i === nothing ? default : ARGS[i + 1])
 
+const MESH = Ref{Any}(nothing)
 function neighbour_lists(mesh_path, h5_ids)
-    mesh = load_mesh_geoparquet(mesh_path)
+    mesh = MESH[] = load_mesh_geoparquet(mesh_path)
     idx  = Dict(_norm_cell_id(id) => k for (k, id) in enumerate(h5_ids))
+    if count(c -> haskey(idx, _norm_cell_id(c.id)), mesh.cells) < length(h5_ids) ÷ 2
+        idx = Dict(_norm_cell_id(c.id) => k for (k, c) in enumerate(mesh.cells))  # row order
+    end
     nbrs = [Int[] for _ in h5_ids]
     for (id, nb) in mesh.adjacency
         i = get(idx, _norm_cell_id(id), 0)
@@ -65,7 +74,8 @@ for p in paths
     h5open(p) do f
         global nbrs
         nbrs === nothing && (nbrs = neighbour_lists(mesh_path, read(f["mesh/cell_ids"])))
-        z  = read(f["mesh/elevations"])
+        # HDF5 frames are in mesh row order, so MESH's static vars line up.
+        z  = "--sgs" in ARGS ? copy(MESH[].static_vars["sgs_z_min"]) : read(f["mesh/elevations"])
         ks = sort(collect(keys(f["frames"])))
         series = []
         for (n, k) in enumerate(ks)

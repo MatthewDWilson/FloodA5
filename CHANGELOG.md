@@ -39,6 +39,93 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP2c: Q-centring on A5 (`wp2c-qcentre`)
+
+Evidence: `docs/HYDRAULICS.md` §15.4.
+
+#### Changed
+- ⚠ **`--scheme recommended` now uses consistent Q-centring for standard flow
+  and no Q-centring (θ = 1) for SGS.** `--q-centre-theta` joins the options
+  taken from the scheme. `--scheme legacy`, or `--q-centre-mode legacy
+  --q-centre-theta 0.9`, restores the previous Q-centring. On Carlisle res-18
+  this lowers the water stored at 12 h from 12.2 to 8.9 Mm³ (standard; 20 m
+  Cartesian reference 6.1) and from 11.3 to 8.0 Mm³ (SGS). Local WSE extrema
+  on Carlisle rise from 2.7% to 6.6% (standard; rms residual 61 → 41 mm) and
+  fall from 1.2% to 0.4% (SGS).
+
+#### Found
+- ⚠ **Q-centring partners are sign-reversed on A5.** `_q_centred` adds the
+  stored fluxes of each edge's two "most collinear" faces, but edges are
+  oriented from the lower to the higher cell index and A5 cell order is not
+  geometric, so 67–68% of partners have the opposite orientation (0% on
+  Cartesian grids). On A5 the scheme therefore acts mostly as a resistance of
+  order (1−θ)/dt: in the frozen-coefficient test steady sheet-flow conveyance
+  is 16% (dt 1 s) and 26% (dt 5 s) of the Manning value; on Carlisle res-18
+  the domain stores about twice the water of a 20 m Cartesian grid on the
+  same DEM and forcing, and more as dt is reduced. This affects every A5 run
+  with θ < 1 (the default 0.9), standard and SGS.
+
+#### Added
+- `--q-centre-mode legacy|oriented|consistent` (`q_centre_mode`, new last
+  `FlowState` field with a backward-compatible constructor):
+  `oriented` corrects the partner signs (`_orient_collinear!`; signed indices
+  in `collinear_i/j`) — on pentagons the partners are not parallel and this
+  deflects the flow by up to 57°; `consistent` also maps each partner onto the
+  edge normal using the cell vectors (`_q_centred_consistent`): exact for
+  uniform flow (frozen test: conveyance within 0.1%, deflection < 0.4°),
+  identical to Q-centring on Cartesian grids, standard and SGS kernels.
+- `--courant C` (default 0.7).
+- `test/test_qcentre.jl` (in CI).
+
+### WP2b: the recommended scheme becomes the default (`wp2b-default-scheme`)
+
+#### Changed
+- ⚠ **New CLI defaults** (`--scheme recommended`, `scheme_options`): unset
+  options now take the recommended values for the flow model —
+  standard flow: `--gradient-correction on --face-flux-method diamond-wetdry
+  --friction-model vector --limiter hybrid --cfl-mode local`; SGS:
+  `--friction-model vector --cfl-mode local`. **`--scheme legacy` restores the
+  previous behaviour**; explicit flags always win. `run_flood_model` follows the
+  same rule (its option keywords default to `nothing` = "from the scheme");
+  `initialise_flow_model`'s own defaults stay legacy. The local CFL takes
+  ~20–65% more steps. Checks behind the choice (HYDRAULICS.md §15.3): open
+  boundaries (Carlisle inflows + rain; planar slope under rain), SGS on the
+  repaired Carlisle tables and under rain. Known trade-off: the diamond face
+  gradient adds interior velocity noise in shallow sheet flow (0.05 vs
+  0.015 m/s on the rained planar slope) while making the water surface
+  smoother and removing the directional bias.
+- `test/test_default_scheme.jl` (in CI).
+
+### WP3 (part 2): SGS on general meshes, and the SGS slot-order fix (`wp3b-sgs-general`)
+
+#### Fixed
+- ⚠ **SGS edge sills and R–A edge curves belonged to the wrong neighbour for
+  most cells** (`build_sgs_tables!`). The tables stored slots in
+  `grid_disk_neighbours` order (including cells outside the mesh), while the
+  solver reads slot *k* as the *k*-th entry of the cell's stored neighbour
+  list. Rebuilding the build-time order with pya5 0.7.3 showed the two differ
+  for 90–96% of cells (Carlisle res-16: 1,757 of 1,958; planar res-18: 15,879
+  of 16,567). Effect: wrong sills acted as phantom dams — on the synthetic
+  notch DEM the upstream pond rose to 2.4 m, nearly 1 m above the 1.505 m
+  embankment crest, before the fix, and fills to the notch and spills after
+  it. Affects every SGS result to date.
+  - Slots now follow the neighbour list, for any valence; tables carry
+    `static_vars["sgs_layout"] = 2`. `initialise_flow_model` refuses older SGS
+    tables (`FLOODA5_ALLOW_OLD_SGS_LAYOUT=1` overrides).
+  - `mesh/repair_sgs_slot_order.py` repairs existing meshes without the DEM
+    (needs pya5 0.x and the original 0.x mesh, e.g. `*_a5v0.parquet`); the
+    repaired Carlisle res-16 tables are bit-identical to a rebuild with the
+    fixed builder.
+- `test/synthetic_dem/test_sgs_synthetic.jl` now closes the domain boundaries,
+  as its assertions (and the T4 mass balance, which ignores outflow) assume;
+  it predates the open-boundary default. T0–T4 pass with the fixed tables.
+
+#### Added
+- SGS on meshes with more than five neighbours (`n_slots` from the mesh).
+  `test/test_sgs_general.jl` (in CI): SGS tables on a hexagonal mesh — sill
+  symmetry across every edge, curves within edge lengths, lake at rest, mass
+  balance, refusal of the old layout.
+
 ### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
 
 Work package WP2 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.2, §9).

@@ -260,7 +260,9 @@ recommendation and open items).
 
 | Flag | Default | Description |
 |---|---|---|
-| `--q-centre-theta N` | `0.9` | Spatial momentum-smoothing parameter θ for the Q-centred scheme (checkerboard suppression), range `[0.0, 1.0]`. `0.9` is the LISFLOOD-FP standard (light smoothing); `1.0` disables the scheme (pure Bates semi-implicit momentum — may reveal period-2 checkerboarding on fine/irregular meshes). |
+| `--q-centre-mode legacy\|oriented\|consistent` | `legacy` (`consistent` under `--scheme recommended`, standard flow) | (WP2c) How Q-centring uses its collinear partner faces. `legacy`: as stored — on A5 about two partners in three are oriented against the edge, which makes Q-centring a dt-dependent resistance (lower conveyance; `HYDRAULICS.md` §15.4). `oriented`: signs corrected, but pentagon partners are not parallel (deflects the flow). `consistent`: signs corrected and each partner mapped onto the edge normal — exact for uniform flow. All three are identical on Cartesian grids. |
+| `--courant C` | `0.7` | Courant number of the adaptive timestep, in (0, 1]. |
+| `--q-centre-theta N` | `0.9` (`1` under `--scheme recommended`, SGS) | Spatial momentum-smoothing parameter θ for the Q-centred scheme (checkerboard suppression), range `[0.0, 1.0]`. `0.9` is the LISFLOOD-FP standard (light smoothing); `1.0` disables the scheme (pure Bates semi-implicit momentum — may reveal period-2 checkerboarding on fine/irregular meshes). |
 | `--gradient-correction on\|off` | `off` | Enables the WLSQ non-orthogonal gradient correction in place of the legacy `cos θ`-only scaling. When `on`, the driving-head term is constructed by `--face-flux-method` below. Must be given an explicit `on`/`off` value (a bare flag is an error, to avoid accidentally swallowing the next argument). |
 | `--gradient-correction-alpha N` | `1.0` | Only applies when `--gradient-correction on --face-flux-method legacy`. Scales the tangential (non-orthogonal) correction term. `1.0` = full over-relaxed correction; `0.0` = orthogonal-only correction (direct WSE-difference term alone, no tangential term). **`0.0` is the empirically more stable interim setting** found during real-mesh testing (see `HYDRAULICS.md` §8) — `1.0` gives a larger correction but has been observed to overshoot into a mirrored bias under sustained ponding. Has no effect with `--face-flux-method diamond`. |
 | `--face-flux-method legacy\|diamond\|diamond-wetdry` | `legacy` | Only applies when `--gradient-correction on`. Selects how the corrected driving head is constructed. `legacy`: cell-centred WLSQ gradient, averaged onto the face, then skewness-corrected. `diamond`: face-local reconstruction built directly from the two adjacent cell centres and the edge's own two shared vertices, with no cell-averaged-then-shared gradient. Proven exact for linear fields; falls back to `legacy` automatically on any individual edge whose diamond geometry is degenerate (rare, confined to AOI-boundary vertices — see `HYDRAULICS.md` §7). |
@@ -274,12 +276,21 @@ recommendation and open items).
 `--face-flux-method diamond-wetdry` (WP2) is `diamond` with the two-point face
 gradient wherever an edge's vertex stencil includes a dry cell.
 
-**Recommended experimental configuration** (opt-in, not default — see
-`HYDRAULICS.md` §15 for the evidence and caveats; it replaces the earlier
-`--momentum-model cell` recommendation, which checkerboards on real terrain):
-```
---flow-model standard --gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local
-```
+**Defaults (since 2026-10-21): `--scheme recommended`.** Any of
+`--gradient-correction`, `--face-flux-method`, `--friction-model`,
+`--limiter`, `--cfl-mode`, `--momentum-model`, `--q-centre-mode` and `--q-centre-theta` that you do not give takes
+the recommended value for the flow model; explicit flags always win, and
+`--scheme legacy` restores the pre-2026-10 behaviour exactly.
+
+| Flow model | `--scheme recommended` (default) |
+|---|---|
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1` |
+
+See `HYDRAULICS.md` §15.3 for the checks and the one known trade-off (the
+diamond gradient adds velocity noise in shallow sheet flow). The defaults
+listed in the table above for the individual flags are their `--scheme legacy`
+values.
 
 ### 4.4 Water source options
 

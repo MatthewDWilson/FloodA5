@@ -692,3 +692,146 @@ clean, at about 2.4× the steps (local CFL):
 at res-20. The review's θ-blend and positivity replacements are not usable as
 proposed.
 
+### 15.3 Defaults (2026-10-21) and the checks behind them
+
+Since WP2b the CLI default is `--scheme recommended` (`scheme_options` in
+`FloodModel.jl`; `--scheme legacy` restores the earlier behaviour):
+
+| Flow model | Recommended options |
+|---|---|
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| SGS | `--friction-model vector --cfl-mode local --q-centre-theta 1` (legacy limiter, no gradient correction) |
+
+(Q-centring entries added by WP2c, §15.4; the checks below predate them.)
+
+**SGS tables were wrong before 2026-10-21.** `build_sgs_tables!` stored edge
+sills and R–A curves in `grid_disk` order while the solver reads them in
+neighbour-list order; the two differ for 90–96% of A5 cells, so most edges used
+another neighbour's sill and curves (phantom dams — on the synthetic notch DEM
+the pond rose ~1 m above the embankment crest). Fixed in WP3 part 2; existing
+meshes are refused until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
+SGS results obtained before then should be treated as affected.
+
+**SGS choice** (Carlisle res-18, repaired tables, inflows + 10 mm/h, 12 h;
+local WSE extrema / rms WSE residual at the end): default 1.4% / 188 mm;
+vector 1.1% / 189 mm; **vector + local CFL 1.2% / 147 mm**; + hybrid 1.2% /
+130 mm; + gradient correction 4.6% (noisier — the legacy WLSQ correction is
+unvalidated under SGS, §9.4); hybrid alone spiked (velocity 4 m/s) — under SGS
+it is positivity-only scaling, as the R–A kernel has no per-edge volume
+limiter. Planar slope under 20 mm/h rain (open boundaries, 6 h): plume
+deflection −2.3° (default) vs −0.2° (vector + local), extrema 0.11% vs 0.09%.
+
+**Open boundaries, standard flow.** Carlisle (inflows + rain; free and
+zero-gradient boundaries) is stable at res-18 and res-20 (§15.2). Planar slope
+under 20 mm/h rain (0.4–0.5 Mm³ leaves through the boundaries): mass balance
+exact; N/S asymmetry +0.032 / +3.5° (default) vs −0.004 / −0.5° (recommended);
+local WSE extrema 4.4% vs 2.4%. Ghost (boundary) edges still use the component
+kernel; the noise near the boundary is the same for both configurations.
+
+**Known trade-off.** On the rained planar slope the recommended set has more
+interior velocity noise (0.056 vs 0.015 m/s rms cell-to-neighbour difference).
+Single-change runs attribute all of it to the diamond face gradient (diamond
+alone 0.054; vector 0.014, hybrid 0.015, local CFL 0.015), consistent with
+Carlisle (§15.2). The water surface is nevertheless smoother, and the diamond
+gradient is what removes the A5 directional bias, so it stays in the default;
+reducing its flux noise is an open item, alongside a stable mesh-general
+replacement for Q-centring.
+
+### 15.4 Q-centring on A5 (WP2c, 2026-10-22)
+
+**The defect.** `_q_centred` adds the stored discharges of each edge's two
+"most collinear" faces. Stored discharges are signed by edge orientation, and
+`_build_edge_list` orients edges from the lower to the higher cell index —
+geometric on a row-major Cartesian grid, arbitrary on A5. 67% (Carlisle
+res-18) and 68% (planar res-18) of partners are reversed (Cartesian 0%), so on
+A5 the partner term mostly *opposes* the edge's own flux. In the steady state
+q(1−θ+F) = (1−θ)·q̄_partner + G (F = g·dt·n²|q|/h^{7/3}, ≈ 0.02 for 0.5 m sheet
+flow at dt = 5 s) the partner term dominates whenever F ≪ 1−θ, which is the
+usual case.
+
+**Frozen-coefficient test** (planar res-16, h = 0.5 m, S = 10⁻⁴, diamond +
+vector friction, 36 bearings; `test/frozen_isotropy_lib.jl`; friction balance
+10.50):
+
+| Q-centring | dt | conveyance | max mean deflection | cell rms |
+|---|---|---|---|---|
+| none (θ = 1) | 1, 5 s | 10.50 | 0.0° | 0.0° |
+| legacy θ = 0.9 | 1 s | **1.67** | 12.7° | 75° |
+| legacy θ = 0.9 | 5 s | **2.72** | 6.7° | 36° |
+| oriented θ = 0.9 | 5 s | – | 57° | 30° |
+| blend θ = 0.9 | 1, 5 s | 10.50 | 0.1° | 0.2° |
+| consistent θ = 0.9 | 1 s / 5 s | 10.49 / 10.50 | 0.3° / 0.15° | 0.25° / 0.18° |
+
+Oriented partners are worse: on a pentagon the partner face is ~36° off the
+edge, and once the partner term dominates, the edge copies a rotated flux.
+**Consistent Q-centring** takes from each oriented partner only the component
+along its own normal m and the remainder from the cell vectors,
+q_est = s·q_p·(m·n_e) − Ū·(n_e − (m·n_e)·m) — exact for uniform flow, and
+exactly LISFLOOD-FP's Q-centring when m = n_e (Cartesian).
+
+**Carlisle res-18**, standard flow, recommended scheme unless stated, inflows +
+10 mm/h, 12 h (`test/run_jobs.sh`; `test/wp2_checkerboard.jl`): water stored in
+the domain at 12 h (Mm³; inflow + rain ≈ 14.6) at Courant 0.7 / 0.35, and
+local WSE extrema at Courant 0.7. Reference: raster-aligned 20 m Cartesian
+grid on the same DEM (`--meshgen-cartesian`, LiDAR averaged to 20 m), where
+Q-centring is correctly oriented.
+
+| run | stored, C 0.7 / 0.35 | extrema | r_rms | dv_rms |
+|---|---|---|---|---|
+| Cartesian 20 m, legacy scheme θ 0.9 | 5.7 / 8.9 | – | – | – |
+| Cartesian 20 m, recommended θ 0.9 | 6.1 / 7.5 | – | – | – |
+| Cartesian 20 m, legacy scheme θ 1 | 4.9 / 3.5 | – | – | – |
+| A5, legacy scheme, legacy QC | **11.3 / 12.8** | 0.6% | 43 mm | 0.10 |
+| A5, legacy QC | **12.2 / 13.0** | 2.7% | 61 mm | 0.16 |
+| A5, consistent QC | 8.9 / **7.7** | 6.6% | 41 mm | 0.22 |
+| A5, θ = 1 | 6.9 / 5.4 | 15.5% | 85 mm | 0.39 |
+| A5, blend θ 0.9 / 0.7 / 0.5 | – | 7.3 / 17.1 / 22.3% | – | – |
+| A5, oriented QC | – | 24.2% | 54 mm | 0.38 |
+
+A5 with legacy Q-centring holds about twice the water of the Cartesian
+reference, and more as dt is reduced (its damping grows like 1/dt);
+consistent Q-centring is within 2% of the Cartesian recommended run at
+Courant 0.35. Even on Cartesian, storage changes by up to ~50% between Courant
+0.7 and 0.35 (in opposite directions for θ = 0.9 and θ = 1): Carlisle results
+are dt-sensitive in general, which needs its own study. On the rained planar
+slope (§15.3) interior mean depth at 6 h is 0.0722 m (legacy QC), 0.0648 m
+(consistent), 0.0601 m (θ = 1) against a dt-converged 0.059 m (θ = 1 at
+Courant 0.5 and 0.35); consistent QC gives the best symmetry of all runs
+(asym −0.0003) and 1.5% local extrema (legacy QC 2.4%, θ = 1 5.6%).
+
+**Why θ = 1 checkerboards.** Linear analysis of the forward–backward update:
+for the symmetric two-point operator all modes are neutral (|z| = 1) up to
+κ = g·h·dt²·λ = 4, i.e. the critical Courant number is 0.707 on Cartesian and
+0.85–0.88 on A5 (power iteration on the actual operator). The diamond
+operator is not symmetric: on planar res-16, 190 of 1109 eigenvalues are
+complex and the frictionless growth is 1.0063 per step at Courant 0.7 (two-
+point 1.0000); mixing a fraction ω of the two-point jump reduces but does not
+remove it (1.0018 at ω = 0.25). Bed friction outweighs this in shallow water
+but not in the deep channel, where the checkerboard sits (17–24% of cells
+deeper than 1 m). Even pure two-point fluxes with θ = 1 checkerboard on
+Carlisle (8.6%): the neutral modes, once excited, are barely damped in deep
+water. Some damping is therefore needed — the original purpose of
+Q-centring — and on A5 it must not cost conveyance.
+
+**Tried and rejected** (prototypes, not in the code): a two-level time filter
+q_eff = (1−α)qⁿ + αqⁿ⁻¹ (damps all modes but lowers the stability limit to
+κ ≤ 4(1−α); Carlisle 6–7% extrema); damping towards a running mean
+(Carlisle 1.7% extrema, but planar depth +14–20% and doubled velocity noise);
+consistent QC + running-mean damping (5.1%); smaller Courant numbers alone
+(θ = 1: 10% at 0.35).
+
+**SGS** (Carlisle res-18, SGS tables repaired, recommended SGS options, 12 h):
+legacy QC 1.2% extrema, r_rms 147 mm, stored 11.3 Mm³; θ = 1 0.4%, 131 mm,
+8.0 Mm³ (velocity noise 0.118 vs 0.057 m/s); consistent QC 5.5%, 131 mm,
+10.3 Mm³; oriented 3.1%, 120 mm, 11.4 Mm³. The R–A kernel uses the
+symmetric two-point gradient, and there θ = 1 is clean.
+
+**Decision (2026-10-22).** `--scheme recommended` uses consistent
+Q-centring (θ = 0.9) for standard flow and θ = 1 for SGS. Consistent
+Q-centring fixes the conveyance defect and is the most accurate option on the
+planar tests and against the Cartesian reference, at the cost of more local
+WSE extrema on Carlisle (6.6% vs 2.7%) with a smoother surface overall (r_rms
+41 vs 61 mm). Open: a damping of the deep-water grid modes that costs no
+conveyance (or a symmetric diamond form), and the dt-sensitivity of the
+Carlisle results seen on both meshes.
+
