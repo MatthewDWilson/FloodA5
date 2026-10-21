@@ -39,6 +39,45 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP4 stage 2: kernels, cell order, non-allocating threads (`wp4b-stage2`)
+
+#### Changed
+- ⚠ **Cells are kept in spatial (Morton) order during the simulation**
+  (`--cell-order spatial`, the new default; `--cell-order file` keeps the
+  mesh file's order). Neighbouring cells sit close together in memory, which
+  makes a Carlisle res-18 step ~1.4–1.7× faster. HDF5 output is still written
+  in the file's cell order. Results change at round-off level only — but see
+  HYDRAULICS.md §15.5: with the default standard-flow options, round-off
+  differences grow to centimetres in noisy deep-channel cells (SGS: 10⁻⁵ m).
+  Not applied with legacy Q-centring (`--scheme legacy`), whose result depends
+  on edge orientation and hence on cell order.
+- Phases B and C (volume scatter and update) are one threaded per-cell gather
+  over a cell→edge CSR in edge order; the per-edge donor cap moved into Phase
+  A; the positivity limiter's totals are gathered too. Bit-identical.
+- The edge flux loops are kernels (`surfacewater/kernels.jl`: `StdOpts`/
+  `SGSOpts` options as type parameters, arrays passed explicitly) — the form
+  the GPU backend (WP5) will launch. Bit-identical.
+- Threaded loops in the time step use Polyester `@batch per=core` instead of
+  `Threads.@threads`: no per-step allocation (0.7–2 KB/step, was 15–20 KB).
+  `per=core` matters: Polyester's default spins on every logical core and,
+  under `--threads auto`, made steps ~4× slower. Polyester is now a direct
+  dependency (it was already in the Manifest).
+
+#### Added
+- `surfacewater/reference_steps.jl`: frozen copies of the stage-1
+  `step_standard!`/`step_sgs!` (`step_*_reference!`); `test/test_wp4_stage2.jl`
+  checks the restructured steps against them bit for bit, and the cell order.
+- `--cell-order spatial|file`; `spatial_cell_order`, `permute_mesh`. With a
+  spatial order, SGS HDF5 output also records `/mesh/edge_cells` (each edge's
+  two cells, file-order indices) because `flux_Q` follows the internal edges.
+
+#### Performance (Carlisle res-18, 8 threads, against stage 1)
+- Step (wet state): standard 4.0 → 2.4–2.9 ms, SGS 17.8 → 9.9–10.7 ms.
+- Inflows + rain, 2 h: standard simulation 14.5 → 11.5–13.5 s, SGS 57 → 39–41 s.
+- WP0 point source (`--threads auto`, legacy scheme, file order): unchanged
+  (standard 3.2 → 2.9 s, SGS 3.9 → 4.3 s); now dominated by start-up and
+  first-call compilation.
+
 ### WP4 stage 1: CPU performance (`wp4-cpu-perf`)
 
 Results are unchanged: determinism fingerprints identical (1 and 4 threads),

@@ -835,3 +835,24 @@ WSE extrema on Carlisle (6.6% vs 2.7%) with a smoother surface overall (r_rms
 conveyance (or a symmetric diamond form), and the dt-sensitivity of the
 Carlisle results seen on both meshes.
 
+### 15.5 Sensitivity to round-off (WP4 stage 2, 2026-10-23)
+
+Running the same Carlisle res-18 case (inflows + 10 mm/h, 2 h, default
+options) with the cells in two different memory orders changes only the order
+of floating-point summations. The two runs then differ by:
+
+| | rms depth diff. (wet cells) | max depth diff. | cells > 1 cm | max speed diff. | total storage |
+|---|---|---|---|---|---|
+| SGS | 2×10⁻⁵ m | 2×10⁻³ m | 0 | 2×10⁻³ m/s | identical to 10⁻⁷ |
+| standard | 1.3×10⁻² m | 0.29 m | 348 of 4,545 | 6.5 m/s | 0.02% |
+
+SGS is robust. The standard solver amplifies round-off to centimetres in the
+deep channel: the grid-scale water-surface noise there (§15.4) is not a fixed
+pattern but a weakly unstable, chaotic one, bounded only by the limiters.
+Integral quantities are unaffected, but point values in those cells (and in
+any comparison between runs, branches or machines) are not reproducible below
+the noise level. This is the same weakness as the deep-channel extrema and the
+Courant sensitivity, and the strongest argument yet for a conveyance-neutral
+damping of those modes (§15.4, open). Until then, compare standard-flow runs
+through integral or smoothed quantities.
+

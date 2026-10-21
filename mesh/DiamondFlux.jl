@@ -401,7 +401,7 @@ function diamond_vertex_eta!(veta::Vector{Float64}, table::DiamondFluxTable,
     nv = length(table.vertices)
     length(veta) == nv || resize!(veta, nv)
     vptr = table.vptr; vcell = table.vcell; vw = table.vw; vnan = table.vnan
-    @batch for v in 1:nv
+    @batch per=core for v in 1:nv
         @inbounds if vnan[v]
             veta[v] = NaN
         else
@@ -426,7 +426,7 @@ function diamond_vertex_wet!(vwet::Vector{Bool}, table::DiamondFluxTable,
     nv = length(table.vertices)
     length(vwet) == nv || resize!(vwet, nv)
     vptr = table.vptr; vcell = table.vcell
-    @batch for v in 1:nv
+    @batch per=core for v in 1:nv
         w = true
         @inbounds for k in vptr[v]:vptr[v + 1] - 1
             depth[vcell[k]] > h_dry || (w = false; break)

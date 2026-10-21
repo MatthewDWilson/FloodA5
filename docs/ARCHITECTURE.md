@@ -24,6 +24,8 @@ mesh/a5_bridge.py      Python subprocess: pya5 calls (0.x and 1.x), GeoParquet I
 mesh/migrate_mesh_ids.py   pya5 0.x → 1.x cell-ID migration (A5_QUIRKS.md §11)
 mesh/mesh_families.py  Generic polygon meshes: hex, rotated Cartesian, Voronoi, import
 surfacewater/flow2d.jl Pure physics kernels (Bates, Manning R-A, CFL)
+surfacewater/kernels.jl  Per-edge time-step kernels (StdOpts/SGSOpts type parameters)
+surfacewater/reference_steps.jl  Frozen reference step functions (bit-equality tests)
 boundaryinputs/        Source types, BC types, hydrograph I/O
 visualisation/         CesiumJS and GLMakie backends, post-processing tools
 ```
@@ -501,14 +503,23 @@ resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`
   ever crashes with a low-level fault rather than a Julia error, retry with
   `--threads 1`.
 - **Simulation loop** — safe with any thread count, and (since WP0, 2026-10)
-  deterministic across thread counts. The edge flux loop uses
-  `Threads.@threads` over the `EdgeList`; each iteration writes only its own
-  edge's slots (`edge_vol[e]`, `edges.flux[e]`), and Q-centring reads a
-  start-of-step snapshot of the momentum array rather than the live array.
-  (Before WP0 it read the live array, which other threads were overwriting —
-  a data race that made results depend on edge order and thread scheduling.)
-  The cell-volume scatter is serial; `_compute_velocity!` is a per-cell gather.
-  `test/check_determinism.jl` verifies identical results for 1 vs N threads.
+  deterministic across thread counts. Since WP4 stage 2 every phase is either
+  a per-edge kernel (`surfacewater/kernels.jl`) that writes only its own
+  edge's slots, or a per-cell gather over a cell→edge CSR in edge order (the
+  volume update, positivity totals, velocity, cell vectors) — no shared
+  writes, no atomics, the same summation order as a serial loop. Q-centring
+  reads a start-of-step snapshot of the momentum array. Loops use Polyester
+  `@batch per=core` (non-allocating; `per=core` avoids spinning on every
+  logical core). Kernel helpers must accept `AbstractVector`, since
+  Polyester passes captured arrays as `PtrArray`s.
+  `test/check_determinism.jl` verifies identical results for 1 vs N threads,
+  and `test/test_wp4_stage2.jl` checks the steps against the frozen
+  `step_*_reference!` copies.
+- **Cell order** — `run_flood_model` permutes the mesh into a spatial
+  (Morton) order before building the flow model (`--cell-order`); output is
+  mapped back to the file's order (`SimOutput.perm`). Edge orientation
+  (`cell_i < cell_j`) therefore follows the internal order, which is why the
+  order is not changed under legacy (orientation-dependent) Q-centring.
 - **Ghost-edge Phase E** — serial (ghost edges are owned by single cells).
 - **Cell queries** (`lonlat_to_cell` etc.) — thread-safe via `ReentrantLock(_pycall_lock)`.
 
