@@ -176,11 +176,14 @@ frame can be misleadingly noisy or, conversely, misleadingly clean — see
 
 **Recorded result** (resolution 16, closed boundaries): baseline `|asymmetry|`
 rises to 0.25 by the end of a 2-hour run; with gradient correction, it stays
-below 0.07 throughout. Best combination tested to date
-(`--face-flux-method diamond --momentum-model cell`) reaches ~0.61 on a
-harder, sustained-ponding resolution-18 configuration — see
-`docs/HYDRAULICS.md` §8 for the full comparison table and the important
-caveat that none of this fully eliminates the bias.
+below 0.07 throughout. On the harder 72 000 s resolution-18 configuration
+(baseline 0.866), `--face-flux-method diamond --momentum-model cell` reached
+~0.61 before WP0 (0.28 when re-run since). With vector friction (WP1,
+2026-10) `diamond-wetdry` + `--friction-model vector` + `--limiter hybrid
+--cfl-mode local` reaches 0.05, and the residual decreases with refinement —
+see `docs/HYDRAULICS.md` §15 for the full matrix and `test/wp1_metrics.jl`
+for the metrics (including the plume-deflection angle, which is less
+sensitive than the N/S split to how coarse cells straddle the source).
 
 ---
 

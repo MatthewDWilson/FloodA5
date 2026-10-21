@@ -34,9 +34,10 @@ fully resolves the bias on its own.
 ## [Unreleased]
 
 WP0 and the `cartesian-formulation` work it is based on were merged to `main`
-on 2026-10-20; WP1 and WP2 are on their own branches. No version number
-assigned yet; under `VERSIONING.md`'s policy the new CLI flags make this a
-MINOR bump (likely 0.2.0), to be decided by the maintainer.
+on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
+`wp-integration` branch. No version number assigned yet; under
+`VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
+0.2.0), to be decided by the maintainer.
 
 ### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
 
