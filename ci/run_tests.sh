@@ -15,6 +15,7 @@ TESTS=(
   test/test_sgs_general.jl
   test/test_default_scheme.jl
   test/test_qcentre.jl
+  test/test_wp4_equivalence.jl
   test/test_wp1_vector_friction.jl
   test/test_wp2_momentum_limiters.jl
   test/test_edge_geometry.jl

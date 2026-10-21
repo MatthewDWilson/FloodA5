@@ -63,7 +63,13 @@ not occur for a genuine mesh vertex).
     # caller could not detect. Return NaN so diamond_dWSE_n falls back to the
     # legacy construction for that edge, as its docstring already promised.
     rec.fallback === :degenerate && return NaN
-    return dot(rec.weights, view(eta_cell, rec.cell_indices))
+    # Explicit loop (WP4): the same summation order as LinearAlgebra's generic
+    # dot (s = 0; s += w_k·η_k in order), without the view — bit-identical.
+    s = 0.0
+    @inbounds for k in eachindex(rec.weights)
+        s += rec.weights[k] * eta_cell[rec.cell_indices[k]]
+    end
+    return s
 end
 
 """
@@ -195,6 +201,39 @@ struct DiamondFluxTable
     c_j          :: Vector{Float64}
     c_vb         :: Vector{Float64}
     valid        :: BitVector
+    # WP4 (2026-10): the vertex records as a vector, and each edge's two
+    # vertices as indices into it (0 where the edge has no valid record), so
+    # the solver can evaluate every vertex once per step instead of two Dict
+    # lookups per edge per use. Built by the 8-argument constructor below.
+    vertices     :: Vector{VertexRecord}
+    va_idx       :: Vector{Int}
+    vb_idx       :: Vector{Int}
+    # The same records flattened (CSR) for the per-step vertex pass: vertex v
+    # uses vcell/vw[vptr[v]:vptr[v+1]-1]; vnan[v] marks records whose η is
+    # NaN (empty, or :degenerate) — see eta_at_vertex.
+    vptr         :: Vector{Int}
+    vcell        :: Vector{Int}
+    vw           :: Vector{Float64}
+    vnan         :: Vector{Bool}
+end
+
+function DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, valid)
+    keys_sorted = sort!(collect(keys(vertex_table)))
+    pos = Dict(k => v for (v, k) in enumerate(keys_sorted))
+    vertices = [vertex_table[k] for k in keys_sorted]
+    ne = length(valid)
+    va_idx = zeros(Int, ne); vb_idx = zeros(Int, ne)
+    for e in 1:ne
+        valid[e] || continue
+        va_idx[e] = pos[va_key[e]]; vb_idx[e] = pos[vb_key[e]]
+    end
+    vptr = Vector{Int}(undef, length(vertices) + 1); vptr[1] = 1
+    for (v, r) in enumerate(vertices); vptr[v + 1] = vptr[v] + length(r.cell_indices); end
+    vcell = reduce(vcat, (r.cell_indices for r in vertices); init = Int[])
+    vw    = reduce(vcat, (r.weights for r in vertices); init = Float64[])
+    vnan  = [isempty(r.cell_indices) || r.fallback === :degenerate for r in vertices]
+    return DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, valid,
+                            vertices, va_idx, vb_idx, vptr, vcell, vw, vnan)
 end
 
 """
@@ -349,6 +388,83 @@ that one edge in that case.
     dn = table.c_i[e]*wse_ci + table.c_va[e]*eta_va +
          table.c_j[e]*wse_cj + table.c_vb[e]*eta_vb
     return -L_e * dn
+end
+
+"""
+    diamond_vertex_eta!(veta, table, wse_all) -> veta
+
+η at every vertex for this step (`eta_at_vertex` of each record; NaN where
+it is undefined). Threaded; writes only `veta[v]`. WP4 (2026-10).
+"""
+function diamond_vertex_eta!(veta::Vector{Float64}, table::DiamondFluxTable,
+                             wse_all::Vector{Float64})
+    nv = length(table.vertices)
+    length(veta) == nv || resize!(veta, nv)
+    vptr = table.vptr; vcell = table.vcell; vw = table.vw; vnan = table.vnan
+    Threads.@threads for v in 1:nv
+        @inbounds if vnan[v]
+            veta[v] = NaN
+        else
+            s = 0.0                          # same order as eta_at_vertex
+            for k in vptr[v]:vptr[v + 1] - 1
+                s += vw[k] * wse_all[vcell[k]]
+            end
+            veta[v] = s
+        end
+    end
+    return veta
+end
+
+"""
+    diamond_vertex_wet!(vwet, table, depth, h_dry) -> vwet
+
+`vwet[v]` = every cell of vertex v's stencil has depth > `h_dry`. Threaded;
+WP4 (2026-10).
+"""
+function diamond_vertex_wet!(vwet::Vector{Bool}, table::DiamondFluxTable,
+                             depth::Vector{Float64}, h_dry::Float64)
+    nv = length(table.vertices)
+    length(vwet) == nv || resize!(vwet, nv)
+    vptr = table.vptr; vcell = table.vcell
+    Threads.@threads for v in 1:nv
+        w = true
+        @inbounds for k in vptr[v]:vptr[v + 1] - 1
+            depth[vcell[k]] > h_dry || (w = false; break)
+        end
+        @inbounds vwet[v] = w
+    end
+    return vwet
+end
+
+"""
+    diamond_dWSE_n_v(table, e, wse_ci, wse_cj, veta, L_e) -> Float64
+
+`diamond_dWSE_n` with the vertex values precomputed by `diamond_vertex_eta!`
+(bit-identical: the same `eta_at_vertex` results, the same arithmetic).
+"""
+@inline function diamond_dWSE_n_v(table::DiamondFluxTable, e::Int,
+                                  wse_ci::Float64, wse_cj::Float64,
+                                  veta::Vector{Float64}, L_e::Float64)::Float64
+    @inbounds begin
+        table.valid[e] || return NaN
+        eta_va = veta[table.va_idx[e]]
+        eta_vb = veta[table.vb_idx[e]]
+        (isnan(eta_va) || isnan(eta_vb)) && return NaN
+        dn = table.c_i[e]*wse_ci + table.c_va[e]*eta_va +
+             table.c_j[e]*wse_cj + table.c_vb[e]*eta_vb
+        return -L_e * dn
+    end
+end
+
+"""
+    diamond_stencil_wet_v(table, e, vwet) -> Bool
+
+`diamond_stencil_wet` with the per-vertex flags from `diamond_vertex_wet!`.
+"""
+@inline function diamond_stencil_wet_v(table::DiamondFluxTable, e::Int,
+                                       vwet::Vector{Bool})::Bool
+    @inbounds table.valid[e] || return false
+    @inbounds return vwet[table.va_idx[e]] && vwet[table.vb_idx[e]]
 end
 
 """

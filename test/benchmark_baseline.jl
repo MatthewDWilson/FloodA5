@@ -68,6 +68,9 @@ configs = [
     ("std diamond",          (; gradient_correction = true, face_flux_method = :diamond)),
     ("std diamond + cell",   (; gradient_correction = true, face_flux_method = :diamond,
                                 momentum_model = :cell)),
+    # WP4 (2026-10): the current defaults
+    ("std recommended",      scheme_options(:recommended, :standard)),
+    ("std legacy scheme",    scheme_options(:legacy, :standard)),
 ]
 
 println("FloodA5 step benchmark — $(NSIDE)×$(NSIDE) Cartesian cells, $NSTEPS steps, " *

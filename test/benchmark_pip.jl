@@ -146,7 +146,7 @@ function run_pip_benchmarks()
     println("\n", "="^72)
     println("  PIP Benchmark — $(Dates.now())")
     println("  Julia threads: $(Threads.nthreads())")
-    println("  CUDA available: $(A5Grid._cuda_available[])")
+    println("  CUDA available: $(A5Grid._gpu_available())")
     println("="^72, "\n")
 
     # Ring: circle ~0.5° radius centred on Christchurch
@@ -180,7 +180,7 @@ function run_pip_benchmarks()
         @printf "  CPU-parallel: %7.2f ms  ±%-6.2f ms  (%6.1f M pts/s)\n" med iqr_ tp
 
         # ── GPU (transfer-included) ──
-        if A5Grid._cuda_available[]
+        if A5Grid._gpu_available()
             # Kernels referenced by name — defined at module scope above.
             b = @benchmark begin
                 _dl = CUDA.CuArray($lons)
@@ -239,7 +239,7 @@ function run_pipeline_benchmarks()
         t0 = time_ns()
         mesh = A5Grid.mesh_for_aoi(aoi_path, res)
         elapsed_ms = (time_ns() - t0) / 1e6
-        backend = A5Grid._cuda_available[] ? "GPU" : "CPU-∥"
+        backend = A5Grid._gpu_available() ? "GPU" : "CPU-∥"
         @printf "  Resolution %2d: %5d cells  %7.0f ms  [%s]\n" res length(mesh) elapsed_ms backend
         push!(results, (resolution=res, cells=length(mesh), ms=elapsed_ms, backend=backend))
     end

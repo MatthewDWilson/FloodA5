@@ -39,6 +39,45 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP4 stage 1: CPU performance (`wp4-cpu-perf`)
+
+Results are unchanged: determinism fingerprints identical (1 and 4 threads),
+Carlisle res-18 standard and SGS outputs identical frame by frame
+(max |Δ| = 0), `test/test_wp4_equivalence.jl` checks each fast path against
+the code it replaces.
+
+#### Changed
+- `FlowState.sgs_tables`, `ghost_edges`, `ghost_cell_bc` and `diamond_table`
+  are concretely typed (were `Any`; `mesh/DiamondFlux.jl` is now included
+  before `FlowState`). Fixes per-edge dynamic dispatch, e.g. SGS CFL 12 → 0.1 ms.
+- Per-step work arrays live in a reused `StepWorkspace` (new last `FlowState`
+  field, backward-compatible constructor); SGS edge slots precomputed; one
+  bracket search per side for the SGS area and radius
+  (`A5Grid.edge_area_radius`); the unused SGS wetted-area pass removed.
+- Diamond face gradient: vertex values computed once per vertex per step from
+  a flat (CSR) vertex table (`diamond_vertex_eta!`/`_wet!`) instead of two
+  Dict lookups per edge per use.
+- Dry edges (max WSE − sill ≤ HFLOW_THRESHOLD, where both kernels return
+  zero) skip the momentum and gradient work.
+- Velocity is computed only for written or visualised steps
+  (`step_standard!/step_sgs!(…; velocity = false)` from `run_simulation!`).
+- Ghost edges updated in place; `_positivity_scale!` takes a work buffer.
+- GeoParquet loading passes columns as binary arrays instead of JSON text:
+  Carlisle res-18 SGS mesh load 75 → 4.5 s (identical mesh).
+- CUDA is loaded on first GPU-sized point-in-polygon call, not at start-up
+  (`FLOODA5_NO_CUDA=1` skips it): `include("FloodModel.jl")` 11.4 → 6.4 s.
+- The per-10-step debug volume line is now printed every 500 steps.
+
+#### Performance (Carlisle res-18, 8 threads, against `main` the same day)
+- Inflows + rain, 2 h, `--scheme recommended`: standard simulation
+  57.9 → 14.5 s (4.0×), SGS 169 → 57 s (3.0×); SGS total wall 4 m 7 s → 1 m 4 s.
+- WP0 point-source benchmark (`--scheme legacy --gradient-correction off`,
+  10 h): SGS total wall 1 m 48 s → 10.5 s (10.3×; simulation 8.0×);
+  standard simulation 4.8 → 3.2 s (now dominated by first-call compilation
+  and HDF5 output).
+- Allocation per step 1.6–3.1 MB (standard) and 13.9 MB (SGS) → 12–24 KB at 8
+  threads (task overhead of the threaded loops; 2–4 KB single-threaded).
+
 ### WP2c: Q-centring on A5 (`wp2c-qcentre`)
 
 Evidence: `docs/HYDRAULICS.md` §15.4.

@@ -302,6 +302,34 @@ struct EdgeList
     nf_y         :: Vector{Float64}    # face normal y-component (dimensionless)
 end
 
+# DiamondFluxTable (needs only A5Cell and EdgeList) is defined here, before
+# FlowState, so that FlowState.diamond_table can be concretely typed (WP4:
+# an `Any` field read in the threaded edge loop costs a dynamic dispatch per
+# edge per step).
+include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
+
+"""
+    StepWorkspace
+
+Per-step work arrays reused across steps (WP4, 2026-10), sized lazily by
+`_workspace!` from the state's cell and edge counts. Contents are scratch:
+nothing in them carries over from one step to the next, except the SGS
+edge slots (`slot_i`/`slot_j`, built once from `adj_matrix`).
+"""
+mutable struct StepWorkspace
+    edge_vol  :: Vector{Float64}   # signed edge volume this step (ne)
+    flux_prev :: Vector{Float64}   # start-of-step snapshot of the momentum array (ne)
+    dV        :: Vector{Float64}   # cell volume change (n)
+    wse       :: Vector{Float64}   # cell WSE (n)
+    out       :: Vector{Float64}   # positivity outflow totals (n)
+    slot_i    :: Vector{Int}       # adjacency slot of cell_j in cell_i's list (ne; SGS)
+    slot_j    :: Vector{Int}       # adjacency slot of cell_i in cell_j's list (ne; SGS)
+    veta      :: Vector{Float64}   # diamond vertex WSE this step (n_vertices)
+    vwet      :: Vector{Bool}      # diamond vertex stencil all wet (n_vertices)
+end
+StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
+                                Int[], Int[], Float64[], Bool[])
+
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
 # reference them directly.  The full boundary_conditions.jl (which builds on these types)
@@ -410,14 +438,14 @@ mutable struct FlowState
     adjacency   :: Dict{String, Vector{String}}  # cell_id → neighbour ids
     adj_matrix  :: Matrix{Int}       # (max_nb × n_cells) index matrix, 0=none
     edges       :: EdgeList          # all undirected edges, computed once
-    sgs_tables  :: Vector{Any}       # Vector{SGSTable} (SGSFlow) or empty
+    sgs_tables  :: Vector{SGSTable}  # SGSFlow tables, or empty (WP4: was Vector{Any})
     # ── Open boundary / ghost-edge fields (Feature 2) ────────────────────
     # These are populated by _build_ghost_edges() in initialise_flow_model.
     # If _build_ghost_edges has not been called (legacy construction), these
     # have safe empty/zero defaults so existing code is unaffected.
     boundary_mask  :: BitVector       # true = domain-edge cell (< max_neighbours)
-    ghost_edges    :: Vector{Any}     # Vector{GhostEdge} — one per missing edge slot
-    ghost_cell_bc  :: Vector{Any}     # Vector{BCType}    — BC type per ghost edge
+    ghost_edges    :: Vector{GhostEdge}  # one per missing edge slot (WP4: was Vector{Any})
+    ghost_cell_bc  :: Vector{BCType}     # BC type per ghost edge     (WP4: was Vector{Any})
     vol_removed    :: Float64         # cumulative outflow through ghost edges (m³)
     # ── Non-orthogonal gradient correction (flow-direction-fixes, Step 2) ──
     # grad_wse: per-cell WSE gradient (∇WSE_x, ∇WSE_y), local equirectangular
@@ -502,11 +530,9 @@ mutable struct FlowState
     # unconditionally, unlike wlsq_weights, since it is meaningfully more
     # expensive to construct — vertex-table Dict build — and per-edge
     # `valid[e]` is edge-specific, not a cheap always-safe placeholder like
-    # a zero-filled matrix). Typed `Any` to avoid a forward type-reference
-    # from FlowState (defined early in this file) to DiamondFluxTable
-    # (defined in mesh/DiamondFlux.jl, included later) — same pattern
-    # already used for `sgs_tables`/`ghost_edges`/`ghost_cell_bc`.
-    diamond_table :: Any
+    # a zero-filled matrix). (WP4: was `Any`; mesh/DiamondFlux.jl is now
+    # included before FlowState so the field can be concretely typed.)
+    diamond_table :: Union{Nothing,DiamondFluxTable}
     # ── Generalised neighbour-count ceiling (cartesian-formulation branch) ──
     # max_neighbours: the maximum number of neighbours any cell in this mesh
     # has, derived once in initialise_flow_model from the mesh's own
@@ -552,6 +578,8 @@ mutable struct FlowState
     # :consistent (partners also mapped onto the edge normal with the cell
     # vectors; Phase F then runs every step). See _q_centred_consistent.
     q_centre_mode  :: Symbol
+    # ── Reused per-step work arrays (WP4, 2026-10) — see StepWorkspace ────
+    ws             :: StepWorkspace
 end
 
 # ---------------------------------------------------------------------------
@@ -651,6 +679,64 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       :legacy)
+end
+
+# WP4 (2026-10): `ws` (StepWorkspace) was appended as field 38. The 37-argument
+# form gives it an empty workspace, sized on the first step.
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, StepWorkspace())
+end
+
+"""
+    _workspace!(state) → StepWorkspace
+
+Size `state.ws` for the current cell/edge counts (no-op after the first call
+on a given mesh). The SGS slots are rebuilt whenever the edge count changes.
+"""
+function _workspace!(state::FlowState)::StepWorkspace
+    ws = state.ws
+    n  = length(state.cell_ids); ne = state.edges.n_edges
+    if length(ws.dV) != n
+        resize!(ws.dV, n); resize!(ws.wse, n); resize!(ws.out, n)
+    end
+    if length(ws.edge_vol) != ne
+        resize!(ws.edge_vol, ne); resize!(ws.flux_prev, ne)
+        empty!(ws.slot_i); empty!(ws.slot_j)
+    end
+    return ws
+end
+
+# SGS edge slots: which entry of each cell's neighbour list the edge is
+# (`_adjacency_slot`, previously searched twice per edge per step).
+function _edge_slots!(state::FlowState, ws::StepWorkspace)
+    ne = state.edges.n_edges
+    length(ws.slot_i) == ne && return ws
+    resize!(ws.slot_i, ne); resize!(ws.slot_j, ne)
+    max_nb = state.max_neighbours
+    @inbounds for e in 1:ne
+        ci = state.edges.cell_i[e]; cj = state.edges.cell_j[e]
+        ws.slot_i[e] = _adjacency_slot(state.adj_matrix, ci, cj, max_nb)
+        ws.slot_j[e] = _adjacency_slot(state.adj_matrix, cj, ci, max_nb)
+    end
+    return ws
 end
 
 """
@@ -2207,6 +2293,7 @@ function initialise_flow_model(mesh::A5Mesh,
         cfl_mode,
         cell_length,
         q_centre_mode,
+        StepWorkspace(),
     )
 end
 
@@ -2228,7 +2315,6 @@ initialise_flow_model(mesh::A5Mesh) = initialise_flow_model(mesh, StandardFlow()
 # ENV note: this include contains only definitions — no top-level execution.
 
 include(joinpath(@__DIR__, "surfacewater", "flow2d.jl"))
-include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 
 
 """
@@ -2372,10 +2458,10 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
         state.water_depth[ci] = state.volume[ci] / max(state.cell_area[ci], 1.0)
         state.vol_removed    += dV
 
-        # Fix C: update ghost edge momentum state (preserve interior_nb fields)
-        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
-                                            ge.sill, q_stored, false,
-                                            ge.interior_nb_idx, ge.interior_nb_L)
+        # Fix C: update ghost edge momentum state in place (GhostEdge is
+        # mutable; WP4: was a new object per edge per step, ~90 KB/step)
+        ge.flux_prev = q_stored
+        ge.is_Q_flux = false
     end
 end
 
@@ -2454,9 +2540,7 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         state.water_depth[ci] = max(0.0, new_wse - tbl.z_min)
         state.vol_removed += dV
 
-        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
-                                            ge.sill, q_stored, ge.is_Q_flux,
-                                            ge.interior_nb_idx, ge.interior_nb_L)
+        ge.flux_prev = q_stored        # in place (WP4; see the standard version)
     end
 end
 # ---------------------------------------------------------------------------
@@ -2561,7 +2645,7 @@ When `SOLVER_BACKEND[] == :gpu` (Phase 5):
   The interface between phases (edge_vol, dV vectors) is the same for
   both CPU and GPU paths; only the dispatch changes.
 """
-function step_standard!(state::FlowState, dt::Float64)
+function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     n     = length(state.cell_ids)
     edges = state.edges
     ne    = edges.n_edges
@@ -2621,15 +2705,29 @@ function step_standard!(state::FlowState, dt::Float64)
     # gradient_correction is true by default; use --gradient-correction off
     # to select the legacy uncorrected path for benchmarking.
     # See FloodA5_NonOrthogonal_Correction_Plan.md §5.2, §5.5.
+    ws = _workspace!(state)
+    # Bound unconditionally (WP4): a closure capturing a conditionally
+    # assigned local boxes it, which made every Phase A access type-unstable.
+    wse_all = ws.wse
     if state.gradient_correction
-        wse_all = Vector{Float64}(undef, n)
         @inbounds for i in 1:n
             wse_all[i] = state.elevation[i] + state.volume[i] / max(state.cell_area[i], 1.0)
         end
         _compute_wse_gradients!(state, wse_all)
     end
+    # Diamond vertex values once per vertex (WP4; previously two Dict lookups
+    # and a dot product per edge, twice for diamond-wetdry).
+    dtab = state.diamond_table
+    use_diamond = state.gradient_correction && dtab !== nothing &&
+                  state.face_flux_method in (:diamond, :diamond_wetdry)
+    veta = ws.veta; vwet = ws.vwet
+    if use_diamond
+        diamond_vertex_eta!(veta, dtab, wse_all)
+        state.face_flux_method === :diamond_wetdry &&
+            diamond_vertex_wet!(vwet, dtab, state.water_depth, HFLOW_THRESHOLD)
+    end
 
-    edge_vol = Vector{Float64}(undef, ne)
+    edge_vol = ws.edge_vol
 
     # ── WP0 (2026-10): read-only momentum snapshot for Q-centring ──────────
     # The threaded loop below overwrites edges.flux[e]; _q_centred reads the
@@ -2638,7 +2736,7 @@ function step_standard!(state::FlowState, dt::Float64)
     # reads this start-of-step copy. Under :cell momentum, Phase A never reads
     # edges.flux, and under :blend (WP2) it reads only its own edge's flux
     # before writing it, so no copy is needed and the alias is harmless.
-    flux_prev = state.momentum_model === :edge ? copy(edges.flux) : edges.flux
+    flux_prev = state.momentum_model === :edge ? copyto!(ws.flux_prev, edges.flux) : edges.flux
 
     # WP2 (2026-10): with --limiter positivity the per-edge volume limiter
     # (Fix B) is disabled — the kernels skip it when depth_donor ≤ 0 — and
@@ -2667,6 +2765,15 @@ function step_standard!(state::FlowState, dt::Float64)
 
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
+
+        # Dry edge (WP4): both flux kernels return (0, 0) when
+        # max(wse) − sill ≤ HFLOW_THRESHOLD, whatever q_prev, so skip the
+        # momentum/gradient work. Same test (NaN falls through) — bit-identical.
+        if max(wse_ci, wse_cj) - edges.sill[e] <= HFLOW_THRESHOLD
+            edges.flux[e] = 0.0
+            edge_vol[e]   = 0.0
+            continue
+        end
 
         # Identify donor depth for the volume limiter (higher-WSE side donates);
         # 0.0 disables the per-edge volume limiter under --limiter positivity.
@@ -2787,14 +2894,11 @@ function step_standard!(state::FlowState, dt::Float64)
             # its bed elevation) the face gradient is the two-point form
             # c·(wse_ci − wse_cj) instead — see diamond_stencil_wet. Removes
             # the spurious bank-side gradients seen on the Carlisle DEM.
-            if state.face_flux_method === :diamond && state.diamond_table !== nothing
-                dWSE_n = diamond_dWSE_n(state.diamond_table, e, wse_ci, wse_cj,
-                                         wse_all, edges.L[e])
-            elseif state.face_flux_method === :diamond_wetdry && state.diamond_table !== nothing
-                dWSE_n = diamond_stencil_wet(state.diamond_table, e, state.water_depth,
-                                             HFLOW_THRESHOLD) ?
-                         diamond_dWSE_n(state.diamond_table, e, wse_ci, wse_cj,
-                                        wse_all, edges.L[e]) :
+            if use_diamond && state.face_flux_method === :diamond
+                dWSE_n = diamond_dWSE_n_v(dtab, e, wse_ci, wse_cj, veta, edges.L[e])
+            elseif use_diamond     # :diamond_wetdry
+                dWSE_n = diamond_stencil_wet_v(dtab, e, vwet) ?
+                         diamond_dWSE_n_v(dtab, e, wse_ci, wse_cj, veta, edges.L[e]) :
                          edges.cos_theta[e] * (wse_ci - wse_cj)
             end
             if isnan(dWSE_n)
@@ -2838,8 +2942,8 @@ function step_standard!(state::FlowState, dt::Float64)
     # one scale factor per donor cell (all of its outflows together; written
     # back to edges.flux — Fix C). See _positivity_scale!.
     positivity && _positivity_scale!(edge_vol, edges.flux, state.volume,
-                                     edges.cell_i, edges.cell_j)
-    dV = zeros(Float64, n)
+                                     edges.cell_i, edges.cell_j; out = ws.out)
+    dV = fill!(ws.dV, 0.0)
     @inbounds for e in 1:ne
         ev = edge_vol[e]
         iszero(ev) && continue
@@ -2871,7 +2975,10 @@ function step_standard!(state::FlowState, dt::Float64)
     end
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
-    _compute_velocity!(state)
+    # (WP4: `velocity = false` skips it; run_simulation! then computes it only
+    # for the steps that are written or pushed to the visualiser — the result
+    # depends only on the end-of-step state, so the output is unchanged.)
+    velocity && _compute_velocity!(state)
 
     # ── Phase F: cell-vector momentum reconstruction ───────────────────────
     # Active when --momentum-model cell is set (qvec is then the momentum
@@ -2965,7 +3072,7 @@ Stability fixes applied in this function (branch: sgs_flow_fixes):
   and the standard shallow-water literature.  The minimum is marginally non-standard
   and slightly over-conductive.
 """
-function step_sgs!(state::FlowState, dt::Float64)
+function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     n     = length(state.cell_ids)
     edges = state.edges
     ne    = edges.n_edges
@@ -2975,12 +3082,11 @@ function step_sgs!(state::FlowState, dt::Float64)
     # cell's SGS table — no shared writes, but the lookup is not @inline
     # and benefits from sequential cache access patterns.
     # Can be made @threads if profiling shows it is a bottleneck.
-    wse   = Vector{Float64}(undef, n)
-    A_wet = Vector{Float64}(undef, n)
-    for i in 1:n
-        tbl      = state.sgs_tables[i]
-        wse[i]   = wse_from_volume(tbl, state.volume[i])
-        A_wet[i] = wetted_area_from_wse(tbl, wse[i])
+    # (WP4: the wetted area computed here was never used — removed.)
+    ws  = _edge_slots!(state, _workspace!(state))
+    wse = ws.wse
+    Threads.@threads for i in 1:n                 # per-cell writes only (WP4)
+        @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
     end
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
@@ -3004,11 +3110,12 @@ function step_sgs!(state::FlowState, dt::Float64)
     # The fix: for flux computation only, cap a dry cell's effective WSE at z_sill,
     # so it contributes zero head above the sill — matching the standard solver's
     # behaviour where a dry cell never drives flux.
-    edge_vol = Vector{Float64}(undef, ne)
+    edge_vol = ws.edge_vol
+    slot_ia  = ws.slot_i; slot_ja = ws.slot_j
 
     # WP0 (2026-10): read-only snapshot of flux_Q for Q-centring — see the
     # matching comment in step_standard! (same data race on edges.flux_Q).
-    flux_Q_prev = copy(edges.flux_Q)
+    flux_Q_prev = copyto!(ws.flux_prev, edges.flux_Q)
     max_nb_sgs  = state.max_neighbours
     # WP1 (2026-10): vector friction — see the matching comment in step_standard!.
     vector_friction = state.friction_model === :vector
@@ -3050,12 +3157,9 @@ function step_sgs!(state::FlowState, dt::Float64)
         # ── R-A flux kernel ──────────────────────────────────────────────────
         wse_flow = max(wse_ci_eff, wse_cj_eff)
 
-        slot_i = _adjacency_slot(state.adj_matrix, ci, cj, max_nb_sgs)
-        slot_j = _adjacency_slot(state.adj_matrix, cj, ci, max_nb_sgs)
-        A_i = A5Grid.flow_area_from_wse(state.sgs_tables[ci], slot_i, wse_flow)
-        R_i = A5Grid.hydraulic_radius_from_wse(state.sgs_tables[ci], slot_i, wse_flow)
-        A_j = A5Grid.flow_area_from_wse(state.sgs_tables[cj], slot_j, wse_flow)
-        R_j = A5Grid.hydraulic_radius_from_wse(state.sgs_tables[cj], slot_j, wse_flow)
+        # (WP4: slots precomputed once; one bracket search per side.)
+        A_i, R_i = A5Grid.edge_area_radius(state.sgs_tables[ci], slot_ia[e], wse_flow)
+        A_j, R_j = A5Grid.edge_area_radius(state.sgs_tables[cj], slot_ja[e], wse_flow)
         A_edge = 0.5 * (A_i + A_j)
         R_edge = 0.5 * (R_i + R_j)
 
@@ -3139,8 +3243,8 @@ function step_sgs!(state::FlowState, dt::Float64)
     # R-A kernel has no per-edge volume limiter, so the two are the same here.)
     positivity = state.limiter !== :legacy
     positivity && _positivity_scale!(edge_vol, edges.flux_Q, state.volume,
-                                     edges.cell_i, edges.cell_j)
-    dV = zeros(Float64, n)
+                                     edges.cell_i, edges.cell_j; out = ws.out)
+    dV = fill!(ws.dV, 0.0)
     @inbounds for e in 1:ne
         ev = edge_vol[e]
         iszero(ev) && continue
@@ -3181,7 +3285,10 @@ function step_sgs!(state::FlowState, dt::Float64)
     end
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
-    _compute_velocity!(state)
+    # (WP4: `velocity = false` skips it; run_simulation! then computes it only
+    # for the steps that are written or pushed to the visualiser — the result
+    # depends only on the end-of-step state, so the output is unchanged.)
+    velocity && _compute_velocity!(state)
 
     # ── Phase F: cell discharge vectors for vector friction (WP1) ─────────
     (vector_friction || state.q_centre_mode === :consistent) && _reconstruct_qvec!(state, true)
@@ -3338,16 +3445,20 @@ function run_simulation!(state            :: FlowState,
             apply_source!(state, src, t, dt)
         end
 
-        # ── Debug: post-source volume check (first 5 steps + every 10th) ───
-        if step <= 5 || step % 10 == 0
+        # ── Debug: post-source volume check (first 5 steps + every 500th) ──
+        # WP4 (2026-10): was every 10th step, with an O(cells × sources) scan —
+        # about as costly as the step itself on a mostly dry domain. The
+        # every-50-step mass-balance line below is unchanged.
+        if step <= 5 || step % 500 == 0
             # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
             # so src_vol is non-empty when only InflowPoints are active.
             all_pt_srcs = filter(s -> hasproperty(s, :cell_index), merged_sources)
             src_vols    = [state.volume[s.cell_index] for s in all_pt_srcs]
             src_labels  = [source_label(s) for s in all_pt_srcs]
             wet_now     = count(>(1e-4), state.water_depth)
-            non_src_wet = count(i -> state.water_depth[i] > 1e-4 &&
-                all(s.cell_index != i for s in all_pt_srcs), eachindex(state.volume))
+            src_cells   = Set(s.cell_index for s in all_pt_srcs)
+            non_src_wet = count(i -> state.water_depth[i] > 1e-4 && !(i in src_cells),
+                                eachindex(state.volume))
             vol_sum_now = sum(v for v in state.volume if isfinite(v); init=0.0)
             nan_count   = count(isnan, state.volume)
             nan_str     = nan_count > 0 ? "  NaN_cells=$nan_count ⚠" : ""
@@ -3368,13 +3479,17 @@ function run_simulation!(state            :: FlowState,
 
         # Physics step (includes Phase D ghost-edge outflow)
         if use_sgs
-            step_sgs!(state, dt)
+            step_sgs!(state, dt; velocity = false)
         else
-            step_standard!(state, dt)
+            step_standard!(state, dt; velocity = false)
         end
 
         t    += dt
         step += 1
+
+        # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
+        ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
+            _compute_velocity!(state)
 
         # Visualiser push
         if vis !== nothing && step % VIS_INTERVAL == 0
@@ -3440,6 +3555,7 @@ function run_simulation!(state            :: FlowState,
 
     if output.enabled && t > output.last_write_t
         t_hdf5 = time()
+        _compute_velocity!(state)
         _write_frame!(output, state, t)
         timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
     end
