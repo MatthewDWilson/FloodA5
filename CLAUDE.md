@@ -12,9 +12,12 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Current plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (`wp0-correctness`, `wp1-…`;
 CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
-WP1, WP2 and WP3 part 1 are on `main`; next are the rest of WP3 (SGS per-edge-side
-tables), a stable replacement for Q-centring, then WP4. Physics results so far:
-`docs/HYDRAULICS.md` §15.
+WP1, WP2 and WP3 part 1 are on `main`; WP3 part 2 (SGS on any valence, SGS
+slot-order fix) and WP2b (recommended scheme as default, `--scheme legacy` for
+the old one) are on `wp3b-sgs-general` / `wp2b-default-scheme`; next are a
+stable replacement for Q-centring, then WP4. Physics results so far:
+`docs/HYDRAULICS.md` §15 (§15.3 for the defaults). SGS meshes built before
+2026-10-21 are refused until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
 
 ## Running things
 - Always run from the repo root with `--project=.` (full stack) or

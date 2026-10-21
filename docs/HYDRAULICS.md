@@ -692,3 +692,46 @@ clean, at about 2.4× the steps (local CFL):
 at res-20. The review's θ-blend and positivity replacements are not usable as
 proposed.
 
+### 15.3 Defaults (2026-10-21) and the checks behind them
+
+Since WP2b the CLI default is `--scheme recommended` (`scheme_options` in
+`FloodModel.jl`; `--scheme legacy` restores the earlier behaviour):
+
+| Flow model | Recommended options |
+|---|---|
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local` |
+| SGS | `--friction-model vector --cfl-mode local` (legacy limiter, no gradient correction) |
+
+**SGS tables were wrong before 2026-10-21.** `build_sgs_tables!` stored edge
+sills and R–A curves in `grid_disk` order while the solver reads them in
+neighbour-list order; the two differ for 90–96% of A5 cells, so most edges used
+another neighbour's sill and curves (phantom dams — on the synthetic notch DEM
+the pond rose ~1 m above the embankment crest). Fixed in WP3 part 2; existing
+meshes are refused until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
+SGS results obtained before then should be treated as affected.
+
+**SGS choice** (Carlisle res-18, repaired tables, inflows + 10 mm/h, 12 h;
+local WSE extrema / rms WSE residual at the end): default 1.4% / 188 mm;
+vector 1.1% / 189 mm; **vector + local CFL 1.2% / 147 mm**; + hybrid 1.2% /
+130 mm; + gradient correction 4.6% (noisier — the legacy WLSQ correction is
+unvalidated under SGS, §9.4); hybrid alone spiked (velocity 4 m/s) — under SGS
+it is positivity-only scaling, as the R–A kernel has no per-edge volume
+limiter. Planar slope under 20 mm/h rain (open boundaries, 6 h): plume
+deflection −2.3° (default) vs −0.2° (vector + local), extrema 0.11% vs 0.09%.
+
+**Open boundaries, standard flow.** Carlisle (inflows + rain; free and
+zero-gradient boundaries) is stable at res-18 and res-20 (§15.2). Planar slope
+under 20 mm/h rain (0.4–0.5 Mm³ leaves through the boundaries): mass balance
+exact; N/S asymmetry +0.032 / +3.5° (default) vs −0.004 / −0.5° (recommended);
+local WSE extrema 4.4% vs 2.4%. Ghost (boundary) edges still use the component
+kernel; the noise near the boundary is the same for both configurations.
+
+**Known trade-off.** On the rained planar slope the recommended set has more
+interior velocity noise (0.056 vs 0.015 m/s rms cell-to-neighbour difference).
+Single-change runs attribute all of it to the diamond face gradient (diamond
+alone 0.054; vector 0.014, hybrid 0.015, local CFL 0.015), consistent with
+Carlisle (§15.2). The water surface is nevertheless smoother, and the diamond
+gradient is what removes the A5 directional bias, so it stays in the default;
+reducing its flux noise is an open item, alongside a stable mesh-general
+replacement for Q-centring.
+

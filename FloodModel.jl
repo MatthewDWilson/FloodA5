@@ -3371,6 +3371,40 @@ function _mesh_save_path(mesh_source::Tuple)::Union{String,Nothing}
     end
 end
 
+"""
+    scheme_options(scheme, flow_method) → NamedTuple
+
+Default numerical options for `--scheme` (WP2b, 2026-10): the values that
+`run_flood_model`/the CLI use for any of `gradient_correction`,
+`face_flux_method`, `friction_model`, `limiter`, `cfl_mode` and
+`momentum_model` that the caller does not set explicitly.
+
+  :recommended (default)
+      standard  gradient correction on, diamond-wetdry face gradient, vector
+                friction, hybrid limiter, local CFL, edge momentum
+      sgs       vector friction, local CFL, legacy limiter, edge momentum, no
+                gradient correction (diamond does not apply to SGS; the
+                legacy WLSQ correction is unvalidated there and added noise
+                on Carlisle; `hybrid` reduces to positivity-only scaling in
+                the R–A kernel, which spiked on its own)
+  :legacy     the pre-2026-10 behaviour (all options off / component)
+
+Evidence: docs/HYDRAULICS.md §15. `initialise_flow_model`'s own keyword
+defaults remain the legacy values (library level; test fixtures rely on them).
+"""
+function scheme_options(scheme::Symbol, flow_method::Symbol)
+    legacy = (gradient_correction = false, face_flux_method = :legacy,
+              friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
+              momentum_model = :edge)
+    scheme === :legacy && return legacy
+    scheme === :recommended ||
+        throw(ArgumentError("scheme must be :recommended or :legacy (got :$scheme)"))
+    flow_method === :sgs &&
+        return merge(legacy, (friction_model = :vector, cfl_mode = :local))
+    return merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
+                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local))
+end
+
 function run_flood_model(;
     mesh_source      :: Tuple,
     mesh_only        :: Bool    = false,
@@ -3388,13 +3422,16 @@ function run_flood_model(;
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
     q_centre_theta            :: Float64 = 0.9,
-    gradient_correction       :: Bool    = false,
+    # WP2b: these default to `scheme_options(scheme, flow_method)`; `nothing`
+    # means "take the scheme's value".
+    scheme                    :: Symbol  = :recommended,
+    gradient_correction       :: Union{Bool,Nothing}   = nothing,
     gradient_correction_alpha :: Float64 = 1.0,
-    momentum_model            :: Symbol  = :edge,
-    face_flux_method          :: Symbol  = :legacy,
-    friction_model            :: Symbol  = :component,
-    limiter                   :: Symbol  = :legacy,
-    cfl_mode                  :: Symbol  = :legacy,
+    momentum_model            :: Union{Symbol,Nothing} = nothing,
+    face_flux_method          :: Union{Symbol,Nothing} = nothing,
+    friction_model            :: Union{Symbol,Nothing} = nothing,
+    limiter                   :: Union{Symbol,Nothing} = nothing,
+    cfl_mode                  :: Union{Symbol,Nothing} = nothing,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     rainfall_rate     :: Float64 = 0.0,
@@ -3410,6 +3447,14 @@ function run_flood_model(;
     # ── Legacy output params ─────────────────────────────────────────────
     output_path       :: Union{String,Nothing} = nothing,
     output_interval   :: Float64 = 60.0)
+
+    so = scheme_options(scheme, flow_method)
+    gradient_correction = something(gradient_correction, so.gradient_correction)
+    momentum_model      = something(momentum_model,      so.momentum_model)
+    face_flux_method    = something(face_flux_method,    so.face_flux_method)
+    friction_model      = something(friction_model,      so.friction_model)
+    limiter             = something(limiter,             so.limiter)
+    cfl_mode            = something(cfl_mode,            so.cfl_mode)
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
@@ -3641,7 +3686,7 @@ function run_flood_model(;
           "momentum_model = $(momentum_model), " *
           "face_flux_method = $(face_flux_method), " *
           "friction_model = $(friction_model), " *
-          "limiter = $(limiter), cfl_mode = $(cfl_mode))"
+          "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -3958,10 +4003,23 @@ Flow model options:
                      may reveal period-2 checkerboarding on irregular
                      meshes, particularly at high rainfall rates or fine
                      resolution.
+  --scheme recommended|legacy
+                     Default numerical options (WP2b, 2026-10). Each of
+                     --gradient-correction, --face-flux-method,
+                     --friction-model, --limiter, --cfl-mode and
+                     --momentum-model that is not given takes the scheme's
+                     value; explicit flags always win.
+                       recommended (default)
+                         standard: gradient correction on, diamond-wetdry,
+                                   vector friction, hybrid limiter, local CFL
+                         sgs:      vector friction, local CFL (legacy limiter,
+                                   no gradient correction)
+                       legacy  the pre-2026-10 behaviour (all off/component)
+                     Evidence: docs/HYDRAULICS.md §15.
   --gradient-correction on|off
                      Enable the WLSQ non-orthogonal gradient correction for
-                     the flux kernels (default: off while under validation
-                     on the flow-direction-fixes branch).
+                     the flux kernels (default: from --scheme — on for
+                     standard flow, off for SGS).
                        on   Use the corrected kernels (_bates_flux_corrected /
                             _manning_flux_ra_corrected) — recommended once
                             validated; corrects the flow-direction bias
@@ -3990,7 +4048,8 @@ Flow model options:
                      Selects how dWSE_n (the corrected driving head) is
                      constructed when --gradient-correction is on. Only
                      meaningful together with --gradient-correction on.
-                       legacy   (default) existing cell-centred WLSQ
+                     Default: from --scheme (diamond-wetdry for standard).
+                       legacy   existing cell-centred WLSQ
                                 gradient, face-averaged then skewness-
                                 corrected — the flow-direction-fixes
                                 formula.
@@ -4009,7 +4068,7 @@ Flow model options:
   --momentum-model edge|cell|blend
                      Selects how stored inter-step momentum (q_prev in the
                      Bates equation) is represented.
-                       edge   (default) legacy per-edge scalar — one
+                       edge   (default, both schemes) per-edge scalar — one
                               independent q_prev per pentagon face (5 per
                               cell), unchanged Bates (2010) behaviour.
                        cell   Perot-style reconstruction: a single 2D
@@ -4035,7 +4094,8 @@ Flow model options:
   --friction-model component|vector
                      Discharge magnitude used by the friction term and the
                      Froude limiter (WP1).
-                       component (default) |q_n|, the face-normal discharge
+                     Default: from --scheme (vector; component for legacy).
+                       component |q_n|, the face-normal discharge
                               only: Bates (2010) / LISFLOOD-FP ACC. Makes
                               face conductance depend on face orientation
                               (directional bias that refinement cannot remove).
@@ -4044,9 +4104,10 @@ Flow model options:
                               vectors (rebuilt every step). Rotationally
                               consistent; standard and SGS solvers.
                      See FloodA5_Review_and_ForwardPlan_2026-10.md §3.
-  --limiter legacy|positivity
-                     Wet–dry / overdraft limiting (WP2).
-                       legacy (default) per-edge volume limiter
+  --limiter legacy|positivity|hybrid
+                     Wet–dry / overdraft limiting (WP2). Default: from
+                     --scheme (hybrid for standard, legacy for SGS).
+                       legacy per-edge volume limiter
                               (h_donor·w/(N·dt)) plus a per-edge donor cap
                               (V/(2N)); both depend on face count and width.
                        positivity  one scale factor per donor cell,
@@ -4056,8 +4117,8 @@ Flow model options:
                        hybrid keeps the per-edge volume limiter and uses the
                               positivity scaling in place of the donor cap.
   --cfl-mode legacy|local
-                     Timestep rule (WP2).
-                       legacy (default) 0.7·sqrt(min area)/sqrt(g·h99).
+                     Timestep rule (WP2). Default: from --scheme (local).
+                       legacy 0.7·sqrt(min area)/sqrt(g·h99).
                        local  0.7·min over wet cells of l_i/sqrt(g·h_i),
                               l_i = 4·area/perimeter (= dx on a square).
   --sim-duration S   Simulation duration in seconds (default: 3600).
@@ -4457,6 +4518,7 @@ function main(args=String[])
     friction_model_val,            args = _pop_flag(args, "--friction-model")
     limiter_val,                   args = _pop_flag(args, "--limiter")
     cfl_mode_val,                  args = _pop_flag(args, "--cfl-mode")
+    scheme_val,                    args = _pop_flag(args, "--scheme")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -4479,7 +4541,7 @@ function main(args=String[])
     # incorrectly swallow that next token. An explicit on/off/true/false/1/0
     # value is therefore required whenever the flag is present at all.
     gradient_correction = if gradient_correction_val === nothing
-        false
+        nothing                      # from --scheme (WP2b)
     elseif gradient_correction_val in ("on", "true", "1")
         true
     elseif gradient_correction_val in ("off", "false", "0")
@@ -4493,7 +4555,7 @@ function main(args=String[])
     # --momentum-model edge|cell|blend  (default: edge — legacy per-face
     # scalar; blend added in WP2, 2026-10)
     momentum_model = if momentum_model_val === nothing
-        :edge
+        nothing                      # from --scheme (WP2b)
     elseif momentum_model_val in ("edge", "Edge")
         :edge
     elseif momentum_model_val in ("cell", "Cell")
@@ -4526,7 +4588,7 @@ function main(args=String[])
     # See mesh/DiamondFlux.jl and
     # FloodA5_PhaseB_Complete_PhaseC_Handoff.md (Phase C, Level 2).
     face_flux_method = if face_flux_method_val === nothing
-        :legacy
+        nothing                      # from --scheme (WP2b)
     elseif face_flux_method_val in ("legacy", "Legacy")
         :legacy
     elseif face_flux_method_val in ("diamond", "Diamond")
@@ -4546,7 +4608,7 @@ function main(args=String[])
     # Bates 2010 face-normal friction, unchanged behaviour). Applies to both
     # the standard and the SGS solver.
     friction_model = if friction_model_val === nothing
-        :component
+        nothing                      # from --scheme (WP2b)
     elseif friction_model_val in ("component", "Component")
         :component
     elseif friction_model_val in ("vector", "Vector")
@@ -4559,7 +4621,9 @@ function main(args=String[])
 
     # --limiter legacy|positivity and --cfl-mode legacy|local (WP2, 2026-10;
     # defaults: legacy, unchanged behaviour). Both solvers.
-    limiter = if limiter_val === nothing || limiter_val in ("legacy", "Legacy")
+    limiter = if limiter_val === nothing
+        nothing                      # from --scheme (WP2b)
+    elseif limiter_val in ("legacy", "Legacy")
         :legacy
     elseif limiter_val in ("positivity", "Positivity")
         :positivity
@@ -4570,7 +4634,9 @@ function main(args=String[])
                 "(got '$limiter_val')\n")
         print_help(1)
     end
-    cfl_mode = if cfl_mode_val === nothing || cfl_mode_val in ("legacy", "Legacy")
+    cfl_mode = if cfl_mode_val === nothing
+        nothing                      # from --scheme (WP2b)
+    elseif cfl_mode_val in ("legacy", "Legacy")
         :legacy
     elseif cfl_mode_val in ("local", "Local")
         :local
@@ -4578,6 +4644,26 @@ function main(args=String[])
         println("ERROR: --cfl-mode requires 'legacy' or 'local' " *
                 "(got '$cfl_mode_val')\n")
         print_help(1)
+    end
+
+    # --scheme recommended|legacy (WP2b, 2026-10; default: recommended). Any of
+    # the six options above that was not given takes the scheme's value for
+    # this flow model — see scheme_options. Explicit flags always win.
+    scheme = if scheme_val === nothing || scheme_val in ("recommended", "Recommended")
+        :recommended
+    elseif scheme_val in ("legacy", "Legacy")
+        :legacy
+    else
+        println("ERROR: --scheme requires 'recommended' or 'legacy' (got '$scheme_val')\n")
+        print_help(1)
+    end
+    let so = scheme_options(scheme, flow_method)
+        gradient_correction = something(gradient_correction, so.gradient_correction)
+        momentum_model      = something(momentum_model,      so.momentum_model)
+        face_flux_method    = something(face_flux_method,    so.face_flux_method)
+        friction_model      = something(friction_model,      so.friction_model)
+        limiter             = something(limiter,             so.limiter)
+        cfl_mode            = something(cfl_mode,            so.cfl_mode)
     end
 
     # --momentum-model cell and --face-flux-method diamond (and, by
@@ -4759,6 +4845,7 @@ function main(args=String[])
         friction_model            = friction_model,
         limiter                   = limiter,
         cfl_mode                  = cfl_mode,
+        scheme                    = scheme,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         rainfall_rate    = rainfall_rate,

@@ -274,12 +274,21 @@ recommendation and open items).
 `--face-flux-method diamond-wetdry` (WP2) is `diamond` with the two-point face
 gradient wherever an edge's vertex stencil includes a dry cell.
 
-**Recommended experimental configuration** (opt-in, not default — see
-`HYDRAULICS.md` §15 for the evidence and caveats; it replaces the earlier
-`--momentum-model cell` recommendation, which checkerboards on real terrain):
-```
---flow-model standard --gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local
-```
+**Defaults (since 2026-10-21): `--scheme recommended`.** Any of
+`--gradient-correction`, `--face-flux-method`, `--friction-model`,
+`--limiter`, `--cfl-mode` and `--momentum-model` that you do not give takes
+the recommended value for the flow model; explicit flags always win, and
+`--scheme legacy` restores the pre-2026-10 behaviour exactly.
+
+| Flow model | `--scheme recommended` (default) |
+|---|---|
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local` |
+| sgs | `--friction-model vector --cfl-mode local` |
+
+See `HYDRAULICS.md` §15.3 for the checks and the one known trade-off (the
+diamond gradient adds velocity noise in shallow sheet flow). The defaults
+listed in the table above for the individual flags are their `--scheme legacy`
+values.
 
 ### 4.4 Water source options
 

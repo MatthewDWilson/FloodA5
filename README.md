@@ -200,19 +200,21 @@ Both solvers use the Bates et al. (2010) inertial formulation with:
 - Q-centred spatial momentum smoothing (θ = 0.9, standard flow)
 - Consistent momentum state (`q_prev` matches actual transferred flux, both solvers)
 
-**Directional-bias corrections (opt-in, off by default).** The bias has two
+**Directional-bias corrections (on by default since 2026-10-21; `--scheme
+legacy` turns them off).** The bias has two
 causes, and both need fixing: the face-normal gradient on non-orthogonal faces
 (`--gradient-correction on --face-flux-method diamond`), and the Bates /
 LISFLOOD-FP friction term, which uses only the face-normal discharge
 (`--friction-model vector`; this one also affects Cartesian grids, and grid
 refinement cannot remove it). Together they cut the planar-slope N/S asymmetry
-on A5 from 0.87 to 0.05, decreasing with refinement. The current recommended
-experimental configuration (standard flow) is
+on A5 from 0.87 to 0.05, decreasing with refinement. The default
+`--scheme recommended` uses, for standard flow,
+`--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local`,
+and for SGS `--friction-model vector --cfl-mode local`.
 
-```
---flow-model standard --gradient-correction on --face-flux-method diamond-wetdry
---friction-model vector --limiter hybrid --cfl-mode local
-```
+**SGS results before 2026-10-21 are affected by a table bug** (edge sills and
+R–A curves attached to the wrong neighbour for most cells); old SGS meshes are
+refused until rebuilt or repaired — see [CHANGELOG.md](CHANGELOG.md).
 
 See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md) for the evidence (including
 the options that were tried and rejected) and

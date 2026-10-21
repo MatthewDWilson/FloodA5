@@ -39,6 +39,25 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP2b: the recommended scheme becomes the default (`wp2b-default-scheme`)
+
+#### Changed
+- ⚠ **New CLI defaults** (`--scheme recommended`, `scheme_options`): unset
+  options now take the recommended values for the flow model —
+  standard flow: `--gradient-correction on --face-flux-method diamond-wetdry
+  --friction-model vector --limiter hybrid --cfl-mode local`; SGS:
+  `--friction-model vector --cfl-mode local`. **`--scheme legacy` restores the
+  previous behaviour**; explicit flags always win. `run_flood_model` follows the
+  same rule (its option keywords default to `nothing` = "from the scheme");
+  `initialise_flow_model`'s own defaults stay legacy. The local CFL takes
+  ~20–65% more steps. Checks behind the choice (HYDRAULICS.md §15.3): open
+  boundaries (Carlisle inflows + rain; planar slope under rain), SGS on the
+  repaired Carlisle tables and under rain. Known trade-off: the diamond face
+  gradient adds interior velocity noise in shallow sheet flow (0.05 vs
+  0.015 m/s on the rained planar slope) while making the water surface
+  smoother and removing the directional bias.
+- `test/test_default_scheme.jl` (in CI).
+
 ### WP3 (part 2): SGS on general meshes, and the SGS slot-order fix (`wp3b-sgs-general`)
 
 #### Fixed
