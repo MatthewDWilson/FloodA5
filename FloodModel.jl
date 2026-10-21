@@ -3509,22 +3509,23 @@ end
 Default numerical options for `--scheme` (WP2b, 2026-10): the values that
 `run_flood_model`/the CLI use for any of `gradient_correction`,
 `face_flux_method`, `friction_model`, `limiter`, `cfl_mode`,
-`momentum_model` and `q_centre_mode` (WP2c) that the caller does not
-set explicitly.
+`momentum_model`, `q_centre_mode` and `q_centre_theta` (WP2c) that the
+caller does not set explicitly.
 
   :recommended (default)
       standard  gradient correction on, diamond-wetdry face gradient, vector
-                friction, hybrid limiter, local CFL, edge momentum
+                friction, hybrid limiter, local CFL, edge momentum,
+                consistent Q-centring at θ = 0.9 (WP2c)
       sgs       vector friction, local CFL, legacy limiter, edge momentum, no
                 gradient correction (diamond does not apply to SGS; the
                 legacy WLSQ correction is unvalidated there and added noise
                 on Carlisle; `hybrid` reduces to positivity-only scaling in
-                the R–A kernel, which spiked on its own)
-  :legacy     the pre-2026-10 behaviour (all options off / component)
-
-Both schemes keep the unoriented Q-centring partners
-(`q_centre_mode = :legacy`): orienting them is worse on pentagons
-(WP2c, HYDRAULICS.md §15.4).
+                the R–A kernel, which spiked on its own), no Q-centring
+                (θ = 1: the symmetric two-point R–A kernel does not need it;
+                WP2c)
+  :legacy     the pre-2026-10 behaviour (all options off / component,
+              unoriented Q-centring at θ = 0.9 — which on A5 acts as a
+              dt-dependent resistance, HYDRAULICS.md §15.4)
 
 Evidence: docs/HYDRAULICS.md §15. `initialise_flow_model`'s own keyword
 defaults remain the legacy values (library level; test fixtures rely on them).
@@ -3532,14 +3533,16 @@ defaults remain the legacy values (library level; test fixtures rely on them).
 function scheme_options(scheme::Symbol, flow_method::Symbol)
     legacy = (gradient_correction = false, face_flux_method = :legacy,
               friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
-              momentum_model = :edge, q_centre_mode = :legacy)
+              momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9)
     scheme === :legacy && return legacy
     scheme === :recommended ||
         throw(ArgumentError("scheme must be :recommended or :legacy (got :$scheme)"))
     flow_method === :sgs &&
-        return merge(legacy, (friction_model = :vector, cfl_mode = :local))
+        return merge(legacy, (friction_model = :vector, cfl_mode = :local,
+                              q_centre_theta = 1.0))
     return merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
-                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local))
+                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
+                          q_centre_mode = :consistent))
 end
 
 function run_flood_model(;
@@ -3558,9 +3561,9 @@ function run_flood_model(;
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
-    q_centre_theta            :: Float64 = 0.9,
     # WP2b: these default to `scheme_options(scheme, flow_method)`; `nothing`
     # means "take the scheme's value".
+    q_centre_theta            :: Union{Float64,Nothing} = nothing,
     scheme                    :: Symbol  = :recommended,
     q_centre_mode      :: Union{Symbol,Nothing} = nothing,
     gradient_correction       :: Union{Bool,Nothing}   = nothing,
@@ -3595,6 +3598,7 @@ function run_flood_model(;
     limiter             = something(limiter,             so.limiter)
     cfl_mode            = something(cfl_mode,            so.cfl_mode)
     q_centre_mode = something(q_centre_mode, so.q_centre_mode)
+    q_centre_theta      = something(q_centre_theta,      so.q_centre_theta)
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
@@ -4138,8 +4142,9 @@ Flow model options:
                      cell centres; overrides --manning-n where finite.
   --q-centre-theta N Spatial momentum smoothing parameter θ for the
                      Q-centred scheme (checkerboard suppression).
-                     Range [0.0, 1.0]. Default: 0.9 (LISFLOOD-FP standard,
-                     light smoothing). θ = 1.0 disables the scheme entirely
+                     Range [0.0, 1.0]. Default: from --scheme — 0.9 (the
+                     LISFLOOD-FP value) except 1.0 for SGS under
+                     --scheme recommended. θ = 1.0 disables the scheme entirely
                      (pure Bates semi-implicit momentum, no smoothing).
                      Lower values damp oscillations more strongly but
                      reduce inertial accuracy. Note: disabling (θ = 1.0)
@@ -4150,7 +4155,9 @@ Flow model options:
                      How Q-centring uses its collinear partner faces (WP2c;
                      only where --q-centre-theta < 1; identical on Cartesian
                      grids). See docs/HYDRAULICS.md §15.4.
-                       legacy      (default) partner fluxes as stored. On A5
+                     Default: from --scheme (consistent for standard flow;
+                     legacy for --scheme legacy).
+                       legacy      partner fluxes as stored. On A5
                                    about two partners in three are oriented
                                    against the edge, so this acts as a
                                    dt-dependent resistance (lower conveyance).
@@ -4162,15 +4169,18 @@ Flow model options:
   --scheme recommended|legacy
                      Default numerical options (WP2b, 2026-10). Each of
                      --gradient-correction, --face-flux-method,
-                     --friction-model, --limiter, --cfl-mode and
-                     --momentum-model that is not given takes the scheme's
-                     value; explicit flags always win.
+                     --friction-model, --limiter, --cfl-mode,
+                     --momentum-model, --q-centre-mode and --q-centre-theta
+                     that is not given takes the scheme's value; explicit
+                     flags always win.
                        recommended (default)
                          standard: gradient correction on, diamond-wetdry,
-                                   vector friction, hybrid limiter, local CFL
+                                   vector friction, hybrid limiter, local CFL,
+                                   consistent Q-centring (θ 0.9)
                          sgs:      vector friction, local CFL (legacy limiter,
-                                   no gradient correction)
-                       legacy  the pre-2026-10 behaviour (all off/component)
+                                   no gradient correction, θ = 1)
+                       legacy  the pre-2026-10 behaviour (all off/component,
+                               unoriented Q-centring θ 0.9)
                      Evidence: docs/HYDRAULICS.md §15.
   --gradient-correction on|off
                      Enable the WLSQ non-orthogonal gradient correction for
@@ -4688,8 +4698,8 @@ function main(args=String[])
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
 
     q_centre_theta = q_centre_theta_val !== nothing ?
-                     parse(Float64, q_centre_theta_val) : 0.9
-    (q_centre_theta < 0.0 || q_centre_theta > 1.0) &&
+                     parse(Float64, q_centre_theta_val) : nothing    # nothing: from --scheme
+    q_centre_theta !== nothing && (q_centre_theta < 0.0 || q_centre_theta > 1.0) &&
         (println("ERROR: --q-centre-theta must be in [0.0, 1.0]\n"); print_help(1))
 
     # --gradient-correction on|off (flow-direction-fixes; FloodA5_NonOrthogonal_
@@ -4837,6 +4847,7 @@ function main(args=String[])
         limiter             = something(limiter,             so.limiter)
         cfl_mode            = something(cfl_mode,            so.cfl_mode)
         q_centre_mode = something(q_centre_mode, so.q_centre_mode)
+        q_centre_theta      = something(q_centre_theta,      so.q_centre_theta)
     end
 
     # --momentum-model cell and --face-flux-method diamond (and, by

@@ -209,8 +209,14 @@ LISFLOOD-FP friction term, which uses only the face-normal discharge
 refinement cannot remove it). Together they cut the planar-slope N/S asymmetry
 on A5 from 0.87 to 0.05, decreasing with refinement. The default
 `--scheme recommended` uses, for standard flow,
-`--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local`,
-and for SGS `--friction-model vector --cfl-mode local`.
+`--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent`,
+and for SGS `--friction-model vector --cfl-mode local --q-centre-theta 1`.
+
+**Q-centring on A5 before 2026-10-22 acted as an artificial resistance**
+(most collinear partner faces were added with the wrong sign), so A5 runs
+with θ < 1 under-convey: on Carlisle about twice the water stays in the
+domain compared with a Cartesian grid. `--q-centre-mode consistent` fixes
+this and is the default; see HYDRAULICS.md §15.4.
 
 **SGS results before 2026-10-21 are affected by a table bug** (edge sills and
 R–A curves attached to the wrong neighbour for most cells); old SGS meshes are

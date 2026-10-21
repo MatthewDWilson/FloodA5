@@ -19,15 +19,15 @@ using Test
     r = scheme_options(:recommended, :standard)
     @test r == (gradient_correction = true, face_flux_method = :diamond_wetdry,
                 friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
-                momentum_model = :edge, q_centre_mode = :legacy)
+                momentum_model = :edge, q_centre_mode = :consistent, q_centre_theta = 0.9)
     g = scheme_options(:recommended, :sgs)
-    @test g.friction_model === :vector && g.cfl_mode === :local
+    @test g.friction_model === :vector && g.cfl_mode === :local && g.q_centre_theta == 1.0
     @test g.limiter === :legacy && !g.gradient_correction && g.face_flux_method === :legacy
     for f in (:standard, :sgs)
         l = scheme_options(:legacy, f)
         @test l == (gradient_correction = false, face_flux_method = :legacy,
                     friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
-                    momentum_model = :edge, q_centre_mode = :legacy)
+                    momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9)
     end
     @test_throws ArgumentError scheme_options(:fast, :standard)
     # Every scheme's options are accepted by initialise_flow_model
@@ -35,6 +35,7 @@ using Test
     mesh = generate_cartesian_mesh_bounds(0.0, 0.0, 4.5dlat, 4.5dlat, 20.0; lat_ref = 0.0)
     st = initialise_flow_model(mesh, StandardFlow(); r...)
     @test st.friction_model === :vector && st.limiter === :hybrid && st.cfl_mode === :local
+    @test st.q_centre_mode === :consistent
 end
 
 # D2 — the CLI resolves unset options from the scheme
@@ -61,6 +62,7 @@ end
     @test occursin("friction_model = vector", rec)
     @test occursin("limiter = hybrid", rec) && occursin("cfl_mode = local", rec)
     @test occursin("scheme = recommended", rec)
+    @test occursin("q_centre_mode = consistent", rec) && occursin("q_centre_theta = 0.9", rec)
     # Legacy scheme with one explicit override: the override wins, every other
     # unset option takes the legacy value.
     mix = _cli_log("--scheme", "legacy", "--friction-model", "vector")
@@ -68,6 +70,7 @@ end
     @test occursin("limiter = legacy", mix) && occursin("cfl_mode = legacy", mix)
     @test occursin("friction_model = vector", mix)
     @test occursin("scheme = legacy", mix)
+    @test occursin("q_centre_mode = legacy", mix)
 end
 
 println("\nDefault-scheme tests complete.")

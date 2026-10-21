@@ -699,8 +699,10 @@ Since WP2b the CLI default is `--scheme recommended` (`scheme_options` in
 
 | Flow model | Recommended options |
 |---|---|
-| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local` |
-| SGS | `--friction-model vector --cfl-mode local` (legacy limiter, no gradient correction) |
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| SGS | `--friction-model vector --cfl-mode local --q-centre-theta 1` (legacy limiter, no gradient correction) |
+
+(Q-centring entries added by WP2c, §15.4; the checks below predate them.)
 
 **SGS tables were wrong before 2026-10-21.** `build_sgs_tables!` stored edge
 sills and R–A curves in `grid_disk` order while the solver reads them in
@@ -824,9 +826,12 @@ legacy QC 1.2% extrema, r_rms 147 mm, stored 11.3 Mm³; θ = 1 0.4%, 131 mm,
 10.3 Mm³; oriented 3.1%, 120 mm, 11.4 Mm³. The R–A kernel uses the
 symmetric two-point gradient, and there θ = 1 is clean.
 
-**Open decision.** Consistent Q-centring fixes the conveyance defect and is
-the most accurate option on the planar tests and against the Cartesian
-reference, but leaves more local WSE extrema on Carlisle (6.6% vs 2.7%) with a
-smoother surface overall (r_rms 41 vs 61 mm). It is available as
-`--q-centre-mode consistent`; the defaults are unchanged until decided.
+**Decision (2026-10-22).** `--scheme recommended` uses consistent
+Q-centring (θ = 0.9) for standard flow and θ = 1 for SGS. Consistent
+Q-centring fixes the conveyance defect and is the most accurate option on the
+planar tests and against the Cartesian reference, at the cost of more local
+WSE extrema on Carlisle (6.6% vs 2.7%) with a smoother surface overall (r_rms
+41 vs 61 mm). Open: a damping of the deep-water grid modes that costs no
+conveyance (or a symmetric diamond form), and the dt-sensitivity of the
+Carlisle results seen on both meshes.
 

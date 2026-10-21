@@ -53,6 +53,7 @@ end
 configs = [
     ("edge_theta0.9",        (;)),
     ("edge_theta1.0",        (; q_centre_theta = 1.0)),
+    ("qc_consistent",        (; q_centre_mode = :consistent)),
     ("wlsq_edge",            (; gradient_correction = true)),
     ("diamond_cell",         (; gradient_correction = true, face_flux_method = :diamond,
                                 momentum_model = :cell)),

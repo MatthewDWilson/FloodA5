@@ -41,8 +41,17 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 
 ### WP2c: Q-centring on A5 (`wp2c-qcentre`)
 
-Defaults are unchanged (`--q-centre-mode legacy` in both schemes) pending a
-decision; the evidence is in `docs/HYDRAULICS.md` §15.4.
+Evidence: `docs/HYDRAULICS.md` §15.4.
+
+#### Changed
+- ⚠ **`--scheme recommended` now uses consistent Q-centring for standard flow
+  and no Q-centring (θ = 1) for SGS.** `--q-centre-theta` joins the options
+  taken from the scheme. `--scheme legacy`, or `--q-centre-mode legacy
+  --q-centre-theta 0.9`, restores the previous Q-centring. On Carlisle res-18
+  this lowers the water stored at 12 h from 12.2 to 8.9 Mm³ (standard; 20 m
+  Cartesian reference 6.1) and from 11.3 to 8.0 Mm³ (SGS). Local WSE extrema
+  on Carlisle rise from 2.7% to 6.6% (standard; rms residual 61 → 41 mm) and
+  fall from 1.2% to 0.4% (SGS).
 
 #### Found
 - ⚠ **Q-centring partners are sign-reversed on A5.** `_q_centred` adds the
