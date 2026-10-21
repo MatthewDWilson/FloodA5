@@ -101,7 +101,29 @@ using Statistics: mean
 # ---------------------------------------------------------------------------
 
 const _cuda_available   = Ref{Bool}(false)
+const _cuda_tried       = Ref{Bool}(false)
 const _module_init_done = Ref{Bool}(false)
+
+"""
+    _gpu_available() → Bool
+
+Load CUDA.jl on first use (WP4, 2026-10: it was loaded in `__init__`, ~5 s
+of every start-up, although only point-in-polygon sampling during mesh
+generation can use it). `FLOODA5_NO_CUDA=1` skips CUDA entirely. Callers
+must reach the GPU path through `Base.invokelatest`, since `_pip_mask_gpu`
+is defined at run time.
+"""
+function _gpu_available()::Bool
+    if !_cuda_tried[]
+        _cuda_tried[] = true
+        if get(ENV, "FLOODA5_NO_CUDA", "") == "1"
+            @info "A5Grid: FLOODA5_NO_CUDA=1 — using CPU threads"
+        else
+            _try_load_cuda()
+        end
+    end
+    return _cuda_available[]
+end
 
 function _try_load_cuda()
     try
@@ -929,7 +951,7 @@ function __init__()
     end
     m = tryparse(Int, first(split(_PYA5_VERSION[], '.')))
     _A5_MAJOR[] = m !== nothing ? m : (PyCall.hasproperty(_a5, "migrate") ? 1 : 0)
-    _try_load_cuda()
+    # CUDA is loaded on first use (_gpu_available), not here (WP4).
 end
 
 """    pya5_version() → String   (e.g. "0.7.3", "1.0.0") """
@@ -1188,14 +1210,14 @@ end
 const CUDA_PIP_THRESHOLD = Ref{Int}(500_000)
 
 function _pip_mask(lons, lats, geometry)::Vector{Bool}
-    use_gpu = _cuda_available[] && length(lons) >= CUDA_PIP_THRESHOLD[]
+    use_gpu = length(lons) >= CUDA_PIP_THRESHOLD[] && _gpu_available()
     if use_gpu
         t    = geometry["type"]
         ring = t == "Polygon" ? geometry["coordinates"][1] :
                                 geometry["coordinates"][1][1]
         rxs  = Float64[Float64(v[1]) for v in ring]
         rys  = Float64[Float64(v[2]) for v in ring]
-        return _pip_mask_gpu(lons, lats, rxs, rys)
+        return Base.invokelatest(_pip_mask_gpu, lons, lats, rxs, rys)
     else
         return _pip_mask_cpu(lons, lats, geometry)
     end
@@ -1220,7 +1242,7 @@ function mesh_for_aoi(geojson_path_or_str::String, resolution::Int;
 
     @info "Building sample grid (resolution=$resolution, step=$(round(sample_step,sigdigits=4))°)..."
     lons, lats = _build_sample_grid(min_lon, min_lat, max_lon, max_lat, sample_step)
-    use_gpu = _cuda_available[] && length(lons) >= CUDA_PIP_THRESHOLD[]
+    use_gpu = length(lons) >= CUDA_PIP_THRESHOLD[] && _gpu_available()
     backend = use_gpu ? "GPU" : "CPU ($(Threads.nthreads()) threads)"
     @info "  Sample points: $(length(lons))  |  Backend: $backend (threshold=$(CUDA_PIP_THRESHOLD[]) pts)"
 
@@ -1337,29 +1359,33 @@ function _load_from_geoparquet(path::String, aoi_geojson::String, resolution::In
     # Resolve to absolute path before handing to the Python subprocess.
     # The bridge runs with dir=BRIDGE_DIR (mesh/), so relative paths would be
     # resolved from there rather than from the Julia working directory.
+    #
+    # WP4 (2026-10): the columns come back as raw Float64 files plus a small
+    # JSON manifest, read with vectorised numpy/shapely — previously every
+    # cell (≈1,300 numbers per SGS cell) went through iterrows and JSON text,
+    # ~75 s for Carlisle res-18 SGS. The values are identical: array columns
+    # map non-finite values to NaN, scalar columns map NaN/None to NaN (±Inf
+    # kept), as before.
     path_fwd = replace(abspath(path), "\\" => "/")
+    out_dir  = mktempdir()
+    out_fwd  = replace(out_dir, "\\" => "/")
     py_code = """
-import geopandas as gpd, json, math
+import geopandas as gpd, json, math, os
 import numpy as np
+import shapely
 gdf = gpd.read_parquet('$(path_fwd)')
+out = '$(out_fwd)'
 
-# Cell-ID scheme recorded by a5_bridge.mesh_to_geoparquet (WP-M1); None for
-# files written before that (pya5 0.7.x).
 import pyarrow.parquet as _pq
 _raw_md = (_pq.read_schema('$(path_fwd)').metadata or {}).get(b'flooda5')
 id_scheme = json.loads(_raw_md.decode()).get('a5_id_scheme') if _raw_md else None
 
 BASE_COLS = {'cell_id', 'resolution', 'center_lon', 'center_lat', 'geometry'}
 extra_cols = [c for c in gdf.columns if c not in BASE_COLS]
-
-# Detect column types: string-list (neighbours), numeric list, or scalar
-scalar_cols  = []
-array_cols   = []
-strlist_cols = []  # e.g. 'neighbours'
+scalar_cols, array_cols, strlist_cols = [], [], []
 for col in extra_cols:
     sample = gdf[col].iloc[0] if len(gdf) > 0 else None
     if hasattr(sample, '__len__') and not isinstance(sample, str):
-        # List column — check element type
         try:
             first_elem = list(sample)[0] if len(sample) > 0 else None
             if isinstance(first_elem, str):
@@ -1371,106 +1397,93 @@ for col in extra_cols:
     else:
         scalar_cols.append(col)
 
-cells = []
-adjacency = {}  # cell_id -> list of neighbour hex IDs
-for _, row in gdf.iterrows():
-    geom   = row.geometry
-    coords = list(geom.exterior.coords)
-    cell_id = row['cell_id']
-    cell   = {
-        'cell_id':    cell_id,
-        'resolution': int(row['resolution']),
-        'center_lon': float(row['center_lon']),
-        'center_lat': float(row['center_lat']),
-        'boundary':   [[c[0], c[1]] for c in coords],
-    }
-    for col in scalar_cols:
-        v = row[col]
-        cell[col] = None if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
-    for col in array_cols:
-        v = row[col]
-        if v is None:
-            cell[col] = None
-        else:
-            arr = np.asarray(v, dtype=np.float64)
-            cell[col] = [None if (x != x or x == float('inf') or x == float('-inf')) else x
-                         for x in arr.tolist()]
-    for col in strlist_cols:
-        v = row[col]
-        if col == 'neighbours' and v is not None:
-            adjacency[cell_id] = [str(x) for x in v]
-        # other string-list cols ignored for now
-    cells.append(cell)
+n = len(gdf)
+def wr(name, a):
+    np.ascontiguousarray(a, dtype=np.float64).tofile(os.path.join(out, name))
 
-print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols,
-                  'array_cols': array_cols, 'adjacency': adjacency,
-                  'id_scheme': id_scheme}))
+wr('center.bin', np.column_stack([gdf['center_lon'].astype(float).to_numpy(),
+                                  gdf['center_lat'].astype(float).to_numpy()]))
+coords, idx = shapely.get_coordinates(gdf.geometry.exterior.values, return_index=True)
+wr('coords.bin', coords)
+counts = np.bincount(idx, minlength=n).astype(np.float64)
+wr('counts.bin', counts)
+
+for k, col in enumerate(scalar_cols):
+    v = gdf[col].to_numpy(dtype=object)
+    a = np.array([np.nan if x is None else float(x) for x in v], dtype=np.float64)
+    wr('s%d.bin' % k, a)
+
+array_lens = []
+for k, col in enumerate(array_cols):
+    v = gdf[col].to_numpy(dtype=object)
+    first = v[0] if n > 0 else None
+    L = len(first) if (first is not None and len(first) > 0) else 0
+    array_lens.append(L)
+    if L == 0:
+        continue
+    m = np.full((n, L), np.nan)
+    for i, x in enumerate(v):
+        if x is None:
+            continue
+        a = np.asarray(x, dtype=np.float64)
+        m[i, :len(a)] = a
+    m[~np.isfinite(m)] = np.nan
+    wr('a%d.bin' % k, m)
+
+adjacency = {}
+if 'neighbours' in strlist_cols:
+    for cid, v in zip(gdf['cell_id'], gdf['neighbours']):
+        if v is not None:
+            adjacency[cid] = [str(x) for x in v]
+
+with open(os.path.join(out, 'manifest.json'), 'w') as f:
+    json.dump({'n': n, 'cell_id': [str(c) for c in gdf['cell_id']],
+               'resolution': [int(r) for r in gdf['resolution']],
+               'scalar_cols': scalar_cols, 'array_cols': array_cols,
+               'array_lens': array_lens, 'adjacency': adjacency,
+               'n_coords': int(len(coords)), 'id_scheme': id_scheme}, f)
 """
     tmp_script = tempname() * ".py"
     write(tmp_script, py_code)
-    buf = IOBuffer()
     errbuf = IOBuffer()
-    try
+    raw = try
         run(pipeline(Cmd(Cmd([PYTHON_CMD[], tmp_script]); dir=BRIDGE_DIR),
-                     stdout=buf, stderr=errbuf))
+                     stdout=devnull, stderr=errbuf))
+        JSON3.read(read(joinpath(out_dir, "manifest.json"), String), Dict)
     catch e
+        rm(out_dir; recursive = true, force = true)
         error("Failed to read GeoParquet: $(String(take!(errbuf)))")
     finally
         isfile(tmp_script) && rm(tmp_script)
     end
 
-    raw        = JSON3.read(String(take!(buf)), Dict)
-    raw_cells  = raw["cells"]
+    _rd(name, dims...) = read!(joinpath(out_dir, name), Array{Float64}(undef, dims...))
+    nc          = Int(raw["n"])
     scalar_cols = [String(k) for k in raw["scalar_cols"]]
     array_cols  = [String(k) for k in raw["array_cols"]]
-    raw_adj    = get(raw, "adjacency", Dict())
-    nc = length(raw_cells)
+    array_lens  = Int.(raw["array_lens"])
+    raw_adj     = get(raw, "adjacency", Dict())
+    ids         = raw["cell_id"]; ress = raw["resolution"]
 
-    # Build static_vars (scalar) accumulator
+    center = _rd("center.bin", 2, nc)
+    coords = _rd("coords.bin", 2, Int(raw["n_coords"]))
+    counts = round.(Int, _rd("counts.bin", nc))
+
     static_vars = Dict{String, Vector{Float64}}(
-        col => Vector{Float64}(undef, nc) for col in scalar_cols
-    )
-
-    # We need to know each array column's length to allocate the matrix.
-    # Peek at the first cell.
-    array_lengths = Dict{String,Int}()
-    if nc > 0
-        for col in array_cols
-            v = get(raw_cells[1], col, nothing)
-            if v !== nothing && !isempty(v)
-                array_lengths[col] = length(v)
-            end
-        end
-    end
+        col => _rd("s$(k-1).bin", nc) for (k, col) in enumerate(scalar_cols))
     array_vars = Dict{String, Matrix{Float64}}(
-        col => Matrix{Float64}(undef, array_lengths[col], nc)
-        for col in array_cols if haskey(array_lengths, col)
-    )
+        col => _rd("a$(k-1).bin", array_lens[k], nc)
+        for (k, col) in enumerate(array_cols) if array_lens[k] > 0)
+    rm(out_dir; recursive = true, force = true)
 
-    cells = A5Cell[]
-    for (i, c) in enumerate(raw_cells)
-        elev = haskey(c, "elevation") ?
-               (c["elevation"] === nothing ? NaN : Float64(c["elevation"])) : NaN
-        push!(cells, A5Cell(
-            String(c["cell_id"]), Int(c["resolution"]),
-            Float64(c["center_lon"]), Float64(c["center_lat"]),
-            [[Float64(v[1]), Float64(v[2])] for v in c["boundary"]],
-            elev))
-        for col in scalar_cols
-            v = get(c, col, nothing)
-            static_vars[col][i] = (v === nothing) ? NaN : Float64(v)
-        end
-        for col in array_cols
-            haskey(array_vars, col) || continue
-            v = get(c, col, nothing)
-            if v === nothing
-                array_vars[col][:, i] .= NaN
-            else
-                for (k, x) in enumerate(v)
-                    array_vars[col][k, i] = (x === nothing) ? NaN : Float64(x)
-                end
-            end
-        end
+    elev = get(static_vars, "elevation", nothing)
+    cells = Vector{A5Cell}(undef, nc)
+    off = 0
+    for i in 1:nc
+        bnd = [[coords[1, off + k], coords[2, off + k]] for k in 1:counts[i]]
+        off += counts[i]
+        cells[i] = A5Cell(String(ids[i]), Int(ress[i]), center[1, i], center[2, i], bnd,
+                          elev === nothing ? NaN : elev[i])
     end
 
     res  = resolution > 0 ? resolution : (isempty(cells) ? 0 : cells[1].resolution)
@@ -1650,7 +1663,7 @@ function diagnose()
     println("BRIDGE_SCRIPT : ", BRIDGE_SCRIPT)
     _find_python()
     println("PYTHON_CMD    : ", PYTHON_CMD[])
-    println("CUDA_AVAILABLE: ", _cuda_available[])
+    println("CUDA_AVAILABLE: ", _gpu_available())
     println()
     println("Running bridge check...")
     try

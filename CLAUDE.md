@@ -15,8 +15,8 @@ CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
 WP1, WP2 and WP3 part 1 are on `main`; WP3 part 2 (SGS on any valence, SGS
 slot-order fix), WP2b (recommended scheme as default, `--scheme legacy` for the
 old one) and WP2c (Q-centring orientation defect; consistent Q-centring) are on
-`wp2c-qcentre` (stacked on `wp2b-default-scheme`, `wp3b-sgs-general`); next is
-WP4. Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
+`main` (PR #3); WP4 stage 1 (CPU performance, results unchanged) is on
+`wp4-cpu-perf`. Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
 Q-centring). SGS meshes built before 2026-10-21 are refused until rebuilt or
 repaired (`mesh/repair_sgs_slot_order.py`). Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
@@ -33,6 +33,8 @@ without `_orient_collinear!`-style signs.
 - Thread determinism: `julia --project=. -t 1 test/check_determinism.jl` vs `-t 4`;
   compare the `FINGERPRINT` lines.
 - Step benchmark: `julia --project=. -t 8 test/benchmark_baseline.jl`.
+  Performance changes must keep results bit-identical unless stated: compare
+  determinism fingerprints and Carlisle outputs frame by frame against `main`.
 - Full simulations: `julia --project=. --threads auto FloodModel.jl --help`.
   Mesh *generation* (`--meshgen`) should use `--threads 1` (PyCall/GDAL hazard).
 - Large data lives in `test/carlisle`, `test/planar_embankment`, `test/square`
@@ -60,6 +62,8 @@ without `_orient_collinear!`-style signs.
 4. Don't read `N_SIDES` in production code — use `state.max_neighbours`.
 5. Threaded loops (`Threads.@threads`) must only write per-iteration slots and
    must not read arrays that the same loop writes (see the WP0 Q-centring race).
+   A closure must not capture a local that is assigned only in one branch
+   (it gets boxed and every access becomes type-unstable — bind it first).
 6. Use `x isa SomeType`, not `x == SomeType`, for type tests.
 7. Non-A5 polygon meshes have mixed valence: don't infer "boundary cell" from
    neighbour count vs the maximum (use unshared polygon sides), and don't use

@@ -2458,10 +2458,10 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
         state.water_depth[ci] = state.volume[ci] / max(state.cell_area[ci], 1.0)
         state.vol_removed    += dV
 
-        # Fix C: update ghost edge momentum state (preserve interior_nb fields)
-        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
-                                            ge.sill, q_stored, false,
-                                            ge.interior_nb_idx, ge.interior_nb_L)
+        # Fix C: update ghost edge momentum state in place (GhostEdge is
+        # mutable; WP4: was a new object per edge per step, ~90 KB/step)
+        ge.flux_prev = q_stored
+        ge.is_Q_flux = false
     end
 end
 
@@ -2540,9 +2540,7 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         state.water_depth[ci] = max(0.0, new_wse - tbl.z_min)
         state.vol_removed += dV
 
-        state.ghost_edges[idx] = GhostEdge(ge.cell_index, ge.width, ge.L,
-                                            ge.sill, q_stored, ge.is_Q_flux,
-                                            ge.interior_nb_idx, ge.interior_nb_L)
+        ge.flux_prev = q_stored        # in place (WP4; see the standard version)
     end
 end
 # ---------------------------------------------------------------------------
@@ -2647,7 +2645,7 @@ When `SOLVER_BACKEND[] == :gpu` (Phase 5):
   The interface between phases (edge_vol, dV vectors) is the same for
   both CPU and GPU paths; only the dispatch changes.
 """
-function step_standard!(state::FlowState, dt::Float64)
+function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     n     = length(state.cell_ids)
     edges = state.edges
     ne    = edges.n_edges
@@ -2767,6 +2765,15 @@ function step_standard!(state::FlowState, dt::Float64)
 
         wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
         wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
+
+        # Dry edge (WP4): both flux kernels return (0, 0) when
+        # max(wse) − sill ≤ HFLOW_THRESHOLD, whatever q_prev, so skip the
+        # momentum/gradient work. Same test (NaN falls through) — bit-identical.
+        if max(wse_ci, wse_cj) - edges.sill[e] <= HFLOW_THRESHOLD
+            edges.flux[e] = 0.0
+            edge_vol[e]   = 0.0
+            continue
+        end
 
         # Identify donor depth for the volume limiter (higher-WSE side donates);
         # 0.0 disables the per-edge volume limiter under --limiter positivity.
@@ -2968,7 +2975,10 @@ function step_standard!(state::FlowState, dt::Float64)
     end
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
-    _compute_velocity!(state)
+    # (WP4: `velocity = false` skips it; run_simulation! then computes it only
+    # for the steps that are written or pushed to the visualiser — the result
+    # depends only on the end-of-step state, so the output is unchanged.)
+    velocity && _compute_velocity!(state)
 
     # ── Phase F: cell-vector momentum reconstruction ───────────────────────
     # Active when --momentum-model cell is set (qvec is then the momentum
@@ -3062,7 +3072,7 @@ Stability fixes applied in this function (branch: sgs_flow_fixes):
   and the standard shallow-water literature.  The minimum is marginally non-standard
   and slightly over-conductive.
 """
-function step_sgs!(state::FlowState, dt::Float64)
+function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     n     = length(state.cell_ids)
     edges = state.edges
     ne    = edges.n_edges
@@ -3075,8 +3085,8 @@ function step_sgs!(state::FlowState, dt::Float64)
     # (WP4: the wetted area computed here was never used — removed.)
     ws  = _edge_slots!(state, _workspace!(state))
     wse = ws.wse
-    for i in 1:n
-        wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
+    Threads.@threads for i in 1:n                 # per-cell writes only (WP4)
+        @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
     end
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
@@ -3275,7 +3285,10 @@ function step_sgs!(state::FlowState, dt::Float64)
     end
 
     # ── Phase E: velocity ─────────────────────────────────────────────────
-    _compute_velocity!(state)
+    # (WP4: `velocity = false` skips it; run_simulation! then computes it only
+    # for the steps that are written or pushed to the visualiser — the result
+    # depends only on the end-of-step state, so the output is unchanged.)
+    velocity && _compute_velocity!(state)
 
     # ── Phase F: cell discharge vectors for vector friction (WP1) ─────────
     (vector_friction || state.q_centre_mode === :consistent) && _reconstruct_qvec!(state, true)
@@ -3432,16 +3445,20 @@ function run_simulation!(state            :: FlowState,
             apply_source!(state, src, t, dt)
         end
 
-        # ── Debug: post-source volume check (first 5 steps + every 10th) ───
-        if step <= 5 || step % 10 == 0
+        # ── Debug: post-source volume check (first 5 steps + every 500th) ──
+        # WP4 (2026-10): was every 10th step, with an O(cells × sources) scan —
+        # about as costly as the step itself on a mostly dry domain. The
+        # every-50-step mass-balance line below is unchanged.
+        if step <= 5 || step % 500 == 0
             # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
             # so src_vol is non-empty when only InflowPoints are active.
             all_pt_srcs = filter(s -> hasproperty(s, :cell_index), merged_sources)
             src_vols    = [state.volume[s.cell_index] for s in all_pt_srcs]
             src_labels  = [source_label(s) for s in all_pt_srcs]
             wet_now     = count(>(1e-4), state.water_depth)
-            non_src_wet = count(i -> state.water_depth[i] > 1e-4 &&
-                all(s.cell_index != i for s in all_pt_srcs), eachindex(state.volume))
+            src_cells   = Set(s.cell_index for s in all_pt_srcs)
+            non_src_wet = count(i -> state.water_depth[i] > 1e-4 && !(i in src_cells),
+                                eachindex(state.volume))
             vol_sum_now = sum(v for v in state.volume if isfinite(v); init=0.0)
             nan_count   = count(isnan, state.volume)
             nan_str     = nan_count > 0 ? "  NaN_cells=$nan_count ⚠" : ""
@@ -3462,13 +3479,17 @@ function run_simulation!(state            :: FlowState,
 
         # Physics step (includes Phase D ghost-edge outflow)
         if use_sgs
-            step_sgs!(state, dt)
+            step_sgs!(state, dt; velocity = false)
         else
-            step_standard!(state, dt)
+            step_standard!(state, dt; velocity = false)
         end
 
         t    += dt
         step += 1
+
+        # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
+        ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
+            _compute_velocity!(state)
 
         # Visualiser push
         if vis !== nothing && step % VIS_INTERVAL == 0
@@ -3534,6 +3555,7 @@ function run_simulation!(state            :: FlowState,
 
     if output.enabled && t > output.last_write_t
         t_hdf5 = time()
+        _compute_velocity!(state)
         _write_frame!(output, state, t)
         timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
     end
