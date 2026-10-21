@@ -401,7 +401,7 @@ function diamond_vertex_eta!(veta::Vector{Float64}, table::DiamondFluxTable,
     nv = length(table.vertices)
     length(veta) == nv || resize!(veta, nv)
     vptr = table.vptr; vcell = table.vcell; vw = table.vw; vnan = table.vnan
-    Threads.@threads for v in 1:nv
+    @batch for v in 1:nv
         @inbounds if vnan[v]
             veta[v] = NaN
         else
@@ -426,7 +426,7 @@ function diamond_vertex_wet!(vwet::Vector{Bool}, table::DiamondFluxTable,
     nv = length(table.vertices)
     length(vwet) == nv || resize!(vwet, nv)
     vptr = table.vptr; vcell = table.vcell
-    Threads.@threads for v in 1:nv
+    @batch for v in 1:nv
         w = true
         @inbounds for k in vptr[v]:vptr[v + 1] - 1
             depth[vcell[k]] > h_dry || (w = false; break)
@@ -444,7 +444,7 @@ end
 """
 @inline function diamond_dWSE_n_v(table::DiamondFluxTable, e::Int,
                                   wse_ci::Float64, wse_cj::Float64,
-                                  veta::Vector{Float64}, L_e::Float64)::Float64
+                                  veta::AbstractVector{Float64}, L_e::Float64)::Float64
     @inbounds begin
         table.valid[e] || return NaN
         eta_va = veta[table.va_idx[e]]
@@ -462,7 +462,7 @@ end
 `diamond_stencil_wet` with the per-vertex flags from `diamond_vertex_wet!`.
 """
 @inline function diamond_stencil_wet_v(table::DiamondFluxTable, e::Int,
-                                       vwet::Vector{Bool})::Bool
+                                       vwet::AbstractVector{Bool})::Bool
     @inbounds table.valid[e] || return false
     @inbounds return vwet[table.va_idx[e]] && vwet[table.vb_idx[e]]
 end

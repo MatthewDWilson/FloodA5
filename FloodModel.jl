@@ -108,6 +108,7 @@ using Dates
 using Statistics: mean, quantile
 using LinearAlgebra: Diagonal
 using HDF5
+using Polyester: @batch   # WP4 stage 2: non-allocating threaded loops
 using ArchGDAL
 
 # ---------------------------------------------------------------------------
@@ -766,7 +767,7 @@ function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Fl
                                    state::FlowState, ws::StepWorkspace)
     cptr, cedge = _cell_csr!(state, ws)
     out = ws.out; ci = edges.cell_i; cj = edges.cell_j
-    Threads.@threads for i in eachindex(volume)
+    @batch for i in eachindex(volume)
         s = 0.0
         @inbounds for k in cptr[i]:cptr[i + 1] - 1
             e = cedge[k]; ev = edge_vol[e]
@@ -778,7 +779,7 @@ function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Fl
         end
         @inbounds out[i] = s
     end
-    Threads.@threads for e in eachindex(edge_vol)
+    @batch for e in eachindex(edge_vol)
         @inbounds begin
             ev = edge_vol[e]
             iszero(ev) && continue
@@ -807,7 +808,7 @@ function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
                         ws::StepWorkspace, sgs::Bool)
     cptr, cedge = _cell_csr!(state, ws)
     ci = state.edges.cell_i
-    Threads.@threads for i in 1:length(state.cell_ids)
+    @batch for i in 1:length(state.cell_ids)
         s = 0.0
         @inbounds for k in cptr[i]:cptr[i + 1] - 1
             e = cedge[k]; ev = edge_vol[e]
@@ -2019,8 +2020,8 @@ discharge with their own width and the result scaled by edge e's width.
 `qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
 snapshot (WP0 thread-safety rule).
 """
-@inline function _q_centred_consistent(flux::Vector{Float64}, e::Int, edges::EdgeList,
-                                       qu::Vector{Float64}, qv::Vector{Float64},
+@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges::EdgeList,
+                                       qu::AbstractVector{Float64}, qv::AbstractVector{Float64},
                                        theta::Float64; volumetric::Bool = false)::Float64
     w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
     q0  = flux[e] / w_e
@@ -2707,7 +2708,7 @@ function _compute_velocity!(state::FlowState)
     h_min  = max(HFLOW_THRESHOLD, 0.01)  # m — velocity zeroed below this depth;
                                           # must be ≥ HFLOW_THRESHOLD so edges that
                                           # return zero flux also produce zero velocity
-    Threads.@threads for i in 1:n
+    @batch for i in 1:n
         h = state.water_depth[i]
         if !(h >= h_min)                  # also catches NaN depth
             state.velocity[i] = 0.0
@@ -2878,7 +2879,7 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     # before the first step, which reduces to component friction).
     vector_friction = state.friction_model === :vector
 
-    Threads.@threads for e in 1:ne
+    @batch for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
@@ -3134,7 +3135,7 @@ Per-cell gather with no shared writes, so it is threaded and deterministic
 function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
     edges  = state.edges
     max_nb = state.max_neighbours
-    Threads.@threads for i in 1:length(state.cell_ids)
+    @batch for i in 1:length(state.cell_ids)
         qu = 0.0;  qv = 0.0
         @inbounds for s in 1:max_nb
             e = state.cell_edge_index[s, i]
@@ -3204,7 +3205,7 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     # (WP4: the wetted area computed here was never used — removed.)
     ws  = _edge_slots!(state, _workspace!(state))
     wse = ws.wse
-    Threads.@threads for i in 1:n                 # per-cell writes only (WP4)
+    @batch for i in 1:n                 # per-cell writes only (WP4)
         @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
     end
 
@@ -3241,7 +3242,7 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     positivity = state.limiter !== :legacy
     donor_div  = _donor_edge_divisor(state)
 
-    Threads.@threads for e in 1:ne
+    @batch for e in 1:ne
         ci = edges.cell_i[e]
         cj = edges.cell_j[e]
 
