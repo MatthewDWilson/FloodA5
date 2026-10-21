@@ -39,6 +39,35 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP2c: Q-centring on A5 (`wp2c-qcentre`)
+
+Defaults are unchanged (`--q-centre-mode legacy` in both schemes) pending a
+decision; the evidence is in `docs/HYDRAULICS.md` §15.4.
+
+#### Found
+- ⚠ **Q-centring partners are sign-reversed on A5.** `_q_centred` adds the
+  stored fluxes of each edge's two "most collinear" faces, but edges are
+  oriented from the lower to the higher cell index and A5 cell order is not
+  geometric, so 67–68% of partners have the opposite orientation (0% on
+  Cartesian grids). On A5 the scheme therefore acts mostly as a resistance of
+  order (1−θ)/dt: in the frozen-coefficient test steady sheet-flow conveyance
+  is 16% (dt 1 s) and 26% (dt 5 s) of the Manning value; on Carlisle res-18
+  the domain stores about twice the water of a 20 m Cartesian grid on the
+  same DEM and forcing, and more as dt is reduced. This affects every A5 run
+  with θ < 1 (the default 0.9), standard and SGS.
+
+#### Added
+- `--q-centre-mode legacy|oriented|consistent` (`q_centre_mode`, new last
+  `FlowState` field with a backward-compatible constructor):
+  `oriented` corrects the partner signs (`_orient_collinear!`; signed indices
+  in `collinear_i/j`) — on pentagons the partners are not parallel and this
+  deflects the flow by up to 57°; `consistent` also maps each partner onto the
+  edge normal using the cell vectors (`_q_centred_consistent`): exact for
+  uniform flow (frozen test: conveyance within 0.1%, deflection < 0.4°),
+  identical to Q-centring on Cartesian grids, standard and SGS kernels.
+- `--courant C` (default 0.7).
+- `test/test_qcentre.jl` (in CI).
+
 ### WP2b: the recommended scheme becomes the default (`wp2b-default-scheme`)
 
 #### Changed

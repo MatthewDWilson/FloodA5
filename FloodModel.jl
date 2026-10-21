@@ -246,6 +246,8 @@ struct EdgeList
     # Used by step_standard! and step_sgs! Phase A to compute smoothed q_prev.
     collinear_i  :: Vector{Int}        # index of most-collinear edge on ci side
     collinear_j  :: Vector{Int}        # index of most-collinear edge on cj side
+                                       # (negative = oriented against e; see
+                                       # _orient_collinear!)
     # Non-orthogonal gradient correction (flow-direction-fixes branch).
     #
     # ⚠️  REVISION NOTE (2026-06-24): skew_x[e]/skew_y[e] previously held a
@@ -544,6 +546,12 @@ mutable struct FlowState
     # cfl_mode = :local; P_i includes ghost (domain-edge) faces. Built in
     # initialise_flow_model; empty for hand-built states (→ √A fallback).
     cell_length    :: Vector{Float64}
+    # ── Q-centring partners (WP2c, 2026-10) ────────────────────────────────
+    # :legacy (default — partner fluxes added as stored), :oriented (sign of
+    # reversed partners flipped; the signs live in edges.collinear_i/j) or
+    # :consistent (partners also mapped onto the edge normal with the cell
+    # vectors; Phase F then runs every step). See _q_centred_consistent.
+    q_centre_mode  :: Symbol
 end
 
 # ---------------------------------------------------------------------------
@@ -620,6 +628,29 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       qvec_u, qvec_v, cell_edge_index, mom_weights,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, :legacy, :legacy, Float64[])
+end
+
+# WP2c (2026-10): `q_centre_mode` was appended as field 37. The 36-argument
+# form defaults it to :legacy (unoriented Q-centring partners).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      :legacy)
 end
 
 """
@@ -1720,6 +1751,83 @@ function _build_edge_list(cells       :: Vector{A5Cell},
     )
 end
 
+"""
+    _orient_collinear!(edges) → Int
+
+Q-centring orientation (WP2c, 2026-10). Edge e = (ci, cj) stores a positive
+discharge for flow from cj into ci. Its ci-side partner `collinear_i[e]`
+joins ci to a cell beyond ci, so the same physical flow (cj → ci → beyond)
+is positive on the partner only if ci is the partner's `cell_j`; likewise
+the cj-side partner needs cj as its `cell_i`. Partners oriented the other
+way get a negative index, which `_q_centred` reads as "flip the sign".
+Returns the number of partners negated.
+
+`_build_edge_list` orients edges from the lower to the higher cell index:
+consistent on row-major Cartesian grids (no partner is negated), but on A5
+about two partners in three are reversed, so unoriented Q-centring there
+subtracts most partner fluxes instead of averaging them.
+"""
+function _orient_collinear!(edges::EdgeList)::Int
+    n_rev = 0
+    @inbounds for e in 1:edges.n_edges
+        a = edges.collinear_i[e]
+        if a > 0 && edges.cell_j[a] != edges.cell_i[e]
+            edges.collinear_i[e] = -a;  n_rev += 1
+        end
+        b = edges.collinear_j[e]
+        if b > 0 && edges.cell_i[b] != edges.cell_j[e]
+            edges.collinear_j[e] = -b;  n_rev += 1
+        end
+    end
+    return n_rev
+end
+
+"""
+    _q_centred_consistent(flux, e, edges, qu, qv, θ; volumetric=false) → Float64
+
+Geometrically consistent Q-centring (`q_centre_mode = :consistent`, WP2c,
+2026-10). Each oriented partner (see `_orient_collinear!`) contributes an
+estimate of edge e's own normal discharge: its stored normal discharge
+gives the component along its normal m = s·n_p, and the cell discharge
+vectors averaged over the partner's two cells (Phase F) give only the
+remainder,
+
+  q_est = s·q_p·(m·n_e) − Ū·(n_e − (m·n_e)·m),
+
+  q_eff = θ·q_e + (1−θ)·mean(q_est over the partners).
+
+Exact for uniform flow, so steady conveyance is unchanged (unlike the
+unoriented partners, which on A5 act as a resistance of order (1−θ)/dt);
+the partner's own face flux still carries face-level (checkerboard) modes,
+which a pure cell-vector projection (`:blend`) cannot see. On a Cartesian
+grid m = n_e and this is exactly `_q_centred`. With `volumetric = true`
+(SGS R–A kernel) `flux` holds Q (m³/s): partners are converted to unit
+discharge with their own width and the result scaled by edge e's width.
+`qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
+snapshot (WP0 thread-safety rule).
+"""
+@inline function _q_centred_consistent(flux::Vector{Float64}, e::Int, edges::EdgeList,
+                                       qu::Vector{Float64}, qv::Vector{Float64},
+                                       theta::Float64; volumetric::Bool = false)::Float64
+    w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
+    q0  = flux[e] / w_e
+    nx  = edges.nf_x[e]; ny = edges.nf_y[e]
+    acc = 0.0; n_nb = 0
+    @inbounds for p in (edges.collinear_i[e], edges.collinear_j[e])
+        p == 0 && continue
+        a  = abs(p); sg = p > 0 ? 1.0 : -1.0
+        q_p = volumetric ? flux[a] / max(edges.width[a], 1e-9) : flux[a]
+        mx = sg * edges.nf_x[a]; my = sg * edges.nf_y[a]
+        c  = mx * nx + my * ny
+        ca = edges.cell_i[a]; cb = edges.cell_j[a]
+        Ux = 0.5 * (qu[ca] + qu[cb]); Uy = 0.5 * (qv[ca] + qv[cb])
+        acc += sg * q_p * c - (Ux * (nx - c * mx) + Uy * (ny - c * my))
+        n_nb += 1
+    end
+    n_nb == 0 && return flux[e]
+    return w_e * (theta * q0 + (1.0 - theta) * acc / n_nb)
+end
+
 # ---------------------------------------------------------------------------
 # Flow model initialisation
 # ---------------------------------------------------------------------------
@@ -1737,6 +1845,14 @@ Initialise the flow model on the A5 mesh.
 - `q_centre_theta`       — θ for the Q-centred spatial momentum smoothing
                             scheme (checkerboard suppression). Default 0.9
                             (LISFLOOD-FP standard). Set to 1.0 to disable.
+- `q_centre_mode`        — Q-centring partners (WP2c), used where θ < 1:
+                            `:legacy` (default here) adds the collinear
+                            partners' stored fluxes as they are (on A5 about
+                            two in three have the opposite orientation);
+                            `:oriented` flips those (`_orient_collinear!`);
+                            `:consistent` also maps each partner onto the
+                            edge's normal (`_q_centred_consistent`). All three
+                            are identical on Cartesian grids.
 - `gradient_correction`  — when `true`, use the WLSQ non-orthogonal gradient
                             correction (`_bates_flux_corrected` /
                             `_manning_flux_ra_corrected`) in place of the
@@ -1759,6 +1875,7 @@ function initialise_flow_model(mesh::A5Mesh,
                                 manning_n::Float64 = 0.03,
                                 friction_raster    = nothing,
                                 q_centre_theta            :: Float64 = 0.9,
+                                q_centre_mode      :: Symbol  = :legacy,
                                 gradient_correction       :: Bool    = false,
                                 gradient_correction_alpha :: Float64 = 1.0,
                                 momentum_model            :: Symbol  = :edge,
@@ -1774,6 +1891,8 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("limiter must be :legacy, :positivity or :hybrid (got :$limiter)"))
     cfl_mode in (:legacy, :local) ||
         throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
+    q_centre_mode in (:legacy, :oriented, :consistent) ||
+        throw(ArgumentError("q_centre_mode must be :legacy, :oriented or :consistent (got :$q_centre_mode)"))
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -1923,6 +2042,10 @@ function initialise_flow_model(mesh::A5Mesh,
     edges = _build_edge_list(mesh.cells, id_idx, adj, areas,
                               sill_matrix, elevations)
     @info "  Edge list built in $(round(time()-t1, digits=1))s"
+    if q_centre_mode !== :legacy
+        n_rev = _orient_collinear!(edges)
+        @info "  Q-centring partners oriented: $(n_rev) reversed"
+    end
 
     # Check graph connectivity -- warn if mesh has isolated components
     _check_mesh_connectivity(edges, n)
@@ -2083,6 +2206,7 @@ function initialise_flow_model(mesh::A5Mesh,
         limiter,
         cfl_mode,
         cell_length,
+        q_centre_mode,
     )
 end
 
@@ -2579,6 +2703,9 @@ function step_standard!(state::FlowState, dt::Float64)
             q_proj
         elseif state.momentum_model === :blend
             state.q_centre_theta * flux_prev[e] + (1.0 - state.q_centre_theta) * q_proj
+        elseif state.q_centre_mode === :consistent
+            _q_centred_consistent(flux_prev, e, edges, state.qvec_u, state.qvec_v,
+                                  state.q_centre_theta)
         else
             _q_centred(flux_prev, e,
                        edges.collinear_i[e], edges.collinear_j[e],
@@ -2755,7 +2882,8 @@ function step_standard!(state::FlowState, dt::Float64)
     # :edge momentum + :vector friction, edges.flux remains the momentum
     # state and qvec is used only for q_t. Under :blend (WP2) qvec supplies
     # the projected part of the blend. See _reconstruct_qvec!.
-    if state.momentum_model !== :edge || state.friction_model === :vector
+    if state.momentum_model !== :edge || state.friction_model === :vector ||
+       state.q_centre_mode === :consistent
         _reconstruct_qvec!(state, false)
     end
 end
@@ -2935,9 +3063,12 @@ function step_sgs!(state::FlowState, dt::Float64)
         # Same collinear lookup as standard flow — the checkerboard mode exists
         # on the pentagonal mesh regardless of the flux kernel used.
         # θ = state.q_centre_theta (default 0.9; set via --q-centre-theta).
-        Q_prev_eff = _q_centred(flux_Q_prev, e,
-                                 edges.collinear_i[e], edges.collinear_j[e],
-                                 state.q_centre_theta)
+        Q_prev_eff = state.q_centre_mode === :consistent ?
+            _q_centred_consistent(flux_Q_prev, e, edges, state.qvec_u, state.qvec_v,
+                                  state.q_centre_theta; volumetric = true) :
+            _q_centred(flux_Q_prev, e,
+                       edges.collinear_i[e], edges.collinear_j[e],
+                       state.q_centre_theta)
 
         # Face-tangential discharge for vector friction, as volumetric Q:
         # qvec is reconstructed from the face unit discharges flux_Q/width
@@ -3053,7 +3184,7 @@ function step_sgs!(state::FlowState, dt::Float64)
     _compute_velocity!(state)
 
     # ── Phase F: cell discharge vectors for vector friction (WP1) ─────────
-    vector_friction && _reconstruct_qvec!(state, true)
+    (vector_friction || state.q_centre_mode === :consistent) && _reconstruct_qvec!(state, true)
 end
 
 # ---------------------------------------------------------------------------
@@ -3148,6 +3279,7 @@ function run_simulation!(state            :: FlowState,
                          vis_mode         :: Symbol = :none,
                          output           :: SimOutput = SimOutput();
                          method           :: FlowMethod = StandardFlow(),
+                         courant          :: Float64   = 0.7,
                          rainfall_rate    :: Float64   = 0.0,
                          all_sources      :: Vector{<:AbstractSource} = AbstractSource[],
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
@@ -3191,7 +3323,7 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Adaptive dt
-        dt = min(_cfl_dt(state, method), dt_max, sim_duration - t)
+        dt = min(_cfl_dt(state, method; courant = courant), dt_max, sim_duration - t)
         dt = max(dt, 0.1)
 
         # ── Apply all water sources (before routing) ────────────────────────
@@ -3376,8 +3508,9 @@ end
 
 Default numerical options for `--scheme` (WP2b, 2026-10): the values that
 `run_flood_model`/the CLI use for any of `gradient_correction`,
-`face_flux_method`, `friction_model`, `limiter`, `cfl_mode` and
-`momentum_model` that the caller does not set explicitly.
+`face_flux_method`, `friction_model`, `limiter`, `cfl_mode`,
+`momentum_model` and `q_centre_mode` (WP2c) that the caller does not
+set explicitly.
 
   :recommended (default)
       standard  gradient correction on, diamond-wetdry face gradient, vector
@@ -3389,13 +3522,17 @@ Default numerical options for `--scheme` (WP2b, 2026-10): the values that
                 the R–A kernel, which spiked on its own)
   :legacy     the pre-2026-10 behaviour (all options off / component)
 
+Both schemes keep the unoriented Q-centring partners
+(`q_centre_mode = :legacy`): orienting them is worse on pentagons
+(WP2c, HYDRAULICS.md §15.4).
+
 Evidence: docs/HYDRAULICS.md §15. `initialise_flow_model`'s own keyword
 defaults remain the legacy values (library level; test fixtures rely on them).
 """
 function scheme_options(scheme::Symbol, flow_method::Symbol)
     legacy = (gradient_correction = false, face_flux_method = :legacy,
               friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
-              momentum_model = :edge)
+              momentum_model = :edge, q_centre_mode = :legacy)
     scheme === :legacy && return legacy
     scheme === :recommended ||
         throw(ArgumentError("scheme must be :recommended or :legacy (got :$scheme)"))
@@ -3425,6 +3562,7 @@ function run_flood_model(;
     # WP2b: these default to `scheme_options(scheme, flow_method)`; `nothing`
     # means "take the scheme's value".
     scheme                    :: Symbol  = :recommended,
+    q_centre_mode      :: Union{Symbol,Nothing} = nothing,
     gradient_correction       :: Union{Bool,Nothing}   = nothing,
     gradient_correction_alpha :: Float64 = 1.0,
     momentum_model            :: Union{Symbol,Nothing} = nothing,
@@ -3434,6 +3572,7 @@ function run_flood_model(;
     cfl_mode                  :: Union{Symbol,Nothing} = nothing,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
+    courant           :: Float64 = 0.7,
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -3455,6 +3594,7 @@ function run_flood_model(;
     friction_model      = something(friction_model,      so.friction_model)
     limiter             = something(limiter,             so.limiter)
     cfl_mode            = something(cfl_mode,            so.cfl_mode)
+    q_centre_mode = something(q_centre_mode, so.q_centre_mode)
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
@@ -3670,6 +3810,7 @@ function run_flood_model(;
                                         manning_n                 = manning_n,
                                         friction_raster           = friction_source,
                                         q_centre_theta            = q_centre_theta,
+                                        q_centre_mode      = q_centre_mode,
                                         gradient_correction       = gradient_correction,
                                         gradient_correction_alpha = gradient_correction_alpha,
                                         momentum_model            = momentum_model,
@@ -3681,6 +3822,7 @@ function run_flood_model(;
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
           "Manning n = $(manning_n), q_centre_theta = $(q_centre_theta), " *
+          "q_centre_mode = $(q_centre_mode), " *
           "gradient_correction = $(gradient_correction), " *
           "alpha = $(gradient_correction_alpha), " *
           "momentum_model = $(momentum_model), " *
@@ -3850,13 +3992,14 @@ function run_flood_model(;
 
     # 9. Simulation loop
     tl.source_setup = time() - t0_src
-    @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  " *
+    @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  courant=$(courant)  " *
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
           "sources=$(length(all_sources))  open_bc=$(count(bc -> bc !== Closed, flow_state.ghost_cell_bc))"
     t0 = time()
     run_simulation!(flow_state, mesh, sim_duration, dt_max,
                     vis, vis_mode, sim_output;
                     method        = method_obj,
+                    courant       = courant,
                     rainfall_rate = rainfall_rate,
                     all_sources   = all_sources,
                     sgs_diag      = sgs_diag,
@@ -4003,6 +4146,19 @@ Flow model options:
                      may reveal period-2 checkerboarding on irregular
                      meshes, particularly at high rainfall rates or fine
                      resolution.
+  --q-centre-mode legacy|oriented|consistent
+                     How Q-centring uses its collinear partner faces (WP2c;
+                     only where --q-centre-theta < 1; identical on Cartesian
+                     grids). See docs/HYDRAULICS.md §15.4.
+                       legacy      (default) partner fluxes as stored. On A5
+                                   about two partners in three are oriented
+                                   against the edge, so this acts as a
+                                   dt-dependent resistance (lower conveyance).
+                       oriented    signs corrected; pentagon partners are
+                                   not parallel, so this deflects the flow.
+                       consistent  signs corrected and each partner mapped
+                                   onto the edge normal with the cell
+                                   vectors: exact for uniform flow.
   --scheme recommended|legacy
                      Default numerical options (WP2b, 2026-10). Each of
                      --gradient-correction, --face-flux-method,
@@ -4123,6 +4279,8 @@ Flow model options:
                               l_i = 4·area/perimeter (= dx on a square).
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
+  --courant C        Courant number of the adaptive timestep, in (0, 1]
+                     (default: 0.7, the LISFLOOD-FP/CAESAR value).
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
   --injection-point LAT,LON,RATE
                      Add a point source at (lat, lon) with volumetric flow rate
@@ -4519,6 +4677,7 @@ function main(args=String[])
     limiter_val,                   args = _pop_flag(args, "--limiter")
     cfl_mode_val,                  args = _pop_flag(args, "--cfl-mode")
     scheme_val,                    args = _pop_flag(args, "--scheme")
+    q_centre_mode_val,      args = _pop_flag(args, "--q-centre-mode")
 
     # Default flow method: standard for mesh-only runs (no simulation needed),
     # sgs for simulation runs (full accuracy by default).
@@ -4645,6 +4804,19 @@ function main(args=String[])
                 "(got '$cfl_mode_val')\n")
         print_help(1)
     end
+    q_centre_mode = if q_centre_mode_val === nothing
+        nothing                      # from --scheme
+    elseif q_centre_mode_val in ("legacy", "Legacy")
+        :legacy
+    elseif q_centre_mode_val in ("oriented", "Oriented")
+        :oriented
+    elseif q_centre_mode_val in ("consistent", "Consistent")
+        :consistent
+    else
+        println("ERROR: --q-centre-mode requires 'legacy', 'oriented' or 'consistent' " *
+                "(got '$q_centre_mode_val')\n")
+        print_help(1)
+    end
 
     # --scheme recommended|legacy (WP2b, 2026-10; default: recommended). Any of
     # the six options above that was not given takes the scheme's value for
@@ -4664,6 +4836,7 @@ function main(args=String[])
         friction_model      = something(friction_model,      so.friction_model)
         limiter             = something(limiter,             so.limiter)
         cfl_mode            = something(cfl_mode,            so.cfl_mode)
+        q_centre_mode = something(q_centre_mode, so.q_centre_mode)
     end
 
     # --momentum-model cell and --face-flux-method diamond (and, by
@@ -4702,10 +4875,15 @@ function main(args=String[])
     # --sim-duration / --dt-max / --rainfall
     sim_dur_val,  args = _pop_flag(args, "--sim-duration")
     dt_max_val,   args = _pop_flag(args, "--dt-max")
+    courant_val,  args = _pop_flag(args, "--courant")
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
     dt_max        = dt_max_val   !== nothing ? parse(Float64, dt_max_val)   : 60.0
+    courant       = courant_val  !== nothing ? parse(Float64, courant_val)  : 0.7
+    (0.0 < courant <= 1.0) ||
+        (println("ERROR: --courant must be in (0, 1]
+"); print_help(1))
     # Rainfall: user gives mm/hr, convert to m/s
     rainfall_rate = rainfall_val !== nothing ?
                     parse(Float64, rainfall_val) / 3_600_000.0 : 0.0
@@ -4845,9 +5023,11 @@ function main(args=String[])
         friction_model            = friction_model,
         limiter                   = limiter,
         cfl_mode                  = cfl_mode,
+        q_centre_mode      = q_centre_mode,
         scheme                    = scheme,
         sim_duration    = sim_duration,
         dt_max          = dt_max,
+        courant         = courant,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,

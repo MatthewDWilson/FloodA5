@@ -19,7 +19,7 @@ using Test
     r = scheme_options(:recommended, :standard)
     @test r == (gradient_correction = true, face_flux_method = :diamond_wetdry,
                 friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
-                momentum_model = :edge)
+                momentum_model = :edge, q_centre_mode = :legacy)
     g = scheme_options(:recommended, :sgs)
     @test g.friction_model === :vector && g.cfl_mode === :local
     @test g.limiter === :legacy && !g.gradient_correction && g.face_flux_method === :legacy
@@ -27,7 +27,7 @@ using Test
         l = scheme_options(:legacy, f)
         @test l == (gradient_correction = false, face_flux_method = :legacy,
                     friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
-                    momentum_model = :edge)
+                    momentum_model = :edge, q_centre_mode = :legacy)
     end
     @test_throws ArgumentError scheme_options(:fast, :standard)
     # Every scheme's options are accepted by initialise_flow_model

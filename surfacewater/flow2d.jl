@@ -70,6 +70,14 @@ where `col_i` and `col_j` are the indices of the most-collinear edges on
 the ci and cj sides respectively (stored in EdgeList.collinear_i/j).
 0 = absent (boundary cell); handled by normalising over available neighbours.
 
+A negative index (WP2c, 2026-10) means the partner edge is oriented against
+`e` — its stored discharge has the opposite sign for the same physical
+flow — so its flux enters with its sign flipped. `_orient_collinear!` sets
+the signs; without it (`q_centre_mode = :legacy`) every index is
+positive, which is correct on row-major Cartesian grids but on A5 reverses
+about two partners in three (edges run from the lower to the higher cell
+index, and A5 cell order is not geometric).
+
 The checkerboard mode has opposite signs on alternating edges, so the average
 over collinear neighbours naturally cancels it. For a coherent flow field
 (all fluxes same sign and magnitude) the smoothing has negligible effect.
@@ -90,9 +98,10 @@ and `step_sgs!` pass a start-of-step copy.
                               theta:: Float64 = Q_CENTRE_THETA_DEFAULT
                               )::Float64
     q0   = flux[e]
-    n_nb = (ci > 0 ? 1 : 0) + (cj > 0 ? 1 : 0)
+    n_nb = (ci != 0 ? 1 : 0) + (cj != 0 ? 1 : 0)
     n_nb == 0 && return q0
-    q_nb = (ci > 0 ? flux[ci] : 0.0) + (cj > 0 ? flux[cj] : 0.0)
+    q_nb = (ci != 0 ? flipsign(flux[abs(ci)], ci) : 0.0) +
+           (cj != 0 ? flipsign(flux[abs(cj)], cj) : 0.0)
     return theta * q0 + (1.0 - theta) * q_nb / n_nb
 end
 
