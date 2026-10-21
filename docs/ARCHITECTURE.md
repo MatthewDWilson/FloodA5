@@ -20,7 +20,9 @@ mesh/CartesianGrid.jl  Cartesian (4-connected) mesh backend — pure Julia,
                        no Python bridge (see mesh/CartesianGrid.jl
                        and HYDRAULICS.md §14)
 mesh/DiamondFlux.jl    Diamond face-flux reconstruction (opt-in; see HYDRAULICS.md §7.2)
-mesh/a5_bridge.py      Python subprocess: pya5 calls, GeoParquet I/O
+mesh/a5_bridge.py      Python subprocess: pya5 calls (0.x and 1.x), GeoParquet I/O
+mesh/migrate_mesh_ids.py   pya5 0.x → 1.x cell-ID migration (A5_QUIRKS.md §11)
+mesh/mesh_families.py  Generic polygon meshes: hex, rotated Cartesian, Voronoi, import
 surfacewater/flow2d.jl Pure physics kernels (Bates, Manning R-A, CFL)
 boundaryinputs/        Source types, BC types, hydrograph I/O
 visualisation/         CesiumJS and GLMakie backends, post-processing tools
@@ -72,7 +74,7 @@ The entry point and main application file. Responsibilities:
   | C | Parallel cell volume update | Parallel cell volume update |
   | D | Open-boundary (ghost-edge) outflow | Open-boundary (ghost-edge) outflow |
   | E | Velocity computation | Velocity computation |
-  | F | Cell-vector momentum reconstruction (`--momentum-model cell` only) | — (not implemented for SGS; see `HYDRAULICS.md` §9.4) |
+  | F | Cell-vector reconstruction `_reconstruct_qvec!` (`--momentum-model cell\|blend` or `--friction-model vector`) | Same, for `--friction-model vector` only |
 
 **Include order matters.** `flow2d.jl` is included after type definitions but
 before the step functions, because the step functions call kernels defined there.
@@ -118,8 +120,11 @@ Julia module (`module A5Grid ... end`). Provides the mesh API used by
 
 Python subprocess called by `A5Grid.jl` for mesh generation. It:
 
-1. Calls `pya5.fill_polygon` + `pya5.uncompact` to enumerate cells at the target
-   resolution, covering both A5 sublattices by adding `grid_disk` neighbours.
+1. Calls `pya5.fill_polygon` + `pya5.uncompact` (pya5 0.x) or
+   `pya5.polygon_to_cells` + `pya5.uncompact` (pya5 1.x) to enumerate cells at
+   the target resolution, covering both A5 sublattices by adding `grid_disk`
+   neighbours. The cell-ID scheme is recorded in the output file's metadata
+   (`A5_QUIRKS.md` §11).
 2. Computes boundary polygons via `pya5.cell_to_boundary` for each cell.
 3. Normalises all cell IDs to 16-character zero-padded hex and all longitudes to
    [-180, 180].
@@ -281,8 +286,23 @@ mutable struct FlowState
     # is now used only by A5-specific test fixtures — production code reads
     # this field instead.
     max_neighbours :: Int
+
+    # ── WP1/WP2 (2026-10; see HYDRAULICS.md §15) ─────────────────────────
+    # Fields 33–36. Backward-compatible 31-, 32- and 33-argument outer
+    # constructors default them to the pre-WP1 behaviour.
+    friction_model :: Symbol           # :component (default) or :vector
+    limiter        :: Symbol           # :legacy (default), :positivity or :hybrid
+    cfl_mode       :: Symbol           # :legacy (default) or :local
+    cell_length    :: Vector{Float64}  # ℓ_i = 4A_i/P_i, for cfl_mode :local
 end
 ```
+
+`momentum_model` may also be `:blend`, and `face_flux_method` `:diamond_wetdry`.
+
+`A5Mesh` (in `mesh/A5Grid.jl`) has an `id_scheme` field since WP-M1: `"a5-v0"`
+(pya5 0.x cell IDs), `"a5-v1"` (pya5 1.x), `"cartesian"` or `"polygon"`. It is
+read from and written to the GeoParquet metadata, and `load_mesh_geoparquet`
+refuses an A5 mesh whose scheme differs from the installed pya5's.
 
 ### `EdgeList`
 
@@ -456,7 +476,9 @@ Any mesh generated without this step will have zero edges and produce no flux.
 ### `grid_disk` returns compact results
 
 `pya5.grid_disk(cell, 1)` returns a compact result — a mix of cells at different
-resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`.
+resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`
+(pya5 0.x) or `pya5.uncompact(disk)` and drop compaction markers (pya5 1.x) — see
+`A5_QUIRKS.md` §11 and `A5Grid.grid_disk_neighbours`.
 
 ---
 

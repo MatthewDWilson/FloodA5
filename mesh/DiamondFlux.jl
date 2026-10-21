@@ -350,3 +350,24 @@ that one edge in that case.
          table.c_j[e]*wse_cj + table.c_vb[e]*eta_vb
     return -L_e * dn
 end
+
+"""
+    diamond_stencil_wet(table, e, depth, h_dry) -> Bool
+
+True if every cell contributing to edge `e`'s two vertex reconstructions has
+depth > `h_dry`. (WP2, 2026-10.) A dry cell's "WSE" is its bed elevation, so a
+vertex stencil that includes dry higher ground (a bank, a hillslope under
+rain) overestimates the vertex water level and gives the wet face a spurious
+gradient — the main source of the extra noise seen with the diamond method on
+the Carlisle DEM. Callers use the two-point face gradient where this is false.
+"""
+@inline function diamond_stencil_wet(table::DiamondFluxTable, e::Int,
+                                     depth::Vector{Float64}, h_dry::Float64)::Bool
+    table.valid[e] || return false
+    for key in (table.va_key[e], table.vb_key[e])
+        for c in table.vertex_table[key].cell_indices
+            depth[c] > h_dry || return false
+        end
+    end
+    return true
+end

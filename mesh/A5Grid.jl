@@ -78,6 +78,7 @@ Public API
 module A5Grid
 
 export A5Mesh, A5Cell
+export pya5_version, a5_id_scheme, check_id_scheme, migrate_cell_id
 export DEMSource, FileDEM
 export mesh_for_aoi, save_mesh, save_mesh_geoparquet, save_mesh_geojson, load_mesh_geoparquet
 export mesh_to_geojson_string
@@ -304,9 +305,17 @@ mutable struct A5Mesh
     static_vars::Dict{String, Vector{Float64}}
     array_vars::Dict{String, Matrix{Float64}}
     adjacency::Dict{String, Vector{String}}   # cell_id → neighbour hex IDs
+    # Cell-ID scheme (WP-M1, 2026-10): "a5-v0" (pya5 0.x IDs), "a5-v1"
+    # (pya5 1.x IDs) or "cartesian" (CartesianGrid's own row/column IDs).
+    # The same cell has different 64-bit IDs under pya5 0.x and 1.x, and an
+    # old ID is still a *valid* 1.x ID for a different cell, so meshes record
+    # their scheme and load_mesh_geoparquet refuses a mismatch with the
+    # installed pya5 — see check_id_scheme and mesh/migrate_mesh_ids.py.
+    id_scheme::String
 end
 
-# Backwards-compatible constructors
+# Backwards-compatible constructors. A mesh built in this process without an
+# explicit scheme uses the installed pya5's scheme.
 A5Mesh(res, aoi, cells) =
     A5Mesh(res, aoi, cells,
            Dict{String,Vector{Float64}}(),
@@ -318,11 +327,14 @@ A5Mesh(res, aoi, cells, sv) =
            Dict{String,Vector{String}}())
 A5Mesh(res, aoi, cells, sv, av) =
     A5Mesh(res, aoi, cells, sv, av, Dict{String,Vector{String}}())
+A5Mesh(res, aoi, cells, sv, av, adj) =
+    A5Mesh(res, aoi, cells, sv, av, adj, a5_id_scheme())
 
 Base.length(m::A5Mesh) = length(m.cells)
 Base.iterate(m::A5Mesh, s=1) = s > length(m.cells) ? nothing : (m.cells[s], s+1)
 Base.show(io::IO, m::A5Mesh) =
     print(io, "A5Mesh(resolution=$(m.resolution), cells=$(length(m.cells)), " *
+              "id_scheme=$(m.id_scheme), " *
               "static_vars=[$(join(keys(m.static_vars), ", "))])")
 
 # ---------------------------------------------------------------------------
@@ -897,6 +909,8 @@ sample_dem_mean!(mesh::A5Mesh, dem_path::String; kwargs...) =
 # ---------------------------------------------------------------------------
 
 const _a5 = PyNULL()
+const _PYA5_VERSION = Ref{String}("")
+const _A5_MAJOR     = Ref{Int}(0)
 
 function __init__()
     _module_init_done[] && return
@@ -906,7 +920,55 @@ function __init__()
     catch e
         error("Failed to import pya5: $e\nRun: pip install pya5")
     end
+    # pya5 version → one code path per major version (WP-M1). `a5` has no
+    # __version__; `a5.migrate` (new in 1.0) is the fallback signal.
+    try
+        _PYA5_VERSION[] = String(pyimport("importlib.metadata").version("pya5"))
+    catch
+        _PYA5_VERSION[] = "unknown"
+    end
+    m = tryparse(Int, first(split(_PYA5_VERSION[], '.')))
+    _A5_MAJOR[] = m !== nothing ? m : (PyCall.hasproperty(_a5, "migrate") ? 1 : 0)
     _try_load_cuda()
+end
+
+"""    pya5_version() → String   (e.g. "0.7.3", "1.0.0") """
+pya5_version() = _PYA5_VERSION[]
+
+"""
+    a5_id_scheme() → String
+
+Cell-ID scheme of the installed pya5: "a5-v1" for 1.x, "a5-v0" for 0.x. See
+`A5Mesh.id_scheme` and mesh/a5_bridge.py ("pya5 versions").
+"""
+a5_id_scheme() = _A5_MAJOR[] >= 1 ? "a5-v1" : "a5-v0"
+
+"""
+    check_id_scheme(mesh_scheme, source) → Nothing
+
+Refuse to use a mesh whose A5 cell-ID scheme differs from the installed
+pya5's: an "a5-v0" ID passed to pya5 1.x (or the reverse) is still a valid
+cell ID, just of a different cell, so mixing them fails silently. Non-A5
+schemes ("cartesian") are not checked. Set ENV FLOODA5_ALLOW_ID_SCHEME_MISMATCH=1
+to downgrade the error to a warning (e.g. to inspect an old mesh); a
+simulation does not call pya5 with the cell IDs, but mesh generation,
+re-sampling and grid_disk adjacency do.
+"""
+function check_id_scheme(mesh_scheme::AbstractString, source::AbstractString)
+    startswith(mesh_scheme, "a5-") || return nothing
+    installed = a5_id_scheme()
+    mesh_scheme == installed && return nothing
+    hint = mesh_scheme == "a5-v0" ?
+        "Migrate it with:  python mesh/migrate_mesh_ids.py <in.parquet> <out.parquet>  (needs pya5 >= 1.0)" :
+        "It was written with pya5 >= 1.0; upgrade pya5 to use it."
+    msg = "$source uses A5 cell-ID scheme '$mesh_scheme' but the installed pya5 " *
+          "$(pya5_version()) uses '$installed'. $hint"
+    if get(ENV, "FLOODA5_ALLOW_ID_SCHEME_MISMATCH", "") == "1"
+        @warn msg * " (continuing: FLOODA5_ALLOW_ID_SCHEME_MISMATCH=1)"
+    else
+        error(msg)
+    end
+    return nothing
 end
 
 # GIL lock — all PyCall calls into pya5 must hold this lock.
@@ -997,8 +1059,27 @@ function grid_disk_neighbours(cell_id_hex::String)::Vector{String}
     py_id      = _hex_to_pyint(cell_id_hex)
     resolution = Int(@py _a5.get_resolution(py_id))
     disk       = @py _a5.grid_disk(py_id, 1)
-    expanded   = @py _a5.uncompact(disk, resolution)
+    expanded = if _A5_MAJOR[] >= 1
+        # pya5 1.x: uncompact() has no target-resolution argument (a compact
+        # set carries a compaction marker instead), so drop the markers and
+        # keep the cells at this resolution.
+        [c for c in (@py _a5.uncompact(disk))
+         if !(@py _a5.is_compaction_marker(c)) && Int(@py _a5.get_resolution(c)) == resolution]
+    else
+        @py _a5.uncompact(disk, resolution)
+    end
     return [_to_hex(c) for c in expanded if _to_hex(c) != cell_id_hex]
+end
+
+"""
+    migrate_cell_id(cell_id_hex) → String
+
+pya5 0.x ("a5-v0") cell ID → the same cell's pya5 1.x ID (`a5.migrate`).
+Requires pya5 >= 1.0. For whole meshes use mesh/migrate_mesh_ids.py.
+"""
+function migrate_cell_id(cell_id_hex::String)::String
+    _A5_MAJOR[] >= 1 || error("migrate_cell_id needs pya5 >= 1.0 (installed: $(pya5_version()))")
+    return _to_hex(@py _a5.migrate(_hex_to_pyint(cell_id_hex)))
 end
 
 """
@@ -1262,6 +1343,12 @@ import geopandas as gpd, json, math
 import numpy as np
 gdf = gpd.read_parquet('$(path_fwd)')
 
+# Cell-ID scheme recorded by a5_bridge.mesh_to_geoparquet (WP-M1); None for
+# files written before that (pya5 0.7.x).
+import pyarrow.parquet as _pq
+_raw_md = (_pq.read_schema('$(path_fwd)').metadata or {}).get(b'flooda5')
+id_scheme = json.loads(_raw_md.decode()).get('a5_id_scheme') if _raw_md else None
+
 BASE_COLS = {'cell_id', 'resolution', 'center_lon', 'center_lat', 'geometry'}
 extra_cols = [c for c in gdf.columns if c not in BASE_COLS]
 
@@ -1316,7 +1403,8 @@ for _, row in gdf.iterrows():
     cells.append(cell)
 
 print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols,
-                  'array_cols': array_cols, 'adjacency': adjacency}))
+                  'array_cols': array_cols, 'adjacency': adjacency,
+                  'id_scheme': id_scheme}))
 """
     tmp_script = tempname() * ".py"
     write(tmp_script, py_code)
@@ -1396,7 +1484,14 @@ print(json.dumps({'cells': cells, 'scalar_cols': scalar_cols,
         @info "Loaded adjacency for $(length(adjacency)) cells from parquet neighbours column"
     end
 
-    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars, adjacency)
+    # Cell-ID scheme: recorded in the file since WP-M1. Older files are pya5
+    # 0.7.x A5 meshes ("a5-v0"), or Cartesian meshes (resolution 0).
+    sch = get(raw, "id_scheme", nothing)
+    id_scheme = sch !== nothing ? String(sch) :
+                (!isempty(cells) && all(c -> c.resolution == 0, cells)) ? "cartesian" : "a5-v0"
+    check_id_scheme(id_scheme, path)
+
+    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars, adjacency, id_scheme)
 
     parts = String[]
     !isempty(scalar_cols) && push!(parts, "scalar: [$(join(scalar_cols, ", "))]")
@@ -1496,7 +1591,7 @@ spec.loader.exec_module(bridge)
 
 with open('$(tmp_cells_fwd)', 'r') as f:
     cells = json.load(f)
-bridge.mesh_to_geoparquet(cells, '$(tmp_fwd)')
+bridge.mesh_to_geoparquet(cells, '$(tmp_fwd)', id_scheme='$(mesh.id_scheme)')
 print('ok')
 """
         tmp_script = joinpath(BRIDGE_DIR, "_tmp_save.py")
@@ -1970,7 +2065,9 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
     x2, y2 = to_xy(elon2, elat2)
     ex, ey  = x2 - x1, y2 - y1
     e_len   = sqrt(ex^2 + ey^2)
-    e_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate edge guard
+    # Degenerate-length guards: 1 mm (WP3, 2026-10; was 1 m, which is a
+    # normal face length on Voronoi meshes and on A5 at resolution >= 22).
+    e_len < 1e-3 && return (NaN, 0.0, 0.0)   # degenerate edge guard
 
     # Rotate the edge vector 90° to get a normal candidate. This has NO
     # guaranteed orientation relative to i/j — it depends only on the
@@ -1984,7 +2081,7 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
     cj_x, cj_y = to_xy(lon_j, lat_j)
     dx, dy      = cj_x - ci_x, cj_y - ci_y
     d_len       = sqrt(dx^2 + dy^2)
-    d_len < 1.0 && return (NaN, 0.0, 0.0)   # degenerate distance guard
+    d_len < 1e-3 && return (NaN, 0.0, 0.0)   # degenerate distance guard
 
     dx_hat, dy_hat = dx / d_len, dy / d_len
 

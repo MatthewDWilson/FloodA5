@@ -35,6 +35,19 @@ Commands
     check
 
 Output: one JSON line per status update; final line is always the result.
+
+pya5 versions (WP-M1, 2026-10)
+------------------------------
+pya5 1.0 changed the 64-bit cell-ID encoding (same geometry, different IDs;
+`a5.migrate(old_id)` maps 0.x IDs to 1.x IDs, and an old ID still passes
+`is_valid_cell` but names a different cell), dropped `uncompact`'s
+`target_resolution` argument, made `grid_disk` return a compaction marker, and
+removed `a5.geometry.fill_polygon` in favour of `polygon_to_cells`. This file
+has one code path per major version (`A5_MAJOR`), and every GeoParquet mesh it
+writes records the ID scheme in its schema metadata (key `flooda5`:
+`{"a5_id_scheme": "a5-v0" | "a5-v1" | "cartesian", "pya5_version": ...}`).
+Meshes without that key were written by 0.7.x and use `a5-v0` IDs. Convert
+them with mesh/migrate_mesh_ids.py.
 """
 
 import sys
@@ -57,6 +70,65 @@ try:
     )
 except ImportError as e:
     _fail(f"pya5 not available: {e}. Run: pip install pya5")
+
+# ── pya5 version and cell-ID scheme ────────────────────────────────────────
+# `a5` has no __version__; read the distribution metadata. `a5.migrate` is
+# new in 1.0, so it also distinguishes the two if the metadata is missing.
+import a5 as _a5
+try:
+    import importlib.metadata as _md
+    PYA5_VERSION = _md.version("pya5")
+except Exception:
+    PYA5_VERSION = "unknown"
+try:
+    A5_MAJOR = int(PYA5_VERSION.split(".")[0])
+except ValueError:
+    A5_MAJOR = 1 if hasattr(_a5, "migrate") else 0
+A5_ID_SCHEME = "a5-v1" if A5_MAJOR >= 1 else "a5-v0"
+_U64 = 0xFFFFFFFFFFFFFFFF
+
+
+def _uncompact_to(cells, resolution: int) -> list:
+    """Expand a compact cell set to `resolution` (either pya5 major version)."""
+    from a5 import uncompact, get_resolution
+    if A5_MAJOR >= 1:
+        from a5 import is_compaction_marker
+        return [c for c in uncompact(list(cells))
+                if not is_compaction_marker(c) and int(get_resolution(c)) == resolution]
+    return list(uncompact(list(cells), resolution))
+
+
+def _grid_disk_ring1(cell) -> list:
+    """`grid_disk(cell, 1)` without 1.x compaction markers. May still contain
+    coarser compacted cells; callers filter by resolution."""
+    from a5 import grid_disk
+    disk = grid_disk(cell, 1)
+    if A5_MAJOR >= 1:
+        from a5 import is_compaction_marker
+        disk = [c for c in disk if not is_compaction_marker(c)]
+    return list(disk)
+
+
+def write_id_scheme_metadata(path: str, id_scheme: Optional[str] = None, **extra):
+    """Record the cell-ID scheme in a GeoParquet file's schema metadata."""
+    import pyarrow.parquet as pq
+    tbl = pq.read_table(path)
+    md = dict(tbl.schema.metadata or {})
+    info = {"a5_id_scheme": id_scheme or A5_ID_SCHEME, "pya5_version": PYA5_VERSION}
+    info.update(extra)
+    md[b"flooda5"] = json.dumps(info).encode()
+    pq.write_table(tbl.replace_schema_metadata(md), path)
+
+
+def read_id_scheme(path: str) -> Optional[str]:
+    """The `a5_id_scheme` recorded in a GeoParquet file, or None if absent
+    (files written before WP-M1, i.e. by pya5 0.7.x)."""
+    import pyarrow.parquet as pq
+    md = pq.read_schema(path).metadata or {}
+    raw = md.get(b"flooda5")
+    if raw is None:
+        return None
+    return json.loads(raw.decode()).get("a5_id_scheme")
 
 # ── Optional accelerated dependencies ─────────────────────────────────────
 
@@ -316,34 +388,47 @@ def generate_mesh(geojson_path: str, resolution: int) -> List[dict]:
     min_lon, min_lat, max_lon, max_lat = _geometry_bbox(geometry)
 
     # ── Pass 1: seed cell set ─────────────────────────────────────────────
+    # pya5 1.x: polygon_to_cells (native Rust) with "overlapping" containment,
+    # i.e. every cell whose polygon overlaps the AOI — the same membership
+    # rule as Pass 2's shapely test. pya5 0.x: fill_polygon + uncompact.
+    # Pass 2 below then makes the final set identical for both versions.
     try:
-        from a5 import geometry as a5_geometry, uncompact
-        geojson_coords = _geojson_to_coord_list(geometry)
-        compact_cells  = a5_geometry.fill_polygon(geojson_coords, resolution)
-        cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF
-                       for c in uncompact(compact_cells, resolution))
-        print(json.dumps({"status": "info", "message": f"fill_polygon + uncompact: {len(cell_set)} seed cells"}), flush=True)
+        if A5_MAJOR >= 1:
+            from a5 import polygon_to_cells
+            polys = ([geometry["coordinates"]] if geometry["type"] == "Polygon"
+                     else geometry["coordinates"])
+            compact_cells = []
+            for poly in polys:
+                rings = [[(float(p[0]), float(p[1])) for p in ring] for ring in poly]
+                compact_cells += polygon_to_cells(rings, resolution,
+                                                  {"containment": "overlapping"})
+            method = "polygon_to_cells"
+        else:
+            from a5 import geometry as a5_geometry
+            geojson_coords = _geojson_to_coord_list(geometry)
+            compact_cells  = a5_geometry.fill_polygon(geojson_coords, resolution)
+            method = "fill_polygon"
+        cell_set = set(int(c) & _U64 for c in _uncompact_to(compact_cells, resolution))
+        print(json.dumps({"status": "info", "message": f"{method} + uncompact: {len(cell_set)} seed cells"}), flush=True)
     except Exception:
         # Sample-grid fallback using buffered bbox
         compact_cells = _sample_grid_coverage_bbox(
             min_lon - buf, min_lat - buf, max_lon + buf, max_lat + buf,
             geometry, resolution)
         try:
-            from a5 import uncompact
-            cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF
-                           for c in uncompact(compact_cells, resolution))
+            cell_set = set(int(c) & _U64 for c in _uncompact_to(compact_cells, resolution))
         except Exception:
-            cell_set = set(int(c) & 0xFFFFFFFFFFFFFFFF for c in compact_cells)
+            cell_set = set(int(c) & _U64 for c in compact_cells)
 
     # ── Pass 2: grid_disk expansion + ST_Intersects filter ────────────────
     try:
-        from a5 import grid_disk, get_resolution as _a5_get_res
+        from a5 import get_resolution as _a5_get_res
         rounds = 0
         while True:
             candidates = set()
             for c in cell_set:
                 try:
-                    for nb in grid_disk(c, 1):
+                    for nb in _grid_disk_ring1(c):
                         nb_id = int(nb) & 0xFFFFFFFFFFFFFFFF
                         if nb_id != c and nb_id not in cell_set:
                             candidates.add(nb_id)
@@ -500,9 +585,15 @@ def _sample_grid_coverage(geometry: dict, resolution: int) -> list:
     return list(cell_ids)
 
 
-def mesh_to_geoparquet(cells: List[dict], output_path: str):
+def mesh_to_geoparquet(cells: List[dict], output_path: str,
+                       id_scheme: Optional[str] = None):
     """
     Write cells to GeoParquet using geopandas.
+
+    `id_scheme` ("a5-v0", "a5-v1" or "cartesian") is recorded in the schema
+    metadata (see the module docstring); default: the installed pya5's scheme,
+    which is right for meshes generated in this process. Re-saves of a loaded
+    mesh must pass the mesh's own scheme.
 
     Geometry column built with shapely.polygons() vectorised C API when
     Shapely ≥ 2.0 is available — avoids per-object Python overhead for the
@@ -520,17 +611,16 @@ def mesh_to_geoparquet(cells: List[dict], output_path: str):
     boundaries = [c["boundary"] for c in cells]
 
     # Vectorised geometry construction (Shapely ≥ 2.0)
+    # The vectorised path needs every ring to have the same vertex count (true
+    # for A5 pentagons and Cartesian squares). WP3 fix (2026-10): it used to
+    # pad shorter rings with (0, 0) vertices — a spike to the origin in every
+    # cell of a mixed-valence mesh (Voronoi, imported polygons) — and to
+    # overwrite an unclosed ring's last vertex. Ragged meshes now build each
+    # polygon individually; shapely closes unclosed rings itself.
     try:
         import shapely
-        if hasattr(shapely, "polygons"):
-            max_verts = max(len(b) for b in boundaries)
-            coords_np = np.zeros((len(boundaries), max_verts, 2), dtype=np.float64)
-            for i, b in enumerate(boundaries):
-                arr = np.array(b, dtype=np.float64)
-                coords_np[i, :len(b)] = arr
-                if arr[0].tolist() != arr[-1].tolist():
-                    coords_np[i, len(b)-1] = arr[0]
-            geometries = shapely.polygons(coords_np)
+        if hasattr(shapely, "polygons") and len({len(b) for b in boundaries}) == 1:
+            geometries = shapely.polygons(np.array(boundaries, dtype=np.float64))
         else:
             raise AttributeError
     except (AttributeError, Exception):
@@ -568,6 +658,7 @@ def mesh_to_geoparquet(cells: List[dict], output_path: str):
 
     gdf = gpd.GeoDataFrame(data, geometry=geometries, crs="EPSG:4326")
     gdf.to_parquet(output_path, index=False)
+    write_id_scheme_metadata(output_path, id_scheme)
 
 
 def mesh_to_geojson(cells: List[dict], output_path: str):
@@ -591,6 +682,7 @@ def mesh_to_geojson(cells: List[dict], output_path: str):
         "properties": {
             "resolution": cells[0]["resolution"] if cells else 0,
             "cell_count": len(cells),
+            "a5_id_scheme": A5_ID_SCHEME,
         },
     }
     with open(output_path, "w", encoding="utf-8") as f:
@@ -615,6 +707,8 @@ def cmd_check():
         "status":             "ok",
         "python":             sys.executable,
         "pya5":               True,
+        "pya5_version":       PYA5_VERSION,
+        "a5_id_scheme":       A5_ID_SCHEME,
         "geopandas":          gpd_ok,
         "geopandas_location": gpd_loc,
         "numpy":              np_ok,
@@ -637,7 +731,9 @@ def cmd_mesh_for_aoi(geojson_path, resolution, output_path, fmt):
         "format":      fmt,
         "pip_backend":  "shapely_vectorised" if _shapely_vec else "python_raycasting",
         "geom_backend": "shapely_polygons_vectorised" if (_gpd_available and _shapely_vec) else "polygon_loop",
-        "coverage":     "fill_polygon+uncompact",
+        "coverage":     ("polygon_to_cells" if A5_MAJOR >= 1 else "fill_polygon") + "+uncompact",
+        "a5_id_scheme": A5_ID_SCHEME,
+        "pya5_version": PYA5_VERSION,
     }), flush=True)
 
 

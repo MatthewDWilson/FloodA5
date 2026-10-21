@@ -33,10 +33,156 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
-Merged to `main` on 2026-10-20 via `wp0-correctness`, which is based on
-`cartesian-formulation`. No version number assigned yet; under
+WP0 and the `cartesian-formulation` work it is based on were merged to `main`
+on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
+`wp-integration` branch. No version number assigned yet; under
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
+
+### WP2: mesh-general momentum, limiters and CFL (`wp2-momentum-limiters`)
+
+Work package WP2 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§4.2, §9).
+All options are opt-in; the defaults are bit-identical to before.
+
+#### Added
+- `--momentum-model blend`: q_prev = θ·q_face + (1−θ)·(face-normal projection
+  of the averaged adjacent cell vectors), θ = `--q-centre-theta`. Replaces
+  Q-centring's "most collinear face" average, which on pentagons mixes faces
+  about 144° apart and by itself deflects the steady flow (WP1 finding).
+  θ = 1 reproduces edge momentum without Q-centring and θ = 0 reproduces
+  `cell` exactly (tested). Standard solver only.
+- `--limiter positivity`: one positivity-preserving scale factor per donor
+  cell, s = min(1, V / Σ outflow), applied to all of its outflows and written
+  back to the stored momentum (`_positivity_scale!`), in place of the per-edge
+  volume limiter (Fix B) and the per-edge donor cap. Mass-conservative and
+  isotropic. Standard and SGS solvers. **Not stable on its own** on the
+  Carlisle DEM (velocity noise up to 5 m/s): the per-edge volume limiter is
+  doing real stabilising work.
+- `--limiter hybrid`: keeps the per-edge volume limiter and uses the
+  positivity scaling only in place of the per-edge donor cap. As smooth as
+  `legacy` on Carlisle res-18 and removes the face-count-dependent cap.
+- `--face-flux-method diamond-wetdry`: as `diamond`, but the two-point face
+  gradient is used where an edge's vertex stencil includes a dry cell (whose
+  bed elevation would otherwise be read as a water level). Bit-identical to
+  `diamond` when every cell is wet. `diamond_stencil_wet` in `DiamondFlux.jl`.
+- `--cfl-mode local`: dt = 0.7 · min over wet cells of ℓ_i/√(g h_i), with
+  ℓ_i = 4A_i/P_i (`FlowState.cell_length`; equal to dx on a square cell),
+  instead of √(min area) paired with the 99th-percentile depth. The SGS
+  terrain-range depth cap still applies.
+- `FlowState` fields 34–36 (`limiter`, `cfl_mode`, `cell_length`), with a
+  backward-compatible 33-argument constructor.
+- `test/test_wp2_momentum_limiters.jl` (in CI); a WP2 case in
+  `test/check_determinism.jl`.
+
+#### Fixed
+- ⚠ **Phantom ghost edges on Cartesian meshes** (`_build_ghost_edges`). Shared
+  polygon sides were matched with a key ordered by longitude only, so a
+  north–south side (lon1 == lon2) could keep a different vertex order in the
+  two polygons and fail to match, becoming an extra "missing" side. On the
+  dx = 25 m square mesh this created 423 ghost edges instead of 244 (open
+  boundary width 10.6 km instead of 6.1 km): open-boundary Cartesian runs had
+  too much outflow width. Sides are now matched in both vertex orders.
+  A5 meshes are unaffected (Carlisle res-18 and planar res-16 ghost edges
+  identical before and after). Regression test G1.
+
+### WP1: vector friction (`wp1-vector-friction`)
+
+Work package WP1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§3, §9).
+Opt-in; the default (`component`) is bit-identical to the previous behaviour.
+
+#### Added
+- `--friction-model component|vector` (`FlowState.friction_model`, the 33rd
+  field; backward-compatible 31- and 32-argument constructors default it to
+  `:component`). `vector` uses the full discharge magnitude
+  |q| = √(q_n² + q_t²) in the friction term of every Bates kernel and the SGS
+  R–A kernels, with q_t the face-tangential component of the averaged
+  adjacent cell vectors. The Froude limiter then scales q_n by
+  min(1, q_max/|q|). Removes the orientation-dependent face conductance of
+  Bates/LISFLOOD-FP component friction (2^¼ diagonal excess and up to 12.8°
+  flow deflection on a Cartesian grid, independent of resolution).
+- Phase F (cell-vector reconstruction) factored into `_reconstruct_qvec!`
+  (threaded, deterministic) and run every step under vector friction, for
+  both `step_standard!` and `step_sgs!`.
+- `test/test_wp1_vector_friction.jl` (in CI): kernel tests, lake at rest, and
+  a frozen-coefficient friction-limit isotropy test through `step_standard!`
+  that reproduces the component-friction theory exactly (12.78°, 2^¼) and
+  shows none under vector friction.
+- `test/frozen_isotropy_lib.jl`, `test/wp1_frozen_isotropy_mesh.jl` (the same
+  test on any GeoParquet mesh), `test/wp1_metrics.jl` (§3.4 metrics:
+  harmonic anisotropy, sector radii, planar N/S asymmetry) and
+  `test/run_wp1_matrix.sh` (the WP1 run matrix).
+- `test/check_determinism.jl`: two vector-friction cases.
+
+#### Known limitations
+- Ghost (open-boundary) edges still use component friction.
+
+### WP3 (part 1): mesh families and raster-aligned Cartesian grids (`wp3-mesh-families`)
+
+Work package WP3 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§6.1, §9),
+the parts that do not touch the solver: SGS generalisation (per-edge-side
+curves) is left until WP1/WP2 are merged.
+
+#### Added
+- `mesh/mesh_families.py`: FloodA5 GeoParquet meshes of other families —
+  regular hexagons, rotated Cartesian, Voronoi (jittered, optionally Lloyd-
+  relaxed to centroidal; generator or centroid centres) — and an importer for
+  any polygon GeoParquet/GeoJSON/GeoPackage (reprojected to EPSG:4326).
+  Edge-based adjacency; ID scheme `polygon`.
+- `generate_cartesian_mesh_raster` (`mesh/CartesianGrid.jl`) and
+  `--meshgen-cartesian FILE.tif|.asc`: a Cartesian grid aligned cell-for-cell
+  with a raster in its own (projected) CRS, with the raster as the bed
+  elevation — for LISFLOOD-FP comparisons. Note: FloodA5 measures cell areas
+  on its spherical metric, 0.38% below the British National Grid pixel area
+  near Carlisle (uniform).
+- `test/test_mesh_families.jl` (in CI): Tier 0 on every family — closure
+  Σ w·n̂ = 0, valence, orthogonality where guaranteed, lake at rest under the
+  legacy, WLSQ, diamond and cell-momentum options, exact mass balance, import
+  round trip, raster-aligned grid.
+
+#### Fixed
+- `a5_bridge.mesh_to_geoparquet` padded polygons with fewer vertices than the
+  longest with (0, 0) vertices (a spike to the origin) and overwrote an
+  unclosed ring's last vertex. Only meshes with mixed vertex counts were
+  affected (not A5 or Cartesian meshes).
+- Domain-boundary detection (`_build_ghost_edges`): a cell is on the boundary
+  if its polygon has more sides than neighbours. It was "fewer neighbours
+  than the mesh maximum", which on a mixed-valence mesh gave a max-valence
+  edge cell no ghost edge. Identical on A5 and Cartesian meshes (ghost
+  edges unchanged on Carlisle res-18 and planar res-16).
+- Degenerate-face guards in `A5Grid._edge_geometry`: 1 mm instead of 1 m.
+  A 1 m face is normal on a Voronoi mesh (and on A5 at resolution ≥ 22); such
+  faces got a zero normal. A5 edge geometry is bit-identical on the Carlisle
+  and planar meshes.
+
+### WP-M1: pya5 1.x support (`maint-pya5-1x`)
+
+Work package WP-M1 from `FloodA5_Review_and_ForwardPlan_2026-10.md` (§9).
+pya5 0.7.3 behaviour is unchanged; pya5 1.x is now supported.
+
+#### Added
+- One code path per pya5 major version in `mesh/a5_bridge.py` (`A5_MAJOR`,
+  `_uncompact_to`, `_grid_disk_ring1`) and `mesh/A5Grid.jl`
+  (`pya5_version()`, `a5_id_scheme()`, version-aware `grid_disk_neighbours`).
+  Under 1.x the AOI seed set comes from `polygon_to_cells` (overlapping
+  containment): Carlisle res-18 mesh generation 1 m 02 s vs 13 m 13 s.
+- Cell-ID scheme recorded in every GeoParquet mesh (schema metadata key
+  `flooda5`: `a5_id_scheme`, `pya5_version`) and in the HDF5 `/mesh`
+  `id_scheme` attribute; new `A5Mesh.id_scheme` field (7th; the 6-argument
+  constructor defaults it to the installed pya5's scheme; Cartesian meshes
+  use `"cartesian"`).
+- ⚠ `load_mesh_geoparquet` refuses a mesh whose A5 ID scheme differs from the
+  installed pya5's (`check_id_scheme`; override with
+  `FLOODA5_ALLOW_ID_SCHEME_MISMATCH=1`). Existing meshes are `a5-v0`, so under
+  pya5 1.x they must be migrated first.
+- `mesh/migrate_mesh_ids.py`: rewrites `cell_id`/`neighbours` with
+  `a5.migrate`, verifying every centre. Verified on Carlisle res-18: a
+  simulation on the migrated mesh is bit-identical to the original, and a
+  mesh generated afresh under 1.x has the same cells and adjacency graph
+  (centroids within 1e-13°, areas within 6e-10 relative).
+- `A5Grid.migrate_cell_id`; `test/test_pya5_compat.jl` (in CI) with the fixture
+  `test/fixtures/a5_id_schemes.csv`; CI matrix over pya5 0.7.3 and 1.0.0
+  (pya5 removed from `ci/python-requirements.txt`); CI also runs on `maint-*`
+  branches.
 
 ### WP0: correctness and test infrastructure (`wp0-correctness`)
 

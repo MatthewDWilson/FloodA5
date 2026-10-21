@@ -10,7 +10,11 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 `surfacewater/`, `boundaryinputs/` and `visualisation/`.
 
 Current plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
-(work packages WP0–WP7). Branch per work package (`wp0-correctness`, `wp1-…`).
+(work packages WP0–WP7). Branch per work package (`wp0-correctness`, `wp1-…`;
+CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
+WP1, WP2 and WP3 part 1 are on `main`; next are the rest of WP3 (SGS per-edge-side
+tables), a stable replacement for Q-centring, then WP4. Physics results so far:
+`docs/HYDRAULICS.md` §15.
 
 ## Running things
 - Always run from the repo root with `--project=.` (full stack) or
@@ -26,7 +30,17 @@ Current plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026
 - Full simulations: `julia --project=. --threads auto FloodModel.jl --help`.
   Mesh *generation* (`--meshgen`) should use `--threads 1` (PyCall/GDAL hazard).
 - Large data lives in `test/carlisle`, `test/planar_embankment`, `test/square`
-  (git-ignored: `*.h5`, `*.parquet`, `*.tif`). Don't commit outputs.
+  (git-ignored: `*.h5`, `*.parquet`, `*.tif`). Don't commit outputs; experiment
+  runs go in `test/wp1_runs/` (git-ignored). Run matrices: `test/run_jobs.sh`.
+- Python: FloodA5 uses PyCall's Python (Julia's Conda.jl Python,
+  `~/.julia/conda/3`), not other conda envs; it needs conda's `Library\bin` on
+  PATH, so call it from Julia rather than straight from Git Bash. pya5 is 1.x
+  locally; meshes carry an ID scheme (`a5-v0`/`a5-v1`) and old ones are refused —
+  migrate with `julia setup.jl --migrate-meshes`. To test against another pya5
+  without touching that env, put a venv's `site-packages` first on `PYTHONPATH`.
+- Long runs / parallel work: use `git worktree` so code edits can't change jobs
+  that have not started yet. On Windows, stopping a background shell can leave
+  its `julia.exe`/`xargs` children running — check and stop them explicitly.
 
 ## Julia gotchas that have bitten this project
 1. `@printf` needs a literal format string — no `"a" * "b"`; put dynamic text
@@ -41,6 +55,9 @@ Current plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026
 5. Threaded loops (`Threads.@threads`) must only write per-iteration slots and
    must not read arrays that the same loop writes (see the WP0 Q-centring race).
 6. Use `x isa SomeType`, not `x == SomeType`, for type tests.
+7. Non-A5 polygon meshes have mixed valence: don't infer "boundary cell" from
+   neighbour count vs the maximum (use unshared polygon sides), and don't use
+   fixed 1 m geometric guards.
 
 ## Conventions
 - Physics changes: keep the old behaviour behind a flag until validated; update

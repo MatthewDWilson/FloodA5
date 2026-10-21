@@ -265,19 +265,25 @@ end
 @testset "T-BC10: ghost edge momentum persists between steps" begin
     state, mesh = _load_flat_state()
 
-    # Find a boundary cell that has an interior neighbour recorded
-    bi       = findfirst(state.boundary_mask)
-    ge_idxs  = findall(ge -> (ge::GhostEdge).cell_index == bi, state.ghost_edges)
-    @test !isempty(ge_idxs)
+    # Find a ghost edge whose boundary cell has an interior neighbour recorded.
+    # (WP-M1 fix: this used to take the first boundary cell, which need not
+    # have one — it then passed or failed depending on the mesh's cell order,
+    # which differs between pya5 0.x and 1.x.)
+    gi = findfirst(ge -> (ge::GhostEdge).interior_nb_idx > 0, state.ghost_edges)
+    @test gi !== nothing
+    bi     = (state.ghost_edges[gi]::GhostEdge).cell_index
+    nb_idx = (state.ghost_edges[gi]::GhostEdge).interior_nb_idx
 
-    # Set boundary cell high, interior neighbour lower → outward slope
-    state.volume[bi]      = 5e4
-    state.water_depth[bi] = 5e4 / state.cell_area[bi]
-    nb_idx = (state.ghost_edges[ge_idxs[1]]::GhostEdge).interior_nb_idx
-    if nb_idx > 0
-        state.volume[nb_idx]      = 2e4
-        state.water_depth[nb_idx] = 2e4 / state.cell_area[nb_idx]
-    end
+    # Surface falling towards the boundary: interior neighbour higher than the
+    # boundary cell, so the ZeroGradient extrapolation puts the ghost WSE below
+    # the boundary cell's and drives outflow. (WP-M1 fix: the setup was the
+    # other way round — boundary cell higher — which extrapolates a ghost WSE
+    # *above* the cell, i.e. blocked inflow; the old test passed only through
+    # a trace outflow on another ghost edge of the first boundary cell.)
+    state.volume[bi]      = 2e4
+    state.water_depth[bi] = 2e4 / state.cell_area[bi]
+    state.volume[nb_idx]      = 5e4
+    state.water_depth[nb_idx] = 5e4 / state.cell_area[nb_idx]
 
     vol_before = state.vol_removed
     step_standard!(state, 10.0)

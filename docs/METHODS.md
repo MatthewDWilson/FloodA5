@@ -355,13 +355,15 @@ alone. See `HYDRAULICS.md` §7.3.
 | Uncorrected (default) | 0.866–0.916 | Baseline |
 | `--gradient-correction on --gradient-correction-alpha 0.0` | ~0.85 | Small, stable, never flips |
 | `--gradient-correction on --gradient-correction-alpha 1.0` | flips sign, transient minimum near 0 | Larger effect, not production-safe as-is |
-| `--face-flux-method diamond --momentum-model cell` | ~0.61 | Best result found to date; still non-zero |
+| `--face-flux-method diamond --momentum-model cell` | 0.28 (res 18, re-run after WP0) | The earlier ~0.61 could not be reproduced; checkerboards on real terrain |
+| `--face-flux-method diamond --friction-model vector` (WP1) | 0.08 (res 18), 0.15 (res 16) | Decreases with refinement |
+| `diamond-wetdry`, vector, `--limiter hybrid --cfl-mode local` | **0.05** (res 18) | Current recommended experimental configuration |
 
-None of these fully eliminate the bias. The most likely remaining cause,
-per `HYDRAULICS.md` §8, is the constitutive relationship between stored
-momentum and face flux (inherited from Bates 2010, derived for a
-2-flux-direction Cartesian cell, not re-derived for a 5-face polygon) —
-this is the subject of ongoing work, not a closed problem.
+The remaining cause identified in 2026-10 (WP1) was the friction term: Bates
+2010 uses only the face-normal discharge, which makes face conductance depend
+on face orientation on any mesh. With a consistent face gradient *and* vector
+friction the bias decreases with refinement. See `HYDRAULICS.md` §15 for the
+full matrix, the Carlisle stability results and the options that were rejected.
 
 #### Computational cost
 
@@ -378,8 +380,9 @@ retained here for historical reference only, not as a current cost estimate.
 All of `--gradient-correction`, `--gradient-correction-alpha`,
 `--face-flux-method`, and `--momentum-model` default to the legacy,
 uncorrected behaviour. See `USER_GUIDE.md` §4.3a for the full flag reference,
-and `HYDRAULICS.md` §8 for the current recommended experimental
-configuration and its caveats.
+and `HYDRAULICS.md` §15 for the current recommended experimental
+configuration and its caveats (`--friction-model`, `--limiter` and
+`--cfl-mode` were added in 2026-10).
 
 ---
 

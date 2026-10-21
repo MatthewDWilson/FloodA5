@@ -1,6 +1,7 @@
 # Python packages needed by mesh/A5Grid.jl (pya5 via PyCall at module init) and
 # by the mesh bridge (mesh/a5_bridge.py) for tests that generate A5 meshes.
-pya5==0.7.3
+# pya5 itself is installed by the CI matrix (0.7.3 and 1.0.0; WP-M1). For a
+# local headless setup add one of:  pya5==0.7.3   or   pya5==1.0.0
 numpy
 shapely
 geopandas
