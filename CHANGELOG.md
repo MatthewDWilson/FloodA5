@@ -33,11 +33,50 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
-WP0 and the `cartesian-formulation` work it is based on were merged to `main`
-on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
-`wp-integration` branch. No version number assigned yet; under
-`VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
-0.2.0), to be decided by the maintainer.
+## [0.2.0] — 2026-10-23
+
+The October 2026 work packages (WP0–WP4 of the internal forward plan, plus
+the Cartesian formulation and pya5 1.x support). A MINOR release under
+`VERSIONING.md`: new CLI options and **changed default behaviour**.
+
+### Upgrading from 0.1.0 — read this first
+- ⚠ **Results change.** The default numerical scheme is now
+  `--scheme recommended` (diamond-wetdry face gradient, vector friction,
+  hybrid limiter, local CFL and consistent Q-centring for standard flow;
+  vector friction, local CFL and no Q-centring for SGS). `--scheme legacy`
+  reproduces the 0.1.0 numerics.
+- ⚠ **Two bugs affected 0.1.0 results.** On A5, Q-centring added most of its
+  partner faces with the wrong sign and acted as an artificial, dt-dependent
+  resistance (Carlisle stored about twice the water of a Cartesian reference);
+  and SGS edge tables were attached to the wrong neighbour for most cells.
+  SGS meshes built with 0.1.0 are refused until rebuilt or repaired
+  (`mesh/repair_sgs_slot_order.py`).
+- **pya5 1.x** changed the A5 cell-ID encoding: meshes record their ID scheme
+  and old ones are refused; migrate with `julia setup.jl --upgrade` then
+  `julia setup.jl --migrate-meshes`.
+- **Cell order.** Simulations keep cells in a spatial (Morton) order
+  (`--cell-order spatial`, default); output is still in the mesh file's order.
+  This changes results at round-off level — but the standard solver
+  amplifies round-off in deep, noisy channels (HYDRAULICS.md §15.5).
+- **Known open issue:** grid-scale water-surface noise in deep channels with
+  the standard solver, and the sensitivity of Carlisle results to the Courant
+  number (HYDRAULICS.md §15.3–15.5). SGS is not affected in the same way.
+
+### Highlights
+- Directional bias explained and corrected (diamond face gradient + vector
+  friction): planar-slope N/S asymmetry on A5 from 0.87 to ~0.05.
+- Mesh-general solver: Cartesian (including raster-aligned grids for
+  LISFLOOD-FP comparisons), hexagonal, rotated-Cartesian, Voronoi and imported
+  polygon meshes; SGS on any number of neighbours.
+- CPU performance (WP4): Carlisle res-18, inflows + rain, the same options,
+  about 4–5× faster simulation than before WP4 (standard 57.9 → ~12 s,
+  SGS 169 → ~40 s for 2 h at 8 threads); SGS mesh load 75 → 4.5 s;
+  allocation per step from MB to under 2 KB; only the wet part of the domain
+  is computed.
+- Test infrastructure: GitHub Actions CI (pya5 0.7.3 and 1.0.0), determinism
+  checks, frozen reference steps with bit-equality tests.
+
+The per-work-package entries below give the details and evidence.
 
 ### WP4 stage 3: active-edge set (`wp4c-active`)
 
