@@ -15,8 +15,8 @@ CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
 WP1, WP2 and WP3 part 1 are on `main`; WP3 part 2 (SGS on any valence, SGS
 slot-order fix), WP2b (recommended scheme as default, `--scheme legacy` for the
 old one) and WP2c (Q-centring orientation defect; consistent Q-centring) are on
-`main` (PR #3); WP4 stage 1 (CPU performance, results unchanged) is on
-`wp4-cpu-perf`. Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
+`main` (PR #3), WP4 stage 1 too (PR #4); WP4 stage 2 (kernels, spatial cell
+order, Polyester threads) is on `wp4b-stage2`. Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
 Q-centring). SGS meshes built before 2026-10-21 are refused until rebuilt or
 repaired (`mesh/repair_sgs_slot_order.py`). Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
@@ -34,7 +34,10 @@ without `_orient_collinear!`-style signs.
   compare the `FINGERPRINT` lines.
 - Step benchmark: `julia --project=. -t 8 test/benchmark_baseline.jl`.
   Performance changes must keep results bit-identical unless stated: compare
-  determinism fingerprints and Carlisle outputs frame by frame against `main`.
+  determinism fingerprints and Carlisle outputs frame by frame against `main`
+  (use `--cell-order file`; spatial order changes round-off, and the standard
+  solver amplifies it — HYDRAULICS.md §15.5). `surfacewater/reference_steps.jl`
+  is frozen: the live steps must match it (`test/test_wp4_stage2.jl`).
 - Full simulations: `julia --project=. --threads auto FloodModel.jl --help`.
   Mesh *generation* (`--meshgen`) should use `--threads 1` (PyCall/GDAL hazard).
 - Large data lives in `test/carlisle`, `test/planar_embankment`, `test/square`
@@ -64,6 +67,8 @@ without `_orient_collinear!`-style signs.
    must not read arrays that the same loop writes (see the WP0 Q-centring race).
    A closure must not capture a local that is assigned only in one branch
    (it gets boxed and every access becomes type-unstable — bind it first).
+   Step loops use Polyester `@batch per=core` (never plain `@batch`: it spins
+   on all logical cores); functions called inside must take `AbstractVector`.
 6. Use `x isa SomeType`, not `x == SomeType`, for type tests.
 7. Non-A5 polygon meshes have mixed valence: don't infer "boundary cell" from
    neighbour count vs the maximum (use unshared polygon sides), and don't use

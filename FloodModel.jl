@@ -108,6 +108,9 @@ using Dates
 using Statistics: mean, quantile
 using LinearAlgebra: Diagonal
 using HDF5
+using Polyester: @batch   # WP4 stage 2: non-allocating threaded loops; always
+                         # `per=core` — the default spins on every logical core and
+                         # starves the serial parts of a step under --threads auto
 using ArchGDAL
 
 # ---------------------------------------------------------------------------
@@ -326,9 +329,14 @@ mutable struct StepWorkspace
     slot_j    :: Vector{Int}       # adjacency slot of cell_i in cell_j's list (ne; SGS)
     veta      :: Vector{Float64}   # diamond vertex WSE this step (n_vertices)
     vwet      :: Vector{Bool}      # diamond vertex stencil all wet (n_vertices)
+    # cell → edge CSR, each cell's edges in increasing edge index (WP4 stage 2):
+    # cell i's edges are cedge[cptr[i]:cptr[i+1]-1]. Gathering over it in this
+    # order repeats the serial scatter's additions exactly (bit-identical).
+    cptr      :: Vector{Int}
+    cedge     :: Vector{Int}
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
-                                Int[], Int[], Float64[], Bool[])
+                                Int[], Int[], Float64[], Bool[], Int[], Int[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -724,6 +732,110 @@ function _workspace!(state::FlowState)::StepWorkspace
     return ws
 end
 
+"""
+    _cell_csr!(state, ws) → (cptr, cedge)
+
+Build (once per mesh) the cell → edge CSR in `ws`, edges in increasing index.
+"""
+function _cell_csr!(state::FlowState, ws::StepWorkspace)
+    n = length(state.cell_ids); E = state.edges; ne = E.n_edges
+    if length(ws.cptr) != n + 1 || length(ws.cedge) != 2ne
+        cnt = zeros(Int, n)
+        @inbounds for e in 1:ne
+            cnt[E.cell_i[e]] += 1; cnt[E.cell_j[e]] += 1
+        end
+        cptr = Vector{Int}(undef, n + 1); cptr[1] = 1
+        for i in 1:n; cptr[i + 1] = cptr[i] + cnt[i]; end
+        cedge = Vector{Int}(undef, 2ne); fill!(cnt, 0)
+        @inbounds for e in 1:ne                  # increasing e → sorted per cell
+            for c in (E.cell_i[e], E.cell_j[e])
+                cedge[cptr[c] + cnt[c]] = e; cnt[c] += 1
+            end
+        end
+        ws.cptr = cptr; ws.cedge = cedge
+    end
+    return ws.cptr, ws.cedge
+end
+
+"""
+    _positivity_scale_gather!(edge_vol, q_store, volume, edges, ws)
+
+Threaded form of `_positivity_scale!` (WP4 stage 2): each donor's outflow total
+is gathered over its edges in increasing edge order (the serial loop's order),
+then every edge is scaled independently. Bit-identical to `_positivity_scale!`.
+"""
+function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Float64},
+                                   volume::Vector{Float64}, edges::EdgeList,
+                                   state::FlowState, ws::StepWorkspace)
+    cptr, cedge = _cell_csr!(state, ws)
+    out = ws.out; ci = edges.cell_i; cj = edges.cell_j
+    @batch per=core for i in eachindex(volume)
+        s = 0.0
+        @inbounds for k in cptr[i]:cptr[i + 1] - 1
+            e = cedge[k]; ev = edge_vol[e]
+            if ev > 0.0
+                cj[e] == i && (s += ev)
+            elseif ev < 0.0
+                ci[e] == i && (s -= ev)
+            end
+        end
+        @inbounds out[i] = s
+    end
+    @batch per=core for e in eachindex(edge_vol)
+        @inbounds begin
+            ev = edge_vol[e]
+            iszero(ev) && continue
+            d = ev > 0.0 ? cj[e] : ci[e]
+            o = out[d]
+            V = max(volume[d], 0.0)
+            if o > V
+                sc = V / o
+                edge_vol[e] = ev * sc
+                q_store[e] *= sc
+            end
+        end
+    end
+    return edge_vol
+end
+
+"""
+    _gather_apply!(state, edge_vol, ws, sgs::Bool)
+
+Phases B + C fused (WP4 stage 2): each cell gathers its net volume change over
+its edges (cell_i gains `ev`, cell_j loses it — the serial scatter's
+operations, in its order) and updates its own volume and depth. Threaded,
+per-cell writes only. The per-edge donor cap is applied in Phase A.
+"""
+function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
+                        ws::StepWorkspace, sgs::Bool)
+    cptr, cedge = _cell_csr!(state, ws)
+    ci = state.edges.cell_i
+    @batch per=core for i in 1:length(state.cell_ids)
+        s = 0.0
+        @inbounds for k in cptr[i]:cptr[i + 1] - 1
+            e = cedge[k]; ev = edge_vol[e]
+            iszero(ev) && continue
+            s = ci[e] == i ? s + ev : s - ev
+        end
+        @inbounds if sgs
+            # as _apply_dV_sgs!
+            state.volume[i] = max(0.0, state.volume[i] + s)
+            tbl = state.sgs_tables[i]
+            if isnan(tbl.z_min)
+                state.water_depth[i] = 0.0
+            else
+                state.water_depth[i] = max(0.0, wse_from_volume(tbl, state.volume[i]) - tbl.z_min)
+            end
+        else
+            # as _apply_dV_standard!
+            A_i = state.cell_area[i]
+            A_i < 1.0 && continue
+            state.volume[i]      = max(0.0, state.volume[i] + s)
+            state.water_depth[i] = state.volume[i] / A_i
+        end
+    end
+end
+
 # SGS edge slots: which entry of each cell's neighbour list the edge is
 # (`_adjacency_slot`, previously searched twice per edge per step).
 function _edge_slots!(state::FlowState, ws::StepWorkspace)
@@ -795,10 +907,21 @@ mutable struct SimOutput
     last_write_t     :: Float64    # sim time of last write
     frame_count      :: Int
     enabled          :: Bool
+    # WP4 stage 2: cell permutation of the simulation (`--cell-order spatial`):
+    # internal cell k is file cell perm[k]. Empty = identity. Per-cell frame
+    # datasets are written back in file order; see _write_frame!.
+    perm             :: Vector{Int}
 end
 
-SimOutput(; path="", interval=60.0, enabled=false) =
-    SimOutput(path, interval, -Inf, 0, enabled)
+SimOutput(; path="", interval=60.0, enabled=false, perm=Int[]) =
+    SimOutput(path, interval, -Inf, 0, enabled, perm)
+
+# Per-cell array in file order (identity when output.perm is empty).
+function _to_file_order(output::SimOutput, x::AbstractVector)
+    isempty(output.perm) && return x
+    y = similar(x); y[output.perm] = x
+    return y
+end
 
 """
     TimingLog
@@ -989,7 +1112,7 @@ function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
                               ("vel_v",       state.vel_v))
             ds = HDF5.create_dataset(g, name, eltype(data), (n,);
                                      chunk=chunk, deflate=4)
-            write(ds, data)
+            write(ds, _to_file_order(output, data))
         end
         # Write flux_Q (m³/s, SGS R-A only) when non-zero.
         # Written per-edge rather than per-cell; only present in SGS R-A runs.
@@ -999,6 +1122,13 @@ function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
             ds = HDF5.create_dataset(g, "flux_Q", Float64, (ne,);
                                      chunk=eq_chunk, deflate=4)
             write(ds, state.edges.flux_Q)
+            # Edges follow the simulation's cell order: record each edge's two
+            # cells as file-order indices so flux_Q stays interpretable.
+            if !isempty(output.perm) && !haskey(fid["mesh"], "edge_cells")
+                fid["mesh"]["edge_cells"] = permutedims(hcat(
+                    output.perm[state.edges.cell_i[1:ne]],
+                    output.perm[state.edges.cell_j[1:ne]]))
+            end
         end
     end
     output.last_write_t = t
@@ -1892,8 +2022,8 @@ discharge with their own width and the result scaled by edge e's width.
 `qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
 snapshot (WP0 thread-safety rule).
 """
-@inline function _q_centred_consistent(flux::Vector{Float64}, e::Int, edges::EdgeList,
-                                       qu::Vector{Float64}, qv::Vector{Float64},
+@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges::EdgeList,
+                                       qu::AbstractVector{Float64}, qv::AbstractVector{Float64},
                                        theta::Float64; volumetric::Bool = false)::Float64
     w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
     q0  = flux[e] / w_e
@@ -2580,7 +2710,7 @@ function _compute_velocity!(state::FlowState)
     h_min  = max(HFLOW_THRESHOLD, 0.01)  # m — velocity zeroed below this depth;
                                           # must be ≥ HFLOW_THRESHOLD so edges that
                                           # return zero flux also produce zero velocity
-    Threads.@threads for i in 1:n
+    @batch per=core for i in 1:n
         h = state.water_depth[i]
         if !(h >= h_min)                  # also catches NaN depth
             state.velocity[i] = 0.0
@@ -2744,192 +2874,17 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     # hybrid keeps Fix B and replaces only the per-edge donor cap.
     positivity = state.limiter !== :legacy
     keep_fixB  = state.limiter !== :positivity
+    donor_div  = _donor_edge_divisor(state)
 
     # WP1 (2026-10): vector friction. qvec_u/qvec_v hold the cell discharge
     # vectors reconstructed by Phase F at the end of the previous step (zero
     # before the first step, which reduces to component friction).
     vector_friction = state.friction_model === :vector
 
-    Threads.@threads for e in 1:ne
-        ci = edges.cell_i[e]
-        cj = edges.cell_j[e]
-
-        # Degenerate edge guard (NaN in geometry or elevation).
-        if (isnan(edges.width[e])      || isnan(edges.L[e])          ||
-            isnan(edges.cos_theta[e])  || isnan(edges.sill[e])       ||
-            isnan(state.elevation[ci]) || isnan(state.elevation[cj]))
-            edge_vol[e] = 0.0
-            edges.flux[e] = 0.0   # clear stale momentum on degenerate edges
-            continue
-        end
-
-        wse_ci = state.elevation[ci] + state.volume[ci] / max(state.cell_area[ci], 1.0)
-        wse_cj = state.elevation[cj] + state.volume[cj] / max(state.cell_area[cj], 1.0)
-
-        # Dry edge (WP4): both flux kernels return (0, 0) when
-        # max(wse) − sill ≤ HFLOW_THRESHOLD, whatever q_prev, so skip the
-        # momentum/gradient work. Same test (NaN falls through) — bit-identical.
-        if max(wse_ci, wse_cj) - edges.sill[e] <= HFLOW_THRESHOLD
-            edges.flux[e] = 0.0
-            edge_vol[e]   = 0.0
-            continue
-        end
-
-        # Identify donor depth for the volume limiter (higher-WSE side donates);
-        # 0.0 disables the per-edge volume limiter under --limiter positivity.
-        depth_donor = !keep_fixB ? 0.0 :
-                      wse_ci >= wse_cj ? state.water_depth[ci] : state.water_depth[cj]
-
-        # ── q_prev: edge-scalar (legacy) or face projection of cell vector ──
-        # When momentum_model == :cell, the face unit discharge predictor is
-        # obtained by projecting the average of the two adjacent cells' vector
-        # unit discharges onto the face normal (arithmetic face averaging;
-        # sign negated because flux convention is opposite to n̂_f direction):
-        #   q_prev_eff = −0.5·((qvec_u_ci + qvec_u_cj)·nf_x +
-        #                      (qvec_v_ci + qvec_v_cj)·nf_y)
-        # When momentum_model == :edge, the legacy per-edge scalar is used
-        # with optional Q-centred smoothing (theta). Q-centred is disabled
-        # for the cell-vector path (already spatially coupled via the vector
-        # reconstruction; adding theta would double-smooth).
-        #
-        # When momentum_model == :blend (WP2, 2026-10), the face's own stored
-        # discharge is blended with the face-normal projection of the averaged
-        # cell vector, using θ = q_centre_theta:
-        #   q_prev_eff = θ·q_f + (1−θ)·q_proj
-        # This replaces Q-centring's "most collinear face" average, which on
-        # pentagons mixes faces ~144° apart (non-parallel components) and by
-        # itself deflects the steady flow (WP1 frozen-coefficient test). It is
-        # mesh-general and unifies the two models in one parameter: θ = 1 is
-        # pure edge momentum (no smoothing), θ = 0 is exactly :cell. On a
-        # Cartesian grid q_proj = (q_w + 2q_f + q_e)/4, so it acts like
-        # Q-centring there. Review §4.2.
-        q_proj = state.momentum_model === :edge ? 0.0 :
-                 -0.5 * ((state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_x[e] +
-                         (state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_y[e])
-        q_prev_eff = if state.momentum_model === :cell
-            q_proj
-        elseif state.momentum_model === :blend
-            state.q_centre_theta * flux_prev[e] + (1.0 - state.q_centre_theta) * q_proj
-        elseif state.q_centre_mode === :consistent
-            _q_centred_consistent(flux_prev, e, edges, state.qvec_u, state.qvec_v,
-                                  state.q_centre_theta)
-        else
-            _q_centred(flux_prev, e,
-                       edges.collinear_i[e], edges.collinear_j[e],
-                       state.q_centre_theta)
-        end
-
-        # Face-tangential discharge for vector friction: the average of the
-        # two adjacent cell vectors projected onto the face tangent
-        # t̂ = (−nf_y, nf_x). Only its magnitude enters (via q_n² + q_t²), so
-        # the tangent's orientation does not matter.
-        q_t = vector_friction ?
-              0.5 * ((state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_x[e] -
-                     (state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_y[e]) : 0.0
-
-        if state.gradient_correction
-            # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
-            # (2026-08-18, standard-flow-momentum-instability session)
-            #
-            # SUPERSEDES the "purely gradient-driven" (2026-07-22) formula
-            # below, which computed BOTH the dominant driving term and the
-            # tangential correction from the WLSQ-reconstructed cell-centred
-            # gradient (grad_wse), with no direct local WSE-difference anchor
-            # anywhere in the calculation. That formula passed every
-            # correctness/symmetry test available at the time (T-NOC1-5,
-            # test_mirror_symmetry.jl MS1-4 — a hand-built, exactly
-            # mirror-symmetric synthetic mesh confirms the formula is
-            # per-step symmetric in isolation) but produced a severe,
-            # dt-dependent (non-monotonic, V-shaped) north/south instability
-            # on the real planar-slope mesh once combined with cell-vector
-            # momentum (--momentum-model cell): two independent WLSQ
-            # reconstructions over the same 5-neighbour stencil, both fed
-            # back into the same flux equation every step, with nothing
-            # tying either one to a locally-measured, self-correcting value.
-            #
-            # This is the standard OpenFOAM "orthogonal-corrected" /
-            # "over-relaxed" decomposition: the dominant (orthogonal) part of
-            # the face gradient is computed directly from the two adjacent
-            # cell values — cheap, local, and inherently self-correcting,
-            # since it reacts immediately to this specific edge's own state —
-            # and only the smaller non-orthogonal remainder (the V̂ term,
-            # typically |V̂| ~ 0.3-0.6 on this mesh, i.e. a minority
-            # contribution) comes from the reconstructed gradient:
-            #
-            #   dWSE_n = c·(wse_ci - wse_cj) − alpha·L·(∇WSE_f · V̂)
-            #
-            # where c = edges.cos_theta[e] (oriented cosine, ≥ 0) and
-            # V̂ = (edges.skew_x[e], edges.skew_y[e]). Recovers the legacy
-            # kernel exactly at skew=0 (T-NOC4 still applies unchanged, since
-            # the direct-difference term is bit-identical to _bates_flux's
-            # dWSE = wse_i - wse_j). Should be re-validated with
-            # test_mirror_symmetry.jl (still expected to pass — wse_ci-wse_cj
-            # is trivially mirror-symmetric by the same construction) and
-            # with the real-mesh planar-symmetry dt sweep before flipping
-            # gradient_correction's default.
-            #
-            # ── Diamond face-flux method (Phase C, directional-bias- ─────
-            # reformulation, see mesh/DiamondFlux.jl and
-            # FloodA5_PhaseB_Complete_PhaseC_Handoff.md). When
-            # face_flux_method == :diamond, dWSE_n is instead constructed
-            # directly per edge from the B2/B3 diamond face-normal
-            # derivative — no cell-averaged-then-projected gradient (gx_f/
-            # gy_f below) is involved for that edge at all. This is NOT a
-            # new flux kernel: FloodA5_PhaseB_B1_FaceFluxEquation.md §3.3
-            # proves dWSE_n = -L·g_n is exact for ANY exact gradient
-            # source, so the diamond gradient plugs directly into the same
-            # _bates_flux_limited_corrected call below.
-            #
-            # Falls back to the legacy WLSQ+skew construction (unchanged,
-            # below) whenever face_flux_method == :legacy, OR when
-            # face_flux_method == :diamond but this specific edge's
-            # diamond record is invalid (diamond_dWSE_n returns NaN — see
-            # DiamondFluxTable's docstring for when this occurs; expected
-            # to be extremely rare, ~1 edge in 74,000 on the Carlisle
-            # mesh in the Phase B empirical verification).
-            dWSE_n = NaN
-            #
-            # :diamond_wetdry (WP2, 2026-10): as :diamond, but where the
-            # edge's vertex stencil includes a dry cell (whose "WSE" is just
-            # its bed elevation) the face gradient is the two-point form
-            # c·(wse_ci − wse_cj) instead — see diamond_stencil_wet. Removes
-            # the spurious bank-side gradients seen on the Carlisle DEM.
-            if use_diamond && state.face_flux_method === :diamond
-                dWSE_n = diamond_dWSE_n_v(dtab, e, wse_ci, wse_cj, veta, edges.L[e])
-            elseif use_diamond     # :diamond_wetdry
-                dWSE_n = diamond_stencil_wet_v(dtab, e, vwet) ?
-                         diamond_dWSE_n_v(dtab, e, wse_ci, wse_cj, veta, edges.L[e]) :
-                         edges.cos_theta[e] * (wse_ci - wse_cj)
-            end
-            if isnan(dWSE_n)
-                gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
-                gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-                Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-                dWSE_n   = edges.cos_theta[e] * (wse_ci - wse_cj) -
-                           state.gradient_correction_alpha * edges.L[e] * Vhat_dot
-            end
-            h_flow = max(wse_ci, wse_cj) - edges.sill[e]
-
-            Q, q_stored = _bates_flux_limited_corrected(
-                q_prev_eff, h_flow, dWSE_n,
-                edges.width[e], edges.L[e],
-                min(state.manning_n[ci], state.manning_n[cj]), dt,
-                depth_donor;
-                vol_limit_divisor = Float64(state.max_neighbours),
-                q_t = q_t, vector_friction = vector_friction)
-        else
-            Q, q_stored = _bates_flux_limited(
-                q_prev_eff, wse_ci, wse_cj, edges.sill[e],
-                edges.width[e], edges.L[e], edges.cos_theta[e],
-                min(state.manning_n[ci], state.manning_n[cj]), dt,
-                depth_donor;
-                vol_limit_divisor = Float64(state.max_neighbours),
-                q_t = q_t, vector_friction = vector_friction)
-        end
-
-        edges.flux[e] = q_stored   # Fix C: post-limiting q → consistent q_prev
-        edge_vol[e]   = Q * dt     # signed volume (m³)
-    end
+    # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl): options as
+    # type parameters, arrays passed explicitly. The loop body it replaces is
+    # preserved verbatim in step_standard_reference!.
+    _face_flux_std_all!(StdOpts(state), _std_arrays(state, ws, flux_prev), ne, dt)
 
     # ── Phase B: serial dV scatter ─────────────────────────────────────────────
     # _bates_flux_limited already bounds the transfer via the Froude and volume
@@ -2941,30 +2896,14 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     # WP2: under --limiter positivity the per-edge donor cap is replaced by
     # one scale factor per donor cell (all of its outflows together; written
     # back to edges.flux — Fix C). See _positivity_scale!.
-    positivity && _positivity_scale!(edge_vol, edges.flux, state.volume,
-                                     edges.cell_i, edges.cell_j; out = ws.out)
-    dV = fill!(ws.dV, 0.0)
-    @inbounds for e in 1:ne
-        ev = edge_vol[e]
-        iszero(ev) && continue
+    # WP4 stage 2: the donor cap moved into Phase A; the scatter and the cell
+    # update are one threaded per-cell gather (bit-identical — see
+    # _gather_apply!), and the positivity totals are gathered too.
+    positivity && _positivity_scale_gather!(edge_vol, edges.flux, state.volume,
+                                            edges, state, ws)
 
-        ci = edges.cell_i[e]
-        cj = edges.cell_j[e]
-
-        if !positivity
-            if ev > 0.0
-                ev = min(ev,  state.volume[cj] / _donor_edge_divisor(state))   # cj is donor
-            else
-                ev = max(ev, -state.volume[ci] / _donor_edge_divisor(state))   # ci is donor
-            end
-        end
-
-        dV[ci] += ev   # ci gains when ev > 0
-        dV[cj] -= ev   # cj loses when ev > 0
-    end
-
-    # ── Phase C: parallel cell volume update ──────────────────────────────
-    _apply_dV_standard!(state, dV)
+    # ── Phases B + C: per-cell gather of dV and volume update ────────────
+    _gather_apply!(state, edge_vol, ws, false)
 
     # ── Phase D: open boundary outflow ────────────────────────────────────
     # Apply ghost-edge flux for each non-Closed boundary edge.
@@ -3015,7 +2954,7 @@ Per-cell gather with no shared writes, so it is threaded and deterministic
 function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
     edges  = state.edges
     max_nb = state.max_neighbours
-    Threads.@threads for i in 1:length(state.cell_ids)
+    @batch per=core for i in 1:length(state.cell_ids)
         qu = 0.0;  qv = 0.0
         @inbounds for s in 1:max_nb
             e = state.cell_edge_index[s, i]
@@ -3085,7 +3024,7 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     # (WP4: the wetted area computed here was never used — removed.)
     ws  = _edge_slots!(state, _workspace!(state))
     wse = ws.wse
-    Threads.@threads for i in 1:n                 # per-cell writes only (WP4)
+    @batch per=core for i in 1:n                 # per-cell writes only (WP4)
         @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
     end
 
@@ -3119,165 +3058,24 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     max_nb_sgs  = state.max_neighbours
     # WP1 (2026-10): vector friction — see the matching comment in step_standard!.
     vector_friction = state.friction_model === :vector
+    positivity = state.limiter !== :legacy
+    donor_div  = _donor_edge_divisor(state)
 
-    Threads.@threads for e in 1:ne
-        ci = edges.cell_i[e]
-        cj = edges.cell_j[e]
-
-        (isnan(state.elevation[ci]) || isnan(state.elevation[cj])) &&
-            (edge_vol[e] = 0.0; continue)
-
-        z_sill = edges.sill[e]
-        if isnan(z_sill)
-            z_sill = min(state.sgs_tables[ci].z_min, state.sgs_tables[cj].z_min)
-        end
-
-        if (isnan(edges.width[e]) || isnan(edges.L[e]) || isnan(edges.cos_theta[e]))
-            edge_vol[e] = 0.0
-            continue
-        end
-
-        # Bug 48 / Bug 49 refinement: effective WSE for dry cells.
-        # A dry cell (volume=0) contributes zero pooling head.  Its effective WSE
-        # must clear TWO physical barriers before it can receive water:
-        #   1. z_sill   — the channel bed (lowest DEM along the shared edge arc)
-        #   2. tbl.z_min — the basin floor (lowest terrain in the receiving cell)
-        wse_ci_eff = state.volume[ci] > 0.0 ? wse[ci] :
-                     max(z_sill, state.sgs_tables[ci].z_min)
-        wse_cj_eff = state.volume[cj] > 0.0 ? wse[cj] :
-                     max(z_sill, state.sgs_tables[cj].z_min)
-
-        # If both cells are dry, skip
-        if state.volume[ci] <= 0.0 && state.volume[cj] <= 0.0
-            edge_vol[e] = 0.0
-            edges.flux_Q[e] = 0.0
-            continue
-        end
-
-        # ── R-A flux kernel ──────────────────────────────────────────────────
-        wse_flow = max(wse_ci_eff, wse_cj_eff)
-
-        # (WP4: slots precomputed once; one bracket search per side.)
-        A_i, R_i = A5Grid.edge_area_radius(state.sgs_tables[ci], slot_ia[e], wse_flow)
-        A_j, R_j = A5Grid.edge_area_radius(state.sgs_tables[cj], slot_ja[e], wse_flow)
-        A_edge = 0.5 * (A_i + A_j)
-        R_edge = 0.5 * (R_i + R_j)
-
-        # Q-centred smoothing on flux_Q (volumetric momentum for R-A kernel).
-        # Same collinear lookup as standard flow — the checkerboard mode exists
-        # on the pentagonal mesh regardless of the flux kernel used.
-        # θ = state.q_centre_theta (default 0.9; set via --q-centre-theta).
-        Q_prev_eff = state.q_centre_mode === :consistent ?
-            _q_centred_consistent(flux_Q_prev, e, edges, state.qvec_u, state.qvec_v,
-                                  state.q_centre_theta; volumetric = true) :
-            _q_centred(flux_Q_prev, e,
-                       edges.collinear_i[e], edges.collinear_j[e],
-                       state.q_centre_theta)
-
-        # Face-tangential discharge for vector friction, as volumetric Q:
-        # qvec is reconstructed from the face unit discharges flux_Q/width
-        # (Phase F below), so the matching tangential Q is q_t·width.
-        Q_t = vector_friction ?
-              0.5 * ((state.qvec_v[ci] + state.qvec_v[cj]) * edges.nf_x[e] -
-                     (state.qvec_u[ci] + state.qvec_u[cj]) * edges.nf_y[e]) * edges.width[e] : 0.0
-
-        Q_new = if state.gradient_correction
-            # ── Local-orthogonal + WLSQ non-orthogonal correction ───────────
-            # (2026-08-18 — matches step_standard!'s corrected branch; see
-            # its comment for the full rationale and the real-mesh instability
-            # this supersedes.) Uses the *effective* (dry-cell corrected) WSE
-            # values for both h_flow and the direct WSE-difference term, as
-            # the legacy SGS kernel and the original 2026-06-24 formula both
-            # did — only the tangential (V̂) correction comes from the WLSQ
-            # gradient. This does NOT resolve the separate open question
-            # noted below (dry-cell gradient contamination via gx_f/gy_f,
-            # which are still built from the raw wse[] array) — that remains
-            # the acceptance gate for this SGS path once real-mesh testing
-            # resumes here.
-            #
-            # ⚠️  KNOWN OPEN QUESTION, not yet resolved by testing: a dry
-            # cell's *raw* wse[] is tbl.z_min (wse_from_volume(V=0) returns
-            # z_min — see the Bug 48 comment above), which is exactly the
-            # value Bug 48's clamp exists to suppress in the direct
-            # wse_ci_eff − wse_cj_eff term. Because _compute_wse_gradients!
-            # is called once on the raw `wse` array for ALL cells (dry and
-            # wet alike — see its docstring, "agnostic to which flow method
-            # produced it"), a dry cell's gradient is built from its
-            # raw/unclamped z_min, not its clamped effective WSE. This means
-            # the V̂ correction term (gx_f, gy_f) could reintroduce a small
-            # amount of the same spurious-head signal Bug 48 was designed to
-            # eliminate, via a different path than the one Bug 48 patches.
-            # MUST be checked against the synthetic DEM T0–T4 regression
-            # suite (dry-cell-heavy by design — see SGS_VALIDATION_SUMMARY.md)
-            # before this SGS corrected path is considered validated. If
-            # T0/T1 (no spurious downstream flow before the notch sill)
-            # regress with --gradient-correction on, this is the first place
-            # to look.
-            gx_f = 0.5 * (state.grad_wse[1, ci] + state.grad_wse[1, cj])
-            gy_f = 0.5 * (state.grad_wse[2, ci] + state.grad_wse[2, cj])
-            Vhat_dot = gx_f * edges.skew_x[e]  + gy_f * edges.skew_y[e]
-            dWSE_n   = edges.cos_theta[e] * (wse_ci_eff - wse_cj_eff) -
-                       state.gradient_correction_alpha * edges.L[e] * Vhat_dot
-            h_flow = wse_flow - z_sill
-
-            _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,
-                                        dWSE_n, edges.L[e],
-                                        0.5 * (state.manning_n[ci] + state.manning_n[cj]),
-                                        dt; Q_t = Q_t, vector_friction = vector_friction)
-        else
-            _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
-                              A_edge, R_edge,
-                              edges.L[e], edges.cos_theta[e],
-                              0.5 * (state.manning_n[ci] + state.manning_n[cj]),
-                              dt; Q_t = Q_t, vector_friction = vector_friction)
-        end
-
-        # Fix C: store Q (m³/s) as momentum state for next step.
-        edges.flux_Q[e] = Q_new
-        edge_vol[e]     = Q_new * dt
-    end
+    # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl); the loop body
+    # it replaces is preserved verbatim in step_sgs_reference!.
+    _face_flux_sgs_all!(SGSOpts(state), _sgs_arrays(state, ws), ne, dt)
 
     # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
     # WP2: --limiter positivity|hybrid replaces the per-edge donor cap with
     # one scale factor per donor cell, written back to flux_Q (Fix C). (The
     # R-A kernel has no per-edge volume limiter, so the two are the same here.)
-    positivity = state.limiter !== :legacy
-    positivity && _positivity_scale!(edge_vol, edges.flux_Q, state.volume,
-                                     edges.cell_i, edges.cell_j; out = ws.out)
-    dV = fill!(ws.dV, 0.0)
-    @inbounds for e in 1:ne
-        ev = edge_vol[e]
-        iszero(ev) && continue
+    # (WP4 stage 2: the last-resort per-edge donor cap, V/(2·max_neighbours)
+    # with Fix C back-propagation, moved into Phase A.)
+    positivity && _positivity_scale_gather!(edge_vol, edges.flux_Q, state.volume,
+                                            edges, state, ws)
 
-        ci = edges.cell_i[e]
-        cj = edges.cell_j[e]
-
-        # Last-resort per-edge donor cap: V/DONOR_EDGE_DIVISOR = V/10.
-        # The R-A form is self-stabilising so this should rarely bind.
-        # Fix C (full): back-propagate clipped Q to flux_Q so q_prev next
-        # step reflects what was actually transferred.
-        if positivity
-            # already scaled above
-        elseif ev > 0.0
-            ev_capped = min(ev, state.volume[cj] / _donor_edge_divisor(state))
-            if ev_capped < ev
-                edges.flux_Q[e] = ev_capped / dt
-            end
-            ev = ev_capped
-        else
-            ev_capped = max(ev, -state.volume[ci] / _donor_edge_divisor(state))
-            if ev_capped > ev
-                edges.flux_Q[e] = ev_capped / dt
-            end
-            ev = ev_capped
-        end
-
-        dV[ci] += ev
-        dV[cj] -= ev
-    end
-
-    # ── Phase C: parallel cell volume update ──────────────────────────────
-    _apply_dV_sgs!(state, dV)
+    # ── Phases B + C: per-cell gather of dV and volume update ────────────
+    _gather_apply!(state, edge_vol, ws, true)
 
     # ── Phase D: open boundary outflow ────────────────────────────────────
     if !isempty(state.ghost_edges)
@@ -3293,6 +3091,9 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     # ── Phase F: cell discharge vectors for vector friction (WP1) ─────────
     (vector_friction || state.q_centre_mode === :consistent) && _reconstruct_qvec!(state, true)
 end
+
+include(joinpath(@__DIR__, "surfacewater", "reference_steps.jl"))
+include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3620,6 +3421,45 @@ function _mesh_save_path(mesh_source::Tuple)::Union{String,Nothing}
 end
 
 """
+    spatial_cell_order(mesh) → Vector{Int}
+
+Cell permutation that sorts cells along a Morton (Z-order) curve of their
+centres (WP4 stage 2). Neighbouring cells then sit close together in memory:
+on Carlisle res-18 the mean index distance across an edge falls from ~10,000
+(A5 file order) to ~140, and the standard step runs ~2.7× faster on 8 threads.
+"""
+function spatial_cell_order(mesh::A5Mesh)::Vector{Int}
+    n = length(mesh.cells)
+    n <= 1 && return collect(1:n)
+    lon = [c.center_lon for c in mesh.cells]; lat = [c.center_lat for c in mesh.cells]
+    q(v) = (lo = minimum(v); w = max(maximum(v) - lo, eps());
+            [round(UInt64, (x - lo) / w * (2^20 - 1)) for x in v])
+    qx = q(lon); qy = q(lat)
+    key = map(qx, qy) do x, y
+        r = UInt64(0)
+        for b in 0:19
+            r |= ((x >> b) & 1) << (2b) | ((y >> b) & 1) << (2b + 1)
+        end
+        r
+    end
+    return sortperm(key; alg = Base.Sort.DEFAULT_STABLE)
+end
+
+"""
+    permute_mesh(mesh, perm) → A5Mesh
+
+A copy of `mesh` with cell k = `mesh.cells[perm[k]]` and every per-cell
+static/array variable permuted to match. Adjacency is keyed by cell ID and is
+shared unchanged.
+"""
+function permute_mesh(mesh::A5Mesh, perm::Vector{Int})::A5Mesh
+    sv = Dict{String,Vector{Float64}}(k => v[perm] for (k, v) in mesh.static_vars)
+    av = Dict{String,Matrix{Float64}}(k => v[:, perm] for (k, v) in mesh.array_vars)
+    return A5Mesh(mesh.resolution, mesh.aoi_geojson, mesh.cells[perm], sv, av,
+                  mesh.adjacency, mesh.id_scheme)
+end
+
+"""
     scheme_options(scheme, flow_method) → NamedTuple
 
 Default numerical options for `--scheme` (WP2b, 2026-10): the values that
@@ -3689,6 +3529,8 @@ function run_flood_model(;
     friction_model            :: Union{Symbol,Nothing} = nothing,
     limiter                   :: Union{Symbol,Nothing} = nothing,
     cfl_mode                  :: Union{Symbol,Nothing} = nothing,
+    # WP4 stage 2: :spatial (Morton-ordered cells, faster) or :file
+    cell_order                :: Symbol = :spatial,
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     courant           :: Float64 = 0.7,
@@ -3913,6 +3755,26 @@ function run_flood_model(;
         return nothing
     end
 
+    # 5b. Cell order for the simulation (WP4 stage 2). Everything from here on
+    #     — visualisers, flow model, sources, boundaries — uses the permuted
+    #     mesh; HDF5 output is written back in the file's cell order.
+    cell_order in (:spatial, :file) ||
+        throw(ArgumentError("cell_order must be :spatial or :file (got :$cell_order)"))
+    mesh_file = mesh
+    cell_perm = Int[]
+    # Legacy (unoriented) Q-centring depends on edge orientation, which follows
+    # cell index order (cell_i < cell_j) — reordering cells would change that
+    # scheme itself, not just round-off (HYDRAULICS.md §15.4). Keep file order
+    # there; every other configuration is orientation-independent.
+    order_free = q_centre_mode !== :legacy || q_centre_theta == 1.0
+    if cell_order === :spatial && length(mesh) > 1 && !order_free
+        @info "Keeping the file's cell order: --q-centre-mode legacy (θ < 1) depends on it"
+    elseif cell_order === :spatial && length(mesh) > 1
+        cell_perm = spatial_cell_order(mesh)
+        mesh = permute_mesh(mesh, cell_perm)
+        @info "Cells in spatial (Morton) order for the simulation; output in file order"
+    end
+
     # 6. Hand mesh to Cesium visualiser.
     # Makie is deferred to step 7b so source cell indices can be highlighted.
     if vis_mode === :cesium
@@ -4107,8 +3969,9 @@ function run_flood_model(;
         path     = something(output_path, ""),
         interval = output_interval,
         enabled  = output_path !== nothing,
+        perm     = cell_perm,
     )
-    sim_output.enabled && _write_mesh_metadata!(sim_output, mesh)
+    sim_output.enabled && _write_mesh_metadata!(sim_output, mesh_file)
 
     # 9. Simulation loop
     tl.source_setup = time() - t0_src
@@ -4407,6 +4270,12 @@ Flow model options:
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --courant C        Courant number of the adaptive timestep, in (0, 1]
                      (default: 0.7, the LISFLOOD-FP/CAESAR value).
+  --cell-order spatial|file
+                     Order of cells in memory during the simulation (WP4).
+                     spatial (default) sorts them along a Morton curve —
+                     much faster (better cache use); file keeps the mesh
+                     file's order. Results agree to round-off; HDF5 output
+                     is written in the file's cell order either way.
   --rainfall R       Uniform rainfall rate in mm/hr (default: 0).
   --injection-point LAT,LON,RATE
                      Add a point source at (lat, lon) with volumetric flow rate
@@ -5003,14 +4872,17 @@ function main(args=String[])
     sim_dur_val,  args = _pop_flag(args, "--sim-duration")
     dt_max_val,   args = _pop_flag(args, "--dt-max")
     courant_val,  args = _pop_flag(args, "--courant")
+    cell_order_val, args = _pop_flag(args, "--cell-order")
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
     dt_max        = dt_max_val   !== nothing ? parse(Float64, dt_max_val)   : 60.0
     courant       = courant_val  !== nothing ? parse(Float64, courant_val)  : 0.7
     (0.0 < courant <= 1.0) ||
-        (println("ERROR: --courant must be in (0, 1]
-"); print_help(1))
+        (println("ERROR: --courant must be in (0, 1]\n"); print_help(1))
+    cell_order = cell_order_val === nothing ? :spatial :
+                 cell_order_val in ("spatial", "file") ? Symbol(cell_order_val) :
+                 (println("ERROR: --cell-order requires 'spatial' or 'file'\n"); print_help(1))
     # Rainfall: user gives mm/hr, convert to m/s
     rainfall_rate = rainfall_val !== nothing ?
                     parse(Float64, rainfall_val) / 3_600_000.0 : 0.0
@@ -5155,6 +5027,7 @@ function main(args=String[])
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         courant         = courant,
+        cell_order      = cell_order,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,

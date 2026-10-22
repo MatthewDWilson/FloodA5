@@ -91,7 +91,7 @@ previous step's values while the threaded edge loop runs. Passing the live
 result then depends on edge order and thread scheduling. `step_standard!`
 and `step_sgs!` pass a start-of-step copy.
 """
-@inline function _q_centred(flux  :: Vector{Float64},
+@inline function _q_centred(flux  :: AbstractVector{Float64},
                               e    :: Int,
                               ci   :: Int,   # collinear_i[e]
                               cj   :: Int,   # collinear_j[e]
