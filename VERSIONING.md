@@ -35,10 +35,11 @@ Semver's own specification is explicit that the `0.x` series means
 active development, without a stability contract yet. That describes
 FloodA5's actual state accurately:
 
-- The directional-bias corrections (`--gradient-correction`,
-  `--face-flux-method`, `--momentum-model`) are implemented, tested on
-  synthetic domains, and *not* validated against a real DEM under open
-  boundary conditions as of this version.
+- The directional-bias corrections are the default since 0.2.0 and have been
+  checked on real terrain with open boundaries, but the standard solver still
+  carries grid-scale noise in deep channels and its results are sensitive to
+  the timestep (see `docs/HYDRAULICS.md` §15) — the physics is not yet pinned
+  down.
 - Default behaviour and CLI flags have changed multiple times across the
   project's development (sill definitions, CFL formula, boundary-condition
   defaults, flux-limiter behaviour) — the kind of change semver expects to
