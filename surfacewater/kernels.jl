@@ -136,6 +136,14 @@ function _face_flux_std_all!(opts::StdOpts, M, ne::Int, dt::Float64)
     return nothing
 end
 
+# Active-edge list mode (WP4 stage 3): the same kernel over act[1:n_act].
+function _face_flux_std_list!(opts::StdOpts, M, act::Vector{Int}, n_act::Int, dt::Float64)
+    @batch per=core for j in 1:n_act
+        _face_flux_std!(act[j], opts, M, dt)
+    end
+    return nothing
+end
+
 """
     SGSOpts{GC, QCC, VF, POS}
 
@@ -238,6 +246,13 @@ end
 function _face_flux_sgs_all!(opts::SGSOpts, M, ne::Int, dt::Float64)
     @batch per=core for e in 1:ne
         _face_flux_sgs!(e, opts, M, dt)
+    end
+    return nothing
+end
+
+function _face_flux_sgs_list!(opts::SGSOpts, M, act::Vector{Int}, n_act::Int, dt::Float64)
+    @batch per=core for j in 1:n_act
+        _face_flux_sgs!(act[j], opts, M, dt)
     end
     return nothing
 end

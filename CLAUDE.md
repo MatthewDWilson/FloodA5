@@ -15,8 +15,9 @@ CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
 WP1, WP2 and WP3 part 1 are on `main`; WP3 part 2 (SGS on any valence, SGS
 slot-order fix), WP2b (recommended scheme as default, `--scheme legacy` for the
 old one) and WP2c (Q-centring orientation defect; consistent Q-centring) are on
-`main` (PR #3), WP4 stage 1 too (PR #4); WP4 stage 2 (kernels, spatial cell
-order, Polyester threads) is on `wp4b-stage2`. Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
+`main` (PR #3), WP4 stages 1–2 too (PRs #4, #6); WP4 stage 3 (active-edge
+set) is on `wp4c-active`. Next: release 0.2.0, then the deep-channel damping
+(`projectinstructions/FloodA5_DeepChannelDamping_Issue_2026-10.md`). Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
 Q-centring). SGS meshes built before 2026-10-21 are refused until rebuilt or
 repaired (`mesh/repair_sgs_slot_order.py`). Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
@@ -38,6 +39,9 @@ without `_orient_collinear!`-style signs.
   (use `--cell-order file`; spatial order changes round-off, and the standard
   solver amplifies it — HYDRAULICS.md §15.5). `surfacewater/reference_steps.jl`
   is frozen: the live steps must match it (`test/test_wp4_stage2.jl`).
+  Phase A skips edges via the active set (`_active_edges!`): any new state an
+  edge kernel reads must be covered by the skip condition there (an edge may
+  be skipped only if visiting it would change nothing).
 - Full simulations: `julia --project=. --threads auto FloodModel.jl --help`.
   Mesh *generation* (`--meshgen`) should use `--threads 1` (PyCall/GDAL hazard).
 - Large data lives in `test/carlisle`, `test/planar_embankment`, `test/square`

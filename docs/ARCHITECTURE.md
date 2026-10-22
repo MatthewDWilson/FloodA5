@@ -515,6 +515,14 @@ resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`
   `test/check_determinism.jl` verifies identical results for 1 vs N threads,
   and `test/test_wp4_stage2.jl` checks the steps against the frozen
   `step_*_reference!` copies.
+- **Active edges** (WP4 stage 3) — Phase A visits only the edges that can
+  change: those of cells holding water, last step's set (so an edge that
+  has just dried is visited once more and zeroed by the kernel itself), and
+  edges that can carry flux while dry (none on normally built meshes). A full
+  pass runs on the first step, when elevations/sills/areas change, and when
+  more than half the cells hold water. The volume gather still covers every
+  edge, so mass balance is exactly that of a full pass. See `_active_edges!`
+  and `test/test_wp4_stage2.jl` R4.
 - **Cell order** — `run_flood_model` permutes the mesh into a spatial
   (Morton) order before building the flow model (`--cell-order`); output is
   mapped back to the file's order (`SimOutput.perm`). Edge orientation

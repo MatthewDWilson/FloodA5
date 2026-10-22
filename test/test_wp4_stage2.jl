@@ -113,4 +113,94 @@ end
     @test sum(a.volume) ≈ sum(b.volume) rtol = 1e-12
 end
 
+# ---------------------------------------------------------------------------
+# R4 (stage 3) — active-edge list mode == full pass, on a partly wet domain
+# where cells wet, drain and dry again. Mass balance is part of the check:
+# total stored + removed volume must match the reference bit for bit.
+# (Mutation check, 2026-10-23: dropping the "visit just-dried edges once more"
+# rule makes the legacy-limiter configurations fail here. With the hybrid or
+# positivity limiter the positivity scaling, which runs over every edge,
+# zeroes a stale transfer from an empty donor — so those are self-correcting.)
+function _blob_state(method; consistent_sill::Bool, kw...)
+    mesh = deepcopy(_A5)
+    x = [c.center_lon for c in mesh.cells]; y = [c.center_lat for c in mesh.cells]
+    z = 2e-3 .* 111_000 .* (maximum(x) .- x) .+ 0.05 .* sin.(7e4 .* y)   # slopes towards max lon
+    consistent_sill && (mesh.static_vars["elevation"] = z)               # sills = max(bed) at init
+    s = _quiet(() -> initialise_flow_model(mesh, StandardFlow(); kw...))
+    fill!(s.ghost_cell_bc, ZeroGradient)
+    s.elevation .= z
+    top = sortperm(x)[1:12]                                             # wet blob, high side
+    fill!(s.volume, 0.0); fill!(s.water_depth, 0.0)
+    s.water_depth[top] .= 0.4; s.volume[top] .= 0.4 .* s.cell_area[top]
+    if method isa SGSFlow
+        nb = 8; nsl = s.max_neighbours
+        s.sgs_tables = [begin
+            zi = z[i]; A = s.cell_area[i]; eb = collect(range(zi, zi + 2.0; length = nb))
+            SGSTable(eb, A .* (eb .- zi) .* (1 .+ 0.1 .* (eb .- zi)), fill(A, nb), A, zi, zi + 2.0,
+                     repeat(10.0 .* (eb .- zi) .+ 0.5, 1, nsl), repeat(10.0 .+ 2.0 .* (eb .- zi), 1, nsl))
+        end for i in eachindex(s.cell_ids)]
+    end
+    return s, top[1]
+end
+
+@testset "R4 — active-edge list == full pass ($lab, sills $(cs ? "consistent" : "inconsistent"))" for
+        (lab, method, kw) in [
+            ("std recommended", StandardFlow(), scheme_options(:recommended, :standard)),
+            ("std legacy",      StandardFlow(), scheme_options(:legacy, :standard)),
+            ("std positivity",  StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :positivity))),
+            ("sgs recommended", SGSFlow(),      scheme_options(:recommended, :sgs)),
+            ("sgs positivity",  SGSFlow(),      merge(scheme_options(:recommended, :sgs), (; limiter = :positivity))),
+        ], cs in (true, false)
+    # (a test driver may restrict to one configuration)
+    isdefined(Main, :ONLY_CFG) && (lab != Main.ONLY_CFG || cs != Main.ONLY_CS) && continue
+    a, src = _blob_state(method; consistent_sill = cs, kw...)
+    ACTIVE_MAX_FRACTION[] = 1.0             # list mode whenever possible
+    targeted_in_list = false
+    b, _   = _blob_state(method; consistent_sill = cs, kw...)
+    sgs = method isa SGSFlow
+    n_list = 0; min_act = typemax(Int); dried = 0
+    for k in 1:400
+        dt = 0.8 + 0.05 * (k % 5)
+        k <= 250 && (a.volume[src] += 0.2 * dt; b.volume[src] += 0.2 * dt)   # point inflow
+        if k in (150, 300)          # drying event: shallow (< 5 mm, i.e. flowing) cells empty
+            for s in (a, b), i in eachindex(s.volume)
+                if 0.0 < s.volume[i] < 5e-3 * s.cell_area[i]
+                    s.volume[i] = 0.0
+                    s === a && (dried += 1)           # wet cells emptied by the event
+                end
+            end
+        end
+        if k == 200                 # targeted: empty both cells of flowing edges
+            fl = sgs ? a.edges.flux_Q : a.edges.flux
+            for e in findall(!=(0.0), fl[1:a.edges.n_edges])[1:min(5, end)]
+                for s in (a, b), c in (a.edges.cell_i[e], a.edges.cell_j[e])
+                    s.volume[c] = 0.0
+                end
+                dried += 2
+            end
+        end
+        if !sgs                                     # run_simulation!'s depth sync
+            for s in (a, b); s.water_depth .= s.volume ./ s.cell_area; end
+        end
+        sgs ? step_sgs!(a, dt) : step_standard!(a, dt)
+        sgs ? step_sgs_reference!(b, dt) : step_standard_reference!(b, dt)
+        k == 201 && (targeted_in_list = a.ws.n_act > 0)
+        if a.ws.n_act > 0 && k > 2
+            n_list += 1; min_act = min(min_act, a.ws.n_act)
+        end
+    end
+    @test a.volume == b.volume && a.water_depth == b.water_depth
+    @test a.edges.flux == b.edges.flux && a.edges.flux_Q == b.edges.flux_Q
+    @test a.qvec_u == b.qvec_u && a.vol_removed == b.vol_removed
+    @test sum(a.volume) + a.vol_removed == sum(b.volume) + b.vol_removed     # mass balance
+    @test n_list > 100                                      # list mode was exercised
+    # …on a genuinely partial set when sills = max(bed) (inconsistent sills make
+    # every edge "dry-live", which is safe but saves nothing)
+    cs && @test min_act < a.edges.n_edges ÷ 2
+    @test a.vol_removed > 0                                 # water reached the boundary
+    @test dried > 0                                         # wet cells emptied → just-dried path
+    cs && @test targeted_in_list                            # …and handled in list mode
+    ACTIVE_MAX_FRACTION[] = 0.5
+end
+
 println("\nWP4 stage 2 tests complete.")
