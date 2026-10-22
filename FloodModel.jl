@@ -334,9 +334,27 @@ mutable struct StepWorkspace
     # order repeats the serial scatter's additions exactly (bit-identical).
     cptr      :: Vector{Int}
     cedge     :: Vector{Int}
+    # Active-edge set (WP4 stage 3) — see _active_edges!. `act[1:n_act]` are the
+    # edges visited this step, `prev` last step's wet-incident set; `stamp`
+    # de-duplicates (generation counter `gen`); `dry_live` are edges that can
+    # carry flux even with both cells dry; `geo_key` detects changes of the
+    # elevations/sills/areas they were computed from.
+    act       :: Vector{Int}
+    n_act     :: Int
+    prev      :: Vector{Int}
+    stamp     :: Vector{UInt32}
+    gen       :: UInt32
+    dry_live  :: Vector{Int}
+    geo_key   :: Float64
+    ready     :: Bool
+    prev_all  :: Bool
+    vact      :: Vector{Int}       # vertices of the active edges (diamond)
+    vstamp    :: Vector{UInt32}
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
-                                Int[], Int[], Float64[], Bool[], Int[], Int[])
+                                Int[], Int[], Float64[], Bool[], Int[], Int[],
+                                Int[], 0, Int[], UInt32[], UInt32(0), Int[], NaN, false, true,
+                                Int[], UInt32[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -728,6 +746,7 @@ function _workspace!(state::FlowState)::StepWorkspace
     if length(ws.edge_vol) != ne
         resize!(ws.edge_vol, ne); resize!(ws.flux_prev, ne)
         empty!(ws.slot_i); empty!(ws.slot_j)
+        ws.ready = false                     # active set must start from a full pass
     end
     return ws
 end
@@ -834,6 +853,113 @@ function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
             state.water_depth[i] = state.volume[i] / A_i
         end
     end
+end
+
+# Above this fraction of cells holding water, a full pass is cheaper than the
+# active-edge bookkeeping (WP4 stage 3). A Ref so tests can force list mode.
+const ACTIVE_MAX_FRACTION = Ref(0.5)
+
+"""
+    _active_edges!(state, ws, sgs) → Bool
+
+WP4 stage 3: decide which edges Phase A must visit this step. Returns `true`
+for list mode (`ws.act[1:ws.n_act]`), `false` for a full pass.
+
+An edge may be skipped only if visiting it would leave its state unchanged:
+both cells hold exactly zero volume (so the kernels write zero flux and zero
+edge volume — standard: wse = bed and max bed − sill ≤ HFLOW_THRESHOLD; SGS:
+the both-dry exit) **and** it already holds zero (it was not visited-and-wet
+last step). The list is therefore
+
+    act = prev ∪ cur,   cur = edges of cells with volume ≠ 0  ∪  dry_live,
+
+and `prev = cur` for the next step: an edge that has just dried is visited
+once more, and the kernel itself zeroes its flux and edge volume, exactly as
+the full pass would. No edge that can move water is ever skipped, and the
+volume update still gathers every edge, so mass balance is exactly that of
+the full pass. `dry_live` (standard flow) are edges whose dry depth
+max(bed) − sill exceeds the threshold — empty on meshes built normally, where
+the sill is max(bed). A full pass runs on the first step, whenever the
+elevations, sills or areas change, and while more than ACTIVE_MAX_FRACTION of
+the cells hold water; the step after a full pass re-seeds `prev`.
+"""
+function _active_edges!(state::FlowState, ws::StepWorkspace, sgs::Bool)::Bool
+    E = state.edges; ne = E.n_edges; n = length(state.cell_ids)
+    cptr, cedge = _cell_csr!(state, ws)
+    key = sum(state.elevation) + sum(view(E.sill, 1:ne)) + sum(state.cell_area)
+    if !ws.ready || !isequal(key, ws.geo_key)
+        ws.geo_key = key; ws.ready = true; ws.prev_all = true; ws.n_act = 0
+        empty!(ws.dry_live)
+        if !sgs
+            @inbounds for e in 1:ne
+                ci = E.cell_i[e]; cj = E.cell_j[e]
+                # NaN compares false → treated as live (always visited)
+                (max(state.elevation[ci], state.elevation[cj]) - E.sill[e] <= HFLOW_THRESHOLD) ||
+                    push!(ws.dry_live, e)
+            end
+        end
+        length(ws.stamp) == ne || (ws.stamp = zeros(UInt32, ne); ws.gen = UInt32(0))
+    end
+    nw = count(v -> v != 0.0, state.volume)          # NaN counts as wet
+    if nw > ACTIVE_MAX_FRACTION[] * n
+        ws.prev_all = true; ws.n_act = 0
+        return false
+    end
+    # new generation (reset the stamps on wrap-around)
+    if ws.gen == typemax(UInt32)
+        fill!(ws.stamp, UInt32(0)); fill!(ws.vstamp, UInt32(0)); ws.gen = UInt32(0)
+    end
+    ws.gen += UInt32(1); g = ws.gen
+    act = ws.act; resize!(act, max(length(act), ne)); k = 0
+    stamp = ws.stamp
+    # cur = dry_live ∪ edges of wet cells; it becomes prev for the next step
+    @inbounds for e in ws.dry_live
+        stamp[e] == g && continue
+        stamp[e] = g; k += 1; act[k] = e
+    end
+    @inbounds for i in 1:n
+        state.volume[i] != 0.0 || continue
+        for kk in cptr[i]:cptr[i + 1] - 1
+            e = cedge[kk]
+            stamp[e] == g && continue
+            stamp[e] = g; k += 1; act[k] = e
+        end
+    end
+    n_cur = k
+    if ws.prev_all
+        # this step is a full pass (every edge consistent afterwards); seed prev
+        resize!(ws.prev, n_cur); copyto!(ws.prev, 1, act, 1, n_cur)
+        ws.prev_all = false; ws.n_act = 0
+        return false
+    end
+    @inbounds for e in ws.prev                        # ∪ prev (just-dried edges)
+        stamp[e] == g && continue
+        stamp[e] = g; k += 1; act[k] = e
+    end
+    resize!(ws.prev, n_cur); copyto!(ws.prev, 1, act, 1, n_cur)
+    ws.n_act = k
+    return true
+end
+
+"""
+    _active_vertices!(ws, dtab) → number of vertices
+
+Diamond vertices used by the active edges (list mode), into `ws.vact`.
+"""
+function _active_vertices!(ws::StepWorkspace, dtab::DiamondFluxTable)::Int
+    nv = length(dtab.vertices)
+    length(ws.vstamp) == nv || (ws.vstamp = zeros(UInt32, nv))
+    g = ws.gen; vs = ws.vstamp; va = ws.vact
+    resize!(va, max(length(va), 2 * ws.n_act)); k = 0
+    @inbounds for j in 1:ws.n_act
+        e = ws.act[j]
+        dtab.valid[e] || continue
+        for v in (dtab.va_idx[e], dtab.vb_idx[e])
+            vs[v] == g && continue
+            vs[v] = g; k += 1; va[k] = v
+        end
+    end
+    return k
 end
 
 # SGS edge slots: which entry of each cell's neighbour list the edge is
@@ -1531,11 +1657,12 @@ since the legacy kernels never read it).
   for computing this — `_compute_wse_gradients!` is agnostic to which flow
   method produced it.
 """
-function _compute_wse_gradients!(state::FlowState, wse::Vector{Float64})
+function _compute_wse_gradients!(state::FlowState, wse::AbstractVector{Float64})
     n      = length(state.cell_ids)
     max_nb = size(state.adj_matrix, 1)
 
-    @inbounds for i in 1:n
+    # Threaded (WP4 stage 3): each cell writes only its own column.
+    @batch per=core for i in 1:n
         # If cell i's own WSE is non-finite (e.g. NaN elevation — Bug
         # tracked in FloodA5_NonOrthogonal_Correction_Plan.md §10.6.7's
         # "outstanding risk" note, this being the real-mesh manifestation
@@ -2851,10 +2978,21 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     use_diamond = state.gradient_correction && dtab !== nothing &&
                   state.face_flux_method in (:diamond, :diamond_wetdry)
     veta = ws.veta; vwet = ws.vwet
+    # Active-edge set (WP4 stage 3): list mode visits only edges that can
+    # change this step — bit-identical to the full pass (see _active_edges!).
+    list_mode = _active_edges!(state, ws, false)
     if use_diamond
-        diamond_vertex_eta!(veta, dtab, wse_all)
-        state.face_flux_method === :diamond_wetdry &&
-            diamond_vertex_wet!(vwet, dtab, state.water_depth, HFLOW_THRESHOLD)
+        if list_mode
+            nva = _active_vertices!(ws, dtab)
+            diamond_vertex_eta_list!(veta, dtab, wse_all, ws.vact, nva)
+            state.face_flux_method === :diamond_wetdry &&
+                diamond_vertex_wet_list!(vwet, dtab, state.water_depth, HFLOW_THRESHOLD,
+                                         ws.vact, nva)
+        else
+            diamond_vertex_eta!(veta, dtab, wse_all)
+            state.face_flux_method === :diamond_wetdry &&
+                diamond_vertex_wet!(vwet, dtab, state.water_depth, HFLOW_THRESHOLD)
+        end
     end
 
     edge_vol = ws.edge_vol
@@ -2884,7 +3022,11 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl): options as
     # type parameters, arrays passed explicitly. The loop body it replaces is
     # preserved verbatim in step_standard_reference!.
-    _face_flux_std_all!(StdOpts(state), _std_arrays(state, ws, flux_prev), ne, dt)
+    if list_mode
+        _face_flux_std_list!(StdOpts(state), _std_arrays(state, ws, flux_prev), ws.act, ws.n_act, dt)
+    else
+        _face_flux_std_all!(StdOpts(state), _std_arrays(state, ws, flux_prev), ne, dt)
+    end
 
     # ── Phase B: serial dV scatter ─────────────────────────────────────────────
     # _bates_flux_limited already bounds the transfer via the Froude and volume
@@ -3063,7 +3205,11 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
 
     # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl); the loop body
     # it replaces is preserved verbatim in step_sgs_reference!.
-    _face_flux_sgs_all!(SGSOpts(state), _sgs_arrays(state, ws), ne, dt)
+    if _active_edges!(state, ws, true)          # WP4 stage 3 (see step_standard!)
+        _face_flux_sgs_list!(SGSOpts(state), _sgs_arrays(state, ws), ws.act, ws.n_act, dt)
+    else
+        _face_flux_sgs_all!(SGSOpts(state), _sgs_arrays(state, ws), ne, dt)
+    end
 
     # ── Phase B: serial dV scatter with per-edge donor limiter ────────────
     # WP2: --limiter positivity|hybrid replaces the per-edge donor cap with

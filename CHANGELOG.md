@@ -39,6 +39,30 @@ on 2026-10-20; WP-M1, WP1, WP2 and WP3 (part 1) on 2026-10-21, via the
 `VERSIONING.md`'s policy the new CLI flags make this a MINOR bump (likely
 0.2.0), to be decided by the maintainer.
 
+### WP4 stage 3: active-edge set (`wp4c-active`)
+
+Results unchanged: bit-identical to the full pass (`test/test_wp4_stage2.jl`
+R4: a partly wet domain that wets, drains and dries, against the frozen
+reference, mass balance included; Carlisle runs identical to `main` frame by
+frame; determinism fingerprints unchanged).
+
+#### Changed
+- Phase A visits only edges that can change: those of cells holding water,
+  last step's set (an edge that has just dried is visited once more, so the
+  kernel itself zeroes its flux and edge volume) and edges that can carry flux
+  while dry (none on normally built meshes). A full pass runs on the first
+  step, when elevations/sills/areas change, and while more than half the
+  cells hold water (`ACTIVE_MAX_FRACTION`). The volume gather still covers
+  every edge, so no transfer can be dropped. See `_active_edges!`.
+- The diamond vertex pass covers only the vertices of the active edges; the
+  WSE gradient (`_compute_wse_gradients!`) is threaded.
+
+#### Performance (Carlisle res-18, `--threads auto`, against stage 2)
+- River inflows only, 6 h (ends with 6.8k of 30k cells wet): standard
+  simulation 24.4 → 17.7 s, SGS 37.7 → 29.2 s.
+- Nearly dry domain: standard step 2.1 → 0.6 ms (8 threads).
+- Fully wet domains (e.g. uniform rain) are unchanged — they take the full pass.
+
 ### WP4 stage 2: kernels, cell order, non-allocating threads (`wp4b-stage2`)
 
 #### Changed

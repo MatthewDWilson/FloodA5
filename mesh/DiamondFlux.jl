@@ -437,6 +437,53 @@ function diamond_vertex_wet!(vwet::Vector{Bool}, table::DiamondFluxTable,
 end
 
 """
+    diamond_vertex_eta_list!(veta, table, wse_all, vlist, nv)
+    diamond_vertex_wet_list!(vwet, table, depth, h_dry, vlist, nv)
+
+`diamond_vertex_eta!`/`_wet!` for the vertices `vlist[1:nv]` only (WP4 stage
+3: the vertices of the active edges). Other entries are left as they are and
+must not be read.
+"""
+function diamond_vertex_eta_list!(veta::Vector{Float64}, table::DiamondFluxTable,
+                                  wse_all::Vector{Float64}, vlist::Vector{Int}, nv::Int)
+    length(veta) == length(table.vertices) || resize!(veta, length(table.vertices))
+    vptr = table.vptr; vcell = table.vcell; vw = table.vw; vnan = table.vnan
+    @batch per=core for j in 1:nv
+        @inbounds begin
+            v = vlist[j]
+            if vnan[v]
+                veta[v] = NaN
+            else
+                s = 0.0                          # same order as eta_at_vertex
+                for k in vptr[v]:vptr[v + 1] - 1
+                    s += vw[k] * wse_all[vcell[k]]
+                end
+                veta[v] = s
+            end
+        end
+    end
+    return veta
+end
+
+function diamond_vertex_wet_list!(vwet::Vector{Bool}, table::DiamondFluxTable,
+                                  depth::Vector{Float64}, h_dry::Float64,
+                                  vlist::Vector{Int}, nv::Int)
+    length(vwet) == length(table.vertices) || resize!(vwet, length(table.vertices))
+    vptr = table.vptr; vcell = table.vcell
+    @batch per=core for j in 1:nv
+        @inbounds begin
+            v = vlist[j]
+            w = true
+            for k in vptr[v]:vptr[v + 1] - 1
+                depth[vcell[k]] > h_dry || (w = false; break)
+            end
+            vwet[v] = w
+        end
+    end
+    return vwet
+end
+
+"""
     diamond_dWSE_n_v(table, e, wse_ci, wse_cj, veta, L_e) -> Float64
 
 `diamond_dWSE_n` with the vertex values precomputed by `diamond_vertex_eta!`
