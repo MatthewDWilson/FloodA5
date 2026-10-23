@@ -856,3 +856,41 @@ Courant sensitivity, and the strongest argument yet for a conveyance-neutral
 damping of those modes (§15.4, open). Until then, compare standard-flow runs
 through integral or smoothed quantities.
 
+
+### 15.6 Damping diagnostics (2026-10-23)
+
+Tools: `test/diag_step_spectrum.jl`, `test/diag_operator_spectrum.jl`,
+`test/diag_divergence.jl`, `test/diag_d2_summary.sh`.
+
+**Linear stability of the full step** (finite-difference Jacobian; lake at
+rest, 3 m deep, Courant 0.7): on A5 the explicit diamond grows by 0.14% per
+step without Q-centring, two-point is neutral and consistent Q-centring damps
+every mode (rough gravity modes by ~3% per step). On a square grid,
+Q-centring θ = 0.9 is **unstable** at Courant 0.7 (|μ| = 1.6; stable at 0.6):
+on the checkerboard mode it acts as a damping factor 2θ − 1, which lowers the
+forward–backward limit to κ ≤ 4 − 2β < 3.92.
+
+**Twin runs** (Carlisle res-18, inflows + 10 mm/h, rainfall perturbed by
+10⁻¹⁰, 6 h): rms depth difference 2.3 cm (A5 recommended), 4.6 cm (θ = 1),
+5.9 cm (legacy), 11 cm (Cartesian legacy), 3 mm (SGS), but 2.5×10⁻⁶ m for
+Cartesian recommended. Single-change runs identify discrete switches as the
+main source: Cartesian recommended with the legacy CFL diverges by 45 cm (its
+99th-percentile depth is discontinuous in the state); A5 recommended with the
+two-point gradient by 6×10⁻⁷ m, with plain diamond (no wet/dry switch) by
+1.5 cm through smooth exponential growth (e-fold ~25 min, the diamond
+operator's asymmetry).
+
+**Courant sensitivity** of storage between Courant 0.7 and 0.35 is
+systematic in every configuration: +10% (A5 recommended), −20% (A5 θ = 1),
++4% (A5 legacy), +16% (Cartesian recommended), +20% (Cartesian legacy), −17%
+(SGS); rms depth differences 8–38 cm. Its sign follows the momentum
+treatment, consistent with Δt-dependent terms: Q-centring's damping rate
+(1 − θ)/Δt, and the per-step volume limiter and donor cap.
+
+**Semi-implicit free surface** (θ-method on the whole face gradient, research
+branch `d3-semi-implicit`, not merged): linear analysis predicts strong
+damping of grid-scale gravity modes (|μ| ≈ 0.90 per step), but on Carlisle it
+changes neither the extrema, nor the twin divergence, nor the Courant trend
+(storage identical to three decimals), at 3–6× the cost. The deep-channel
+noise is therefore not linear gravity-wave dynamics but is re-injected by the
+nonlinear switches and limiters.

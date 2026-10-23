@@ -8,14 +8,18 @@ behind it, recorded once here rather than re-litigated at each release.
 
 `MAJOR.MINOR.PATCH`, per [semver.org](https://semver.org):
 
-- **PATCH** — a pure bug fix. No new CLI flags, no change to default
-  behaviour, no change to output format. Something was wrong and is now
-  correct.
-- **MINOR** — a new feature, new CLI flag, new file format field, or an
-  intentional change to default behaviour or output. Under semver's own
-  rule for the `0.x` series (see below), a MINOR bump *may* include
-  breaking changes while the project is pre-1.0 — this is expected and
-  fine, not a deviation from the standard.
+- **PATCH** — any change that leaves **default results** unchanged: a bug
+  fix that does not alter default output, a new *opt-in* option or
+  experimental mode, diagnostics, tests, documentation, or a performance
+  change with bit-identical results. (Since 0.2.1; before that PATCH meant
+  a pure bug fix only. Under semver's `0.x` rule this is a project choice,
+  made so that the steady stream of opt-in research options does not force
+  a MINOR release each time.)
+- **MINOR** — a change to default behaviour or results, a change to the
+  output format, or the removal of an option. Under semver's own rule for
+  the `0.x` series (see below), a MINOR bump *may* include breaking changes
+  while the project is pre-1.0 — this is expected and fine, not a deviation
+  from the standard. MINOR versions get a GitHub release.
 - **MAJOR (1.0.0)** — reserved for the point at which the model is
   considered validated against real-world data and the CLI/output
   interfaces are considered stable enough that external users should
@@ -102,13 +106,14 @@ separated from the versioned entries that follow it.
 
 When you're ready to cut the next version:
 
-1. Decide PATCH vs. MINOR using the rules above — when in doubt, treat it
-   as MINOR (semver's guidance: "if in doubt, bump the more significant
-   number").
-2. Update `VERSION` and `FLOODA5_VERSION` together, in the same commit as
-   the change they describe.
-3. Add an entry to `CHANGELOG.md` — see that file's own header for the
-   format.
-4. Tag the commit in git (`git tag v0.2.0`, or whatever the new number is)
-   so the version string and the actual code state stay traceable to each
-   other.
+1. Decide PATCH vs. MINOR using the rules above — the test is whether
+   default results change. When in doubt, treat it as MINOR (semver's
+   guidance: "if in doubt, bump the more significant number").
+2. Every merged PR bumps the version (usually PATCH). Update `VERSION` and
+   `FLOODA5_VERSION` together in the PR's **final** commit, not when the
+   branch starts, so parallel branches do not conflict on the version.
+3. Give the version its own `CHANGELOG.md` entry (`## [0.2.1] — date`);
+   `[Unreleased]` collects work on branches not yet merged.
+4. Tag the merge commit (`git tag -a v0.2.1 …`) so every version string is
+   traceable to its code. Publish a GitHub release (notes from the
+   CHANGELOG entry) for MINOR versions only.
