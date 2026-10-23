@@ -312,6 +312,39 @@ end
 include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 
 """
+    SIWork
+
+Work arrays for the semi-implicit step (sized lazily by `_si_work!`).
+"""
+mutable struct SIWork
+    qs     :: Vector{Float64}   # q* per edge
+    beta   :: Vector{Float64}   # β per edge
+    hf     :: Vector{Float64}   # flow depth per edge (0 = dry/degenerate)
+    qt     :: Vector{Float64}   # tangential discharge per edge (vector friction)
+    dd     :: Vector{Float64}   # donor depth per edge (0 = no volume limiter)
+    eta0   :: Vector{Float64}   # ηⁿ per cell
+    b      :: Vector{Float64}   # right-hand side
+    x      :: Vector{Float64}   # ηⁿ⁺¹ (CG iterate)
+    r      :: Vector{Float64}
+    z      :: Vector{Float64}
+    p      :: Vector{Float64}
+    Ap     :: Vector{Float64}
+    dg     :: Vector{Float64}   # Jacobi diagonal
+    te     :: Vector{Float64}   # per-edge scratch for the operator
+    aj     :: Vector{Float64}   # two-point jump coefficient per edge
+    rh     :: Vector{Float64}   # BiCGStab vectors
+    vv     :: Vector{Float64}
+    yy     :: Vector{Float64}
+    ss     :: Vector{Float64}
+    tt     :: Vector{Float64}
+    vtmp   :: Vector{Float64}   # diamond vertex values of the operand
+    kind   :: Vector{Int8}      # per edge: 0 dry, 1 two-point, 2 diamond, 3 WLSQ fallback
+    iters  :: Int               # Krylov iterations of the last step
+    resid  :: Float64           # final relative residual
+end
+SIWork() = SIWork(ntuple(_ -> Float64[], 21)..., Int8[], 0, 0.0)
+
+"""
     StepWorkspace
 
 Per-step work arrays reused across steps (WP4, 2026-10), sized lazily by
@@ -350,11 +383,12 @@ mutable struct StepWorkspace
     prev_all  :: Bool
     vact      :: Vector{Int}       # vertices of the active edges (diamond)
     vstamp    :: Vector{UInt32}
+    si        :: SIWork            # semi-implicit free surface (D3), if used
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Float64[], Bool[], Int[], Int[],
                                 Int[], 0, Int[], UInt32[], UInt32(0), Int[], NaN, false, true,
-                                Int[], UInt32[])
+                                Int[], UInt32[], SIWork())
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -606,6 +640,10 @@ mutable struct FlowState
     q_centre_mode  :: Symbol
     # ── Reused per-step work arrays (WP4, 2026-10) — see StepWorkspace ────
     ws             :: StepWorkspace
+    # ── Free-surface time discretisation (D3, 2026-10; research option) ───
+    # 0.0 = explicit (Bates; the default). α > 0: semi-implicit θ-method on the
+    # two-point free-surface jump, see surfacewater/semi_implicit.jl.
+    fs_alpha       :: Float64
 end
 
 # ---------------------------------------------------------------------------
@@ -729,6 +767,30 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       q_centre_mode, StepWorkspace())
+end
+
+# D3 (2026-10): `fs_alpha` was appended as field 39. The 38-argument form
+# defaults it to 0.0 (explicit free surface).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode, ws::StepWorkspace)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, ws, 0.0)
 end
 
 """
@@ -2219,6 +2281,7 @@ function initialise_flow_model(mesh::A5Mesh,
                                 friction_raster    = nothing,
                                 q_centre_theta            :: Float64 = 0.9,
                                 q_centre_mode      :: Symbol  = :legacy,
+                                free_surface_alpha :: Float64 = 0.0,
                                 gradient_correction       :: Bool    = false,
                                 gradient_correction_alpha :: Float64 = 1.0,
                                 momentum_model            :: Symbol  = :edge,
@@ -2234,6 +2297,10 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("limiter must be :legacy, :positivity or :hybrid (got :$limiter)"))
     cfl_mode in (:legacy, :local) ||
         throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
+    (0.0 <= free_surface_alpha <= 1.0) ||
+        throw(ArgumentError("free_surface_alpha must be in [0, 1] (got $free_surface_alpha)"))
+    free_surface_alpha > 0.0 && method isa SGSFlow &&
+        throw(ArgumentError("the semi-implicit free surface is implemented for standard flow only"))
     q_centre_mode in (:legacy, :oriented, :consistent) ||
         throw(ArgumentError("q_centre_mode must be :legacy, :oriented or :consistent (got :$q_centre_mode)"))
     n       = length(mesh)
@@ -2551,6 +2618,7 @@ function initialise_flow_model(mesh::A5Mesh,
         cell_length,
         q_centre_mode,
         StepWorkspace(),
+        free_surface_alpha,
     )
 end
 
@@ -2980,7 +3048,8 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     veta = ws.veta; vwet = ws.vwet
     # Active-edge set (WP4 stage 3): list mode visits only edges that can
     # change this step — bit-identical to the full pass (see _active_edges!).
-    list_mode = _active_edges!(state, ws, false)
+    # (the semi-implicit step solves over all cells: always a full pass)
+    list_mode = state.fs_alpha == 0.0 && _active_edges!(state, ws, false)
     if use_diamond
         if list_mode
             nva = _active_vertices!(ws, dtab)
@@ -3022,7 +3091,9 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl): options as
     # type parameters, arrays passed explicitly. The loop body it replaces is
     # preserved verbatim in step_standard_reference!.
-    if list_mode
+    if state.fs_alpha > 0.0
+        _si_phase_a!(state, ws, StdOpts(state), _std_arrays(state, ws, flux_prev), dt)
+    elseif list_mode
         _face_flux_std_list!(StdOpts(state), _std_arrays(state, ws, flux_prev), ws.act, ws.n_act, dt)
     else
         _face_flux_std_all!(StdOpts(state), _std_arrays(state, ws, flux_prev), ne, dt)
@@ -3240,6 +3311,7 @@ end
 
 include(joinpath(@__DIR__, "surfacewater", "reference_steps.jl"))
 include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
+include(joinpath(@__DIR__, "surfacewater", "semi_implicit.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3680,6 +3752,7 @@ function run_flood_model(;
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     courant           :: Float64 = 0.7,
+    free_surface_alpha :: Float64 = 0.0,      # D3 research option (0 = explicit)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -3939,6 +4012,7 @@ function run_flood_model(;
                                         friction_raster           = friction_source,
                                         q_centre_theta            = q_centre_theta,
                                         q_centre_mode      = q_centre_mode,
+                                        free_surface_alpha = free_surface_alpha,
                                         gradient_correction       = gradient_correction,
                                         gradient_correction_alpha = gradient_correction_alpha,
                                         momentum_model            = momentum_model,
@@ -3956,7 +4030,8 @@ function run_flood_model(;
           "momentum_model = $(momentum_model), " *
           "face_flux_method = $(face_flux_method), " *
           "friction_model = $(friction_model), " *
-          "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme))"
+          "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme)" *
+          (free_surface_alpha > 0 ? "; free surface semi-implicit, α = $(free_surface_alpha))" : ")")
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -4416,6 +4491,14 @@ Flow model options:
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --courant C        Courant number of the adaptive timestep, in (0, 1]
                      (default: 0.7, the LISFLOOD-FP/CAESAR value).
+  --free-surface explicit|semi-implicit
+                     (research option, D3) Time discretisation of the free-
+                     surface force, standard flow only. explicit (default) is
+                     the Bates scheme. semi-implicit evaluates the two-point
+                     water-surface jump at (1−α)·ηⁿ + α·ηⁿ⁺¹ (one
+                     conjugate-gradient solve per step; other gradient terms
+                     stay explicit); α > 0.5 damps grid-scale gravity waves.
+  --fs-alpha A       α for --free-surface semi-implicit (default 0.6).
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5019,13 +5102,26 @@ function main(args=String[])
     dt_max_val,   args = _pop_flag(args, "--dt-max")
     courant_val,  args = _pop_flag(args, "--courant")
     cell_order_val, args = _pop_flag(args, "--cell-order")
+    free_surface_val, args = _pop_flag(args, "--free-surface")
+    fs_alpha_val,     args = _pop_flag(args, "--fs-alpha")
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
     dt_max        = dt_max_val   !== nothing ? parse(Float64, dt_max_val)   : 60.0
     courant       = courant_val  !== nothing ? parse(Float64, courant_val)  : 0.7
-    (0.0 < courant <= 1.0) ||
-        (println("ERROR: --courant must be in (0, 1]\n"); print_help(1))
+    free_surface_alpha = if free_surface_val === nothing || free_surface_val == "explicit"
+        fs_alpha_val === nothing ? 0.0 :
+            (println("ERROR: --fs-alpha needs --free-surface semi-implicit\n"); print_help(1))
+    elseif free_surface_val == "semi-implicit"
+        fs_alpha_val === nothing ? 0.6 : parse(Float64, fs_alpha_val)
+    else
+        println("ERROR: --free-surface requires 'explicit' or 'semi-implicit'\n"); print_help(1)
+    end
+    (0.0 <= free_surface_alpha <= 1.0) ||
+        (println("ERROR: --fs-alpha must be in (0, 1]\n"); print_help(1))
+    # the semi-implicit free surface is not limited by the gravity-wave CFL
+    (0.0 < courant <= (free_surface_alpha > 0 ? 10.0 : 1.0)) ||
+        (println("ERROR: --courant must be in (0, 1] (up to 10 with --free-surface semi-implicit)\n"); print_help(1))
     cell_order = cell_order_val === nothing ? :spatial :
                  cell_order_val in ("spatial", "file") ? Symbol(cell_order_val) :
                  (println("ERROR: --cell-order requires 'spatial' or 'file'\n"); print_help(1))
@@ -5174,6 +5270,7 @@ function main(args=String[])
         dt_max          = dt_max,
         courant         = courant,
         cell_order      = cell_order,
+        free_surface_alpha = free_surface_alpha,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
