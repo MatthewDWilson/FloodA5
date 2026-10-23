@@ -33,6 +33,41 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-23
+
+Default results unchanged (PATCH, under the updated `VERSIONING.md`).
+
+### Added
+- Damping diagnostics (D1 of the deep-channel damping work):
+  `test/diag_step_spectrum.jl` (eigenvalues of the finite-difference Jacobian
+  of the real step — gravity operator, friction, limiters and Q-centring
+  together — at a lake at rest or a frozen sloping flow);
+  `test/diag_operator_spectrum.jl` (the free-surface operator alone:
+  two-point, diamond, blends and the symmetric part of the diamond operator,
+  with growth factors and a linear-field consistency residual);
+  `test/diag_divergence.jl` (frame-by-frame divergence of two runs: twin runs
+  with a 1e-10 perturbation, cell orders, or Courant numbers) and
+  `test/diag_d2_summary.sh`.
+
+### Changed
+- `VERSIONING.md`: PATCH now covers any change that leaves default results
+  unchanged (opt-in options, diagnostics, documentation, bit-identical
+  performance work); MINOR is reserved for changed defaults/results or output
+  format and gets a GitHub release; every merged PR bumps the version in its
+  final commit and is tagged.
+
+### Findings (see `HYDRAULICS.md` §15.6)
+- On a square grid, Q-centring θ = 0.9 at Courant 0.7 is linearly unstable in
+  deep water (|μ| = 1.6 per step): its damping of the checkerboard mode lowers
+  the forward–backward stability limit to κ ≤ 4 − 2β, below κ ≈ 3.92.
+- Twin runs: the round-off sensitivity comes from discrete switches — the
+  legacy CFL's 99th-percentile depth (Cartesian twin divergence 45 cm instead
+  of 3 µm) and the diamond-wetdry stencil switch — plus the diamond operator's
+  slow linear growth. With the two-point gradient and the local CFL, A5 is as
+  reproducible as Cartesian (6×10⁻⁷ m after 6 h).
+- The Courant sensitivity of storage (4–20% between Courant 0.7 and 0.35) is
+  systematic and appears in every configuration, SGS included.
+
 ## [0.2.0] — 2026-10-23
 
 The October 2026 work packages (WP0–WP4 of the internal forward plan, plus
