@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.2.1"
+const FLOODA5_VERSION = "0.2.2"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -811,6 +811,7 @@ function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Fl
                 sc = V / o
                 edge_vol[e] = ev * sc
                 q_store[e] *= sc
+                LIMITER_STATS[] && (_LSTATS[].flag[e] |= LF_POS)   # D1b
             end
         end
     end
@@ -2705,10 +2706,11 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
         Q_out, q_stored = _bates_ghost_flux(
             ge.flux_prev, wse_ci, wse_ghost, ge.sill,
             ge.width, ge.L, state.manning_n[ci], dt,
-            state.water_depth[ci])
+            BOUNDARY_POSITIVITY[] ? 0.0 : state.water_depth[ci])
 
         dV = Q_out * dt
-        dV = min(dV, state.volume[ci] / _donor_edge_divisor(state))
+        dV = min(dV, BOUNDARY_POSITIVITY[] ? state.volume[ci] :
+                     state.volume[ci] / _donor_edge_divisor(state))
         dV = max(dV, 0.0)
 
         state.volume[ci]      = max(0.0, state.volume[ci] - dV)
@@ -2785,11 +2787,12 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
             Q_out, q_stored = _bates_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
                 ge.width, ge.L, state.manning_n[ci], dt,
-                state.water_depth[ci])
+                BOUNDARY_POSITIVITY[] ? 0.0 : state.water_depth[ci])
         end
 
         dV = Q_out * dt
-        dV = min(dV, state.volume[ci] / _donor_edge_divisor(state))
+        dV = min(dV, BOUNDARY_POSITIVITY[] ? state.volume[ci] :
+                     state.volume[ci] / _donor_edge_divisor(state))
         dV = max(dV, 0.0)
 
         state.volume[ci]   = max(0.0, state.volume[ci] - dV)
@@ -2980,7 +2983,7 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
     veta = ws.veta; vwet = ws.vwet
     # Active-edge set (WP4 stage 3): list mode visits only edges that can
     # change this step — bit-identical to the full pass (see _active_edges!).
-    list_mode = _active_edges!(state, ws, false)
+    list_mode = !LIMITER_STATS[] && _active_edges!(state, ws, false)   # stats: full pass
     if use_diamond
         if list_mode
             nva = _active_vertices!(ws, dtab)
@@ -3205,7 +3208,7 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
 
     # Phase A as a kernel (WP4 stage 2, surfacewater/kernels.jl); the loop body
     # it replaces is preserved verbatim in step_sgs_reference!.
-    if _active_edges!(state, ws, true)          # WP4 stage 3 (see step_standard!)
+    if !LIMITER_STATS[] && _active_edges!(state, ws, true)   # WP4 stage 3; stats: full pass
         _face_flux_sgs_list!(SGSOpts(state), _sgs_arrays(state, ws), ws.act, ws.n_act, dt)
     else
         _face_flux_sgs_all!(SGSOpts(state), _sgs_arrays(state, ws), ne, dt)
@@ -3239,6 +3242,7 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
 end
 
 include(joinpath(@__DIR__, "surfacewater", "reference_steps.jl"))
+include(joinpath(@__DIR__, "surfacewater", "limiter_stats.jl"))
 include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 
 # ---------------------------------------------------------------------------
@@ -3433,6 +3437,7 @@ function run_simulation!(state            :: FlowState,
 
         t    += dt
         step += 1
+        LIMITER_STATS[] && _lstats_step!(t)                 # D1b (--limiter-stats)
 
         # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
         ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
@@ -3499,6 +3504,7 @@ function run_simulation!(state            :: FlowState,
         end
     end
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
+    LIMITER_STATS[] && _lstats_report()
 
     if output.enabled && t > output.last_write_t
         t_hdf5 = time()
@@ -3680,6 +3686,8 @@ function run_flood_model(;
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     courant           :: Float64 = 0.7,
+    limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
+    boundary_limiter  :: Symbol  = :legacy,   # D1b experiment: :legacy | :positivity
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4120,6 +4128,11 @@ function run_flood_model(;
     sim_output.enabled && _write_mesh_metadata!(sim_output, mesh_file)
 
     # 9. Simulation loop
+    LIMITER_STATS[] = limiter_stats
+    boundary_limiter in (:legacy, :positivity) ||
+        throw(ArgumentError("boundary_limiter must be :legacy or :positivity"))
+    BOUNDARY_POSITIVITY[] = boundary_limiter === :positivity
+    limiter_stats && _lstats_reset!(flow_state.edges.n_edges)
     tl.source_setup = time() - t0_src
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  courant=$(courant)  " *
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
@@ -4416,6 +4429,15 @@ Flow model options:
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --courant C        Courant number of the adaptive timestep, in (0, 1]
                      (default: 0.7, the LISFLOOD-FP/CAESAR value).
+  --limiter-stats    (diagnostic, D1b) Record how often each limiter and switch
+                     binds — Froude cap, volume limiter, donor cap, positivity,
+                     diamond wet/dry fallback — by flow-depth band, with an hourly
+                     log line and an end-of-run table. Results are unchanged.
+  --boundary-limiter legacy|positivity
+                     (experiment, D1b) legacy (default): boundary outflow keeps
+                     the volume limiter and the per-step donor cap, both of
+                     which scale with 1/Δt. positivity: only "no more than the
+                     boundary cell holds".
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5019,6 +5041,9 @@ function main(args=String[])
     dt_max_val,   args = _pop_flag(args, "--dt-max")
     courant_val,  args = _pop_flag(args, "--courant")
     cell_order_val, args = _pop_flag(args, "--cell-order")
+    limiter_stats,  args = _pop_bool(args, "--limiter-stats")
+    boundary_lim_val, args = _pop_flag(args, "--boundary-limiter")
+    boundary_limiter = boundary_lim_val === nothing ? :legacy : Symbol(boundary_lim_val)
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5174,6 +5199,8 @@ function main(args=String[])
         dt_max          = dt_max,
         courant         = courant,
         cell_order      = cell_order,
+        limiter_stats   = limiter_stats,
+        boundary_limiter = boundary_limiter,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
