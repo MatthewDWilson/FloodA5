@@ -33,6 +33,32 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-10-25
+
+Default results unchanged (PATCH).
+
+### Added
+- `--limiter-stats` (diagnostic, D1b of the deep-channel damping work): records
+  per edge and step which limiter or switch was active (Froude cap, volume
+  limiter, donor cap, positivity scaling, diamond wet/dry fallback). Prints an
+  hourly log line and an end-of-run table by flow-depth band, including the
+  rate at which edges toggle between them. Results are unchanged; with stats
+  on, Phase A visits every edge (`test/test_limiter_stats.jl`, L1–L2).
+- `--boundary-limiter legacy|positivity` (experimental): `positivity` removes
+  the volume limiter and the per-step donor cap from open-boundary outflow,
+  keeping only "no more than the cell holds". Default `legacy`
+  (`test/test_limiter_stats.jl`, L3).
+
+### Findings (see `HYDRAULICS.md` §15.7)
+- The volume limiter binds in deep water on A5, 30–90 times more often at
+  Courant 0.7 than at 0.35. SGS's donor cap binds on half of all wet
+  edge-steps. Both scale with 1/Δt.
+- With Q-centring off and both limits replaced by positivity scaling, in the
+  interior and at the boundary, A5 and SGS converge in Δt: storage at 6 h is
+  3.382 / 3.382 / 3.386 Mm³ at Courant 0.7 / 0.5 / 0.35 (A5), against
+  +10% to −20% trends otherwise. The boundary limits were also a major noise
+  source. The square grid without damping is chaotic.
+
 ## [0.2.1] — 2026-10-23
 
 Default results unchanged (PATCH, under the updated `VERSIONING.md`).

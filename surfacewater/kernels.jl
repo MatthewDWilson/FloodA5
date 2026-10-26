@@ -44,7 +44,8 @@ function _std_arrays(state::FlowState, ws::StepWorkspace, flux_prev)
             flux = E.flux, flux_prev = flux_prev, edge_vol = ws.edge_vol,
             veta = ws.veta, vwet = ws.vwet, dtab = state.diamond_table,
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
-            max_nb = Float64(state.max_neighbours), donor_div = _donor_edge_divisor(state))
+            max_nb = Float64(state.max_neighbours), donor_div = _donor_edge_divisor(state),
+            lflag = _lf_flag(), lhf = _lf_hf())               # D1b (--limiter-stats)
 end
 
 """
@@ -64,6 +65,7 @@ Transcribed from the stage-1 loop body; bit-identical to it.
             isnan(M.elevation[ci])   || isnan(M.elevation[cj]))
             M.edge_vol[e] = 0.0
             M.flux[e] = 0.0
+            LIMITER_STATS[] && (M.lflag[e] = 0x00)
             return nothing
         end
         wse_ci = M.elevation[ci] + M.volume[ci] / max(M.cell_area[ci], 1.0)
@@ -72,6 +74,7 @@ Transcribed from the stage-1 loop body; bit-identical to it.
         if max(wse_ci, wse_cj) - M.sill[e] <= HFLOW_THRESHOLD
             M.flux[e] = 0.0
             M.edge_vol[e] = 0.0
+            LIMITER_STATS[] && (M.lflag[e] = 0x00)
             return nothing
         end
         depth_donor = !FIXB ? 0.0 :
@@ -118,11 +121,27 @@ Transcribed from the stage-1 loop body; bit-identical to it.
         end
         M.flux[e] = q_stored                   # Fix C
         ev = Q * dt
+        ev_raw = ev
         if !POS && !iszero(ev)                 # per-edge donor cap
             ev = ev > 0.0 ? min(ev,  M.volume[cj] / M.donor_div) :
                             max(ev, -M.volume[ci] / M.donor_div)
         end
         M.edge_vol[e] = ev
+        if LIMITER_STATS[]                     # D1b: which limiters bound (no effect on results)
+            hs = max(max(wse_ci, wse_cj) - M.sill[e], 1e-6)
+            fl = LF_WET
+            qmax = hs * sqrt(_G * hs) * FROUDE_LIMIT
+            if VF
+                hypot(q_stored, q_t) >= qmax * (1 - 1e-12) && (fl |= LF_FROUDE)
+            else
+                abs(q_stored) == qmax && (fl |= LF_FROUDE)
+            end
+            depth_donor > 0.0 &&
+                abs(q_stored) == (depth_donor * M.width[e]) / (M.max_nb * dt) && (fl |= LF_FIXB)
+            ev != ev_raw && (fl |= LF_DONOR)
+            GC && FF === :diamond_wetdry && !diamond_stencil_wet_v(M.dtab, e, M.vwet) && (fl |= LF_WD)
+            M.lflag[e] = fl; M.lhf[e] = hs
+        end
     end
     return nothing
 end
@@ -167,7 +186,8 @@ function _sgs_arrays(state::FlowState, ws::StepWorkspace)
             tables = state.sgs_tables, slot_i = ws.slot_i, slot_j = ws.slot_j, wse = ws.wse,
             flux_Q = E.flux_Q, flux_Q_prev = ws.flux_prev, edge_vol = ws.edge_vol,
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
-            donor_div = _donor_edge_divisor(state))
+            donor_div = _donor_edge_divisor(state),
+            lflag = _lf_flag(), lhf = _lf_hf())               # D1b (--limiter-stats)
 end
 
 """
@@ -183,6 +203,7 @@ from the stage-1 loop body; bit-identical to it.
         ci = M.ci[e]; cj = M.cj[e]
         if isnan(M.elevation[ci]) || isnan(M.elevation[cj])
             M.edge_vol[e] = 0.0                # flux_Q left as is (as before)
+            LIMITER_STATS[] && (M.lflag[e] = 0x00)
             return nothing
         end
         ti = M.tables[ci]; tj = M.tables[cj]
@@ -190,6 +211,7 @@ from the stage-1 loop body; bit-identical to it.
         isnan(z_sill) && (z_sill = min(ti.z_min, tj.z_min))
         if isnan(M.width[e]) || isnan(M.L[e]) || isnan(M.cos_theta[e])
             M.edge_vol[e] = 0.0
+            LIMITER_STATS[] && (M.lflag[e] = 0x00)
             return nothing
         end
         # Bug 48/49: a dry cell's effective WSE clears the sill and its own floor
@@ -198,6 +220,7 @@ from the stage-1 loop body; bit-identical to it.
         if M.volume[ci] <= 0.0 && M.volume[cj] <= 0.0
             M.edge_vol[e] = 0.0
             M.flux_Q[e] = 0.0
+            LIMITER_STATS[] && (M.lflag[e] = 0x00)
             return nothing
         end
         wse_flow = max(wse_ci_eff, wse_cj_eff)
@@ -228,6 +251,7 @@ from the stage-1 loop body; bit-identical to it.
         end
         M.flux_Q[e] = Q_new
         ev = Q_new * dt
+        ev_raw = ev
         if !POS && !iszero(ev)                 # donor cap, Fix C back-propagation
             if ev > 0.0
                 ev_capped = min(ev, M.volume[cj] / M.donor_div)
@@ -239,6 +263,12 @@ from the stage-1 loop body; bit-identical to it.
             ev = ev_capped
         end
         M.edge_vol[e] = ev
+        if LIMITER_STATS[]                     # D1b (no effect on results)
+            hs = wse_flow - z_sill
+            M.lflag[e] = (hs > HFLOW_THRESHOLD && A_edge > 1e-6 ? LF_WET : 0x00) |
+                         (ev != ev_raw ? LF_DONOR : 0x00)
+            M.lhf[e] = hs
+        end
     end
     return nothing
 end

@@ -894,3 +894,89 @@ changes neither the extrema, nor the twin divergence, nor the Courant trend
 (storage identical to three decimals), at 3–6× the cost. The deep-channel
 noise is therefore not linear gravity-wave dynamics but is re-injected by the
 nonlinear switches and limiters.
+
+### 15.7 Limiter activity and Δt-consistency (D1b, 2026-10-25)
+
+Tools: `--limiter-stats` (per-edge flags recorded in the kernels; results
+unchanged) and the experimental `--boundary-limiter positivity`. Runs:
+Carlisle res-18, inflows + 10 mm/h, 6 h, `--dt-max 10 --output-interval 900`,
+e.g.
+
+```
+julia --project=. --threads auto FloodModel.jl \
+  --meshload test/carlisle/carlisle_mesh18_standard.parquet --flow-model standard \
+  --inflow-bci test/carlisle/carlisle_wgs84.bci --rainfall 10 \
+  --sim-duration 21600 --dt-max 10 --output-interval 900 [--courant 0.35] \
+  [--limiter-stats] [--limiter positivity --q-centre-theta 1 --boundary-limiter positivity]
+```
+
+**Which limiters bind** (% of wet edge-steps, by flow depth over the sill):
+
+| | Froude cap (< 0.3 m) | volume limiter (1–3 m / ≥ 3 m) | donor cap (all / ≥ 3 m) | wet/dry fallback | toggles (< 0.3 m / 1–3 m) |
+|---|---|---|---|---|---|
+| A5 recommended, C 0.7 | 33 | 2.3 / 1.3 | — | 11 | 20 / 1.2 |
+| A5 recommended, C 0.35 | 33 | 0.026 / 0.045 | — | 11 | 19 / 0.57 |
+| A5 recommended θ = 1, C 0.7 | 34 | 8.0 / 6.3 | — | 11 | 21 / 3.9 |
+| Cartesian recommended, C 0.7 | 32 | 0.015 / 0.003 | — | 10 | 17 / 2.3 |
+| SGS recommended, C 0.7 | — | — | 54 / 7.1 | — | 0.35 / 0.05 |
+
+("Toggles": wet edges whose set of active limiters changed since the previous
+step. For SGS, whose R–A kernel has a different limiter set, only the donor
+cap is recorded.) The Froude cap binds on a third of shallow edges whatever Δt is. The
+volume limiter (Fix B, q ≤ h·w/(N·Δt)) binds in *deep* water on A5, about
+30–90 times more often at Courant 0.7 than at 0.35, and more without Q-centring.
+SGS's donor cap (V/(2N) per step) binds on half of all wet edge-steps. All
+three per-step limits scale with 1/Δt.
+
+**Courant series with the Δt-dependent terms removed** (storage at 6 h, Mm³):
+
+| configuration | C 0.7 | C 0.5 | C 0.35 | 0.7 → 0.35 |
+|---|---|---|---|---|
+| A5 recommended (hybrid limiter, Q-centring θ 0.9) | 4.902 | 5.060 | 5.375 | +9.6% |
+| A5 recommended, θ = 1 | 4.383 | 3.835 | 3.488 | −20% |
+| A5 `--limiter positivity` (θ 0.9) | 4.919 | 5.108 | 5.381 | +9.4% |
+| A5 `--limiter positivity`, θ = 1 | 3.990 | 3.777 | 3.391 | −15% |
+| … and `--boundary-limiter positivity` | **3.382** | **3.382** | **3.386** | **+0.1%** |
+| SGS recommended | 4.334 | 3.952 | 3.602 | −17% |
+| SGS `--limiter positivity` | 3.582 | | 3.326 | −7.1% |
+| … and `--boundary-limiter positivity` | **3.136** | | **3.138** | **+0.06%** |
+| Cartesian recommended | 3.804 | 4.082 | 4.426 | +16% |
+| Cartesian positivity, boundary positivity, θ 0.9 | 3.524 | | 4.251 | +21% |
+| Cartesian positivity, boundary positivity, θ = 1 | 2.751 | 2.550 | 2.480 | −10% (noise) |
+
+- With Q-centring off (θ = 1), interior Fix B and the donor cap replaced by
+  positivity scaling, and the boundary outflow freed of the same two limits,
+  **A5 and SGS converge in Δt**. Storage agrees to 0.1%, outflow to 0.4%
+  (2523 / 2528 / 2533 k m³), and the flood wave reaches the outflow boundary at
+  the same time (arrival of 50 000 m³ outflow: 9938 / 9856 / 9877 s). The rms
+  depth difference between Courant 0.7 and 0.35 falls from 39 cm to 4.7 cm,
+  below the twin-run difference (6.5 cm).
+- Each Δt-dependent term moves the result in its own direction. Q-centring's
+  damping rate (1 − θ)/Δt grows as Δt shrinks and slows the wave (arrival
+  13 332 → 14 829 s, recommended). The per-step limits bind less as Δt
+  shrinks and speed it (θ = 1: 11 677 → 10 218 s). With interior limits
+  removed, arrival converges but outflow did not (+32%) until the boundary
+  limits were removed too.
+- The **boundary limits were also a noise source**: interior positivity,
+  θ = 1 has an end-of-run WSE residual r_rms of 343 mm (§15.2 metric) with the
+  legacy boundary limits and 52 mm without (twin rms 36 cm → 6.5 cm). The
+  outflow boundary of a deep channel is where the per-step volume limiter
+  binds hardest.
+- The converged configuration is still noisier than the recommended scheme
+  (extrema 0.11 vs 0.06, dv_rms 0.65 vs 0.24 m/s), but now the same at every Δt
+  (r_rms 52 / 49 mm at Courant 0.7 / 0.35).
+- The square grid needs damping: Cartesian with no Q-centring and no limiters
+  is chaotic (twin rms 56 cm, r_rms 0.87 m at Courant 0.7, close to its 1/√2
+  limit). Its −10% trend is within that noise.
+- In the recommended A5 scheme the boundary option changes little (outflow
+  1009 → 1025 k m³ at Courant 0.7, none at 0.35): Q-centring dominates there.
+
+**Consequence.** The Courant sensitivity in §15.6 is not a property of the
+local-inertial scheme on A5. It comes from three Δt-scaled terms: Q-centring,
+the per-edge volume limiter and the donor cap, in the interior and at the
+boundary. The Δt-converged answer stores markedly less water at 6 h (3.38 Mm³)
+than the recommended scheme at any Courant number (4.9–5.4 Mm³). A Δt-
+consistent replacement must provide the damping that the A5 diamond operator
+and the square grid need, with a coefficient in physical units rather than per
+step. That is D4, the conservative η filter. Positivity scaling with free
+boundary outflow is the Δt-consistent limiter baseline it would run on.
