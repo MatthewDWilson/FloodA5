@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.2.3"
+const FLOODA5_VERSION = "0.2.4"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -357,12 +357,25 @@ mutable struct StepWorkspace
     f_r       :: Vector{Float64}   # high-frequency residual (n)
     f_out     :: Vector{Float64}   # per-cell positivity scale (n)
     f_flux    :: Vector{Float64}   # face exchange this step, m³, positive into cell_i (ne)
+    # momentum damping (D6′, surfacewater/momentum_damping.jl), built on first use
+    m_tail    :: Vector{Int}       # oriented end vertices per face (0 = none) (ne)
+    m_head    :: Vector{Int}
+    m_vptr    :: Vector{Int}       # vertex → faces CSR
+    m_vedge   :: Vector{Int}
+    m_vsign   :: Vector{Float64}   # circulation sign of each face at the vertex
+    m_interior :: BitVector        # vertex with a closed fan of cells
+    m_psi     :: Vector{Float64}   # streamfunction this step (n_vertices)
+    m_u       :: Vector{Float64}   # face velocity (ne)
+    m_w       :: Vector{Float64}   # face wetness weight (ne)
+    m_h       :: Vector{Float64}   # face flow depth (ne)
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Float64[], Bool[], Int[], Int[],
                                 Int[], 0, Int[], UInt32[], UInt32(0), Int[], NaN, false, true,
                                 Int[], UInt32[],
-                                zeros(0, 0), zeros(0, 0), Float64[], Float64[], Float64[], Float64[])
+                                zeros(0, 0), zeros(0, 0), Float64[], Float64[], Float64[], Float64[],
+                                Int[], Int[], Int[], Int[], Float64[], falses(0),
+                                Float64[], Float64[], Float64[], Float64[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -618,6 +631,13 @@ mutable struct FlowState
     # C_s of the conservative η high-pass filter (surfacewater/eta_filter.jl);
     # 0.0 = off (the default). Set via --eta-filter. Standard flow only.
     eta_filter_cs  :: Float64
+    # ── Momentum damping (D6′, 2026-10) ────────────────────────────────────
+    # C_m of the divergence-free damping of circulating face discharges
+    # (surfacewater/momentum_damping.jl); 0.0 = off (the default). Scale
+    # :wave (ν = C_m·√(gh)·ℓ) or :flow (ν = C_m·|u|·ℓ). Set via
+    # --momentum-damping / --momentum-damping-scale. Standard flow only.
+    mom_damping_cs    :: Float64
+    mom_damping_scale :: Symbol
 end
 
 # ---------------------------------------------------------------------------
@@ -765,6 +785,30 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       q_centre_mode, ws, 0.0)
+end
+
+# D6′ (2026-10): `mom_damping_cs` and `mom_damping_scale` were appended as
+# fields 40–41. The 39-argument form defaults them to off.
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode, ws::StepWorkspace, eta_filter_cs::Float64)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, ws, eta_filter_cs, 0.0, :wave)
 end
 
 """
@@ -2263,7 +2307,9 @@ function initialise_flow_model(mesh::A5Mesh,
                                 friction_model            :: Symbol  = :component,
                                 limiter                   :: Symbol  = :legacy,
                                 cfl_mode                  :: Symbol  = :legacy,
-                                eta_filter                :: Float64 = 0.0)::FlowState
+                                eta_filter                :: Float64 = 0.0,
+                                momentum_damping          :: Float64 = 0.0,
+                                momentum_damping_scale    :: Symbol  = :wave)::FlowState
     friction_model in (:component, :vector) ||
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     momentum_model in (:edge, :cell, :blend) ||
@@ -2278,6 +2324,21 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("eta_filter must be ≥ 0 (got $eta_filter)"))
     eta_filter > 0.0 && method isa SGSFlow &&
         throw(ArgumentError("the η filter (--eta-filter) is implemented for standard flow only"))
+    (isfinite(momentum_damping) && momentum_damping >= 0.0) ||
+        throw(ArgumentError("momentum_damping must be ≥ 0 (got $momentum_damping)"))
+    momentum_damping_scale in (:wave, :flow) ||
+        throw(ArgumentError("momentum_damping_scale must be :wave or :flow (got :$momentum_damping_scale)"))
+    if momentum_damping > 0.0
+        method isa SGSFlow &&
+            throw(ArgumentError("momentum damping (--momentum-damping) is implemented for standard flow only"))
+        (gradient_correction && face_flux_method in (:diamond, :diamond_wetdry)) ||
+            throw(ArgumentError("momentum damping needs the diamond face gradient " *
+                                "(--gradient-correction on --face-flux-method diamond|diamond-wetdry)"))
+        momentum_model === :edge ||
+            throw(ArgumentError("momentum damping acts on edge momentum (--momentum-model edge)"))
+        friction_model === :vector ||
+            throw(ArgumentError("momentum damping needs --friction-model vector (cell vectors every step)"))
+    end
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -2594,6 +2655,8 @@ function initialise_flow_model(mesh::A5Mesh,
         q_centre_mode,
         StepWorkspace(),
         eta_filter,
+        momentum_damping,
+        momentum_damping_scale,
     )
 end
 
@@ -3122,6 +3185,12 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
        state.q_centre_mode === :consistent
         _reconstruct_qvec!(state, false)
     end
+
+    # ── Phase G: divergence-free momentum damping (D6′, --momentum-damping)
+    # After Phase F: the circulation uses the fresh cell vectors for the
+    # face-tangential velocity. It changes only the stored face discharges
+    # (next step's momentum); qvec keeps the undamped reconstruction.
+    state.mom_damping_cs > 0.0 && _momentum_damping!(state, ws, dt)
 end
 
 """
@@ -3290,6 +3359,7 @@ include(joinpath(@__DIR__, "surfacewater", "reference_steps.jl"))
 include(joinpath(@__DIR__, "surfacewater", "limiter_stats.jl"))
 include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
+include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3735,6 +3805,8 @@ function run_flood_model(;
     limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
     boundary_limiter  :: Symbol  = :legacy,   # D1b experiment: :legacy | :positivity
     eta_filter        :: Float64 = 0.0,       # D4: η filter coefficient C_s (0 = off)
+    momentum_damping  :: Float64 = 0.0,       # D6′: momentum damping C_m (0 = off)
+    momentum_damping_scale :: Symbol = :wave, # D6′: :wave | :flow
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4001,7 +4073,9 @@ function run_flood_model(;
                                         friction_model            = friction_model,
                                         limiter                   = limiter,
                                         cfl_mode                  = cfl_mode,
-                                        eta_filter                = eta_filter)
+                                        eta_filter                = eta_filter,
+                                        momentum_damping          = momentum_damping,
+                                        momentum_damping_scale    = momentum_damping_scale)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
@@ -4014,6 +4088,7 @@ function run_flood_model(;
           "friction_model = $(friction_model), " *
           "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme)" *
           (eta_filter > 0.0 ? "; eta_filter = $(eta_filter)" : "") *
+          (momentum_damping > 0.0 ? "; momentum_damping = $(momentum_damping) ($(momentum_damping_scale))" : "") *
           (boundary_limiter === :legacy ? "" : "; boundary_limiter = $(boundary_limiter)") * ")"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
@@ -4493,6 +4568,15 @@ Flow model options:
                      proportion to the jump in the WSE residual from a local
                      planar fit, at a rate C_s·√(g h)/ℓ that does not depend on
                      Δt. 0 (default) = off. Try 0.02–0.1.
+  --momentum-damping C_M
+                     (experiment, D6′; standard flow, diamond gradient) Damps the
+                     circulating part of the face discharges — exactly
+                     divergence-free, so it moves no water — at a rate in
+                     physical units: eddy viscosity ν = C_m·V·ℓ around each
+                     mesh vertex. 0 (default) = off.
+  --momentum-damping-scale wave|flow
+                     V = √(g h) (wave, default: a numerical floor) or the local
+                     flow speed |u| (flow: eddy-viscosity-like).
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5101,6 +5185,10 @@ function main(args=String[])
     boundary_limiter = boundary_lim_val === nothing ? :legacy : Symbol(boundary_lim_val)
     eta_filter_val, args = _pop_flag(args, "--eta-filter")
     eta_filter = eta_filter_val === nothing ? 0.0 : parse(Float64, eta_filter_val)
+    mom_damp_val, args = _pop_flag(args, "--momentum-damping")
+    momentum_damping = mom_damp_val === nothing ? 0.0 : parse(Float64, mom_damp_val)
+    mom_scale_val, args = _pop_flag(args, "--momentum-damping-scale")
+    momentum_damping_scale = mom_scale_val === nothing ? :wave : Symbol(mom_scale_val)
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5259,6 +5347,8 @@ function main(args=String[])
         limiter_stats   = limiter_stats,
         boundary_limiter = boundary_limiter,
         eta_filter      = eta_filter,
+        momentum_damping = momentum_damping,
+        momentum_damping_scale = momentum_damping_scale,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
