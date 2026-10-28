@@ -69,6 +69,10 @@ configs = [
     ("d4_eta_filter",        (; friction_model = :vector, limiter = :positivity,
                                 gradient_correction = true, face_flux_method = :diamond_wetdry,
                                 q_centre_theta = 1.0, eta_filter = 0.05)),
+    # D6′: divergence-free momentum damping (threaded per-edge / per-vertex passes)
+    ("d6_momentum_damping",  (; friction_model = :vector, limiter = :positivity,
+                                gradient_correction = true, face_flux_method = :diamond_wetdry,
+                                q_centre_theta = 1.0, eta_filter = 0.05, momentum_damping = 0.2)),
 ]
 
 with_logger(ConsoleLogger(stderr, Logging.Warn)) do

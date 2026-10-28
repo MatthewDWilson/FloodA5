@@ -33,6 +33,33 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-10-28
+
+Default results unchanged (PATCH).
+
+### Added
+- `--momentum-damping C_m` and `--momentum-damping-scale wave|flow`
+  (experimental, standard flow with the diamond gradient and vector
+  friction; D6′ of the deep-channel damping work). A divergence-free damping
+  of the circulating part of the face discharges: the vertex circulation
+  drives a streamfunction correction, so it moves no water, leaves the
+  gravity-wave dynamics alone and vanishes for uniform flow. Eddy viscosity
+  ν = C_m·(√(gh) or |u|)·ℓ, a rate in physical units
+  (`surfacewater/momentum_damping.jl`). Default 0 (off). FlowState fields
+  40–41, with a 39-argument constructor shim. `test/test_momentum_damping.jl`
+  (M1–M5); determinism fingerprint `d6_momentum_damping`; configurations in
+  `test/diag_step_spectrum.jl`.
+
+### Findings (see `HYDRAULICS.md` §15.9)
+- On the Δt-consistent baseline with the η filter, momentum damping removes
+  the remaining velocity noise (A5 Carlisle dv_rms 0.65 → 0.18 m/s at wave
+  0.2; recommended 0.24) and keeps the runs Δt-converged. Cartesian twin
+  divergence falls to 10⁻¹⁰ m.
+- It is an eddy viscosity: lateral momentum exchange slows the channels and
+  raises 6 h storage by 2–25% depending on C_m, at ν one to two orders above
+  physical values. On A5 it adds a small planar asymmetry (up to 0.03).
+  Choosing C_m needs a full shallow-water reference.
+
 ## [0.2.3] — 2026-10-28
 
 Default results unchanged (PATCH).

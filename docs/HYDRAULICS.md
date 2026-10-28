@@ -1154,3 +1154,93 @@ on shallow sheet flow. The missing piece is a Δt-consistent damping of the
 circulating discharge modes. That is face-momentum diffusion acting on the
 edge discharges, with a coefficient in physical units and vanishing for
 uniform velocity: item 4 of the damping recommendations.
+
+### 15.9 Δt-consistent momentum damping (D6′, 2026-10)
+
+The η filter (§15.8) cannot see discharge patterns that circulate without
+moving the water surface. `--momentum-damping C_m`
+(`surfacewater/momentum_damping.jl`) damps those, and only those:
+- Γ_v is the circulation of the face velocities around each interior mesh
+  vertex. The velocity used is the component along the centre-to-centre
+  line, which includes the face-tangential part from the cell vectors, so a
+  uniform flow has Γ = 0 exactly on a skewed mesh too.
+- A streamfunction ψ_v = −ν·Δt·h_v·Γ_v/A_v is formed at each vertex.
+- Each face's stored discharge changes by ψ_head − ψ_tail. Around every
+  cell these changes telescope to zero, so the correction is **exactly
+  divergence-free**: it moves no water, and it leaves the gravity-wave
+  dynamics and their stability limit untouched. The full-step spectra are
+  unchanged (`test/diag_step_spectrum.jl`).
+- ν = C_m·V·ℓ_v, with ℓ_v = √A_v and V = √(gh) (`wave`, a numerical floor)
+  or the local flow speed |u| (`flow`, eddy-viscosity-like). The rate is in
+  physical units, so the result does not depend on Δt.
+- Wetness weights ramp the correction off near dry faces, and vertices on
+  the domain edge are left alone. It requires the diamond face gradient and
+  vector friction (cell vectors every step), as in the recommended scheme.
+- Tests: `test/test_momentum_damping.jl`, M1–M5 (exact divergence-freeness,
+  uniform flow untouched on A5 and Cartesian, Δt-independent vortex decay,
+  rest and mass in the full step).
+- Uniform-flow conveyance (frozen test, h = 3 m, Δt = 8 s): 0.999 × Manning
+  with 0.1° deflection on A5, and exact on Cartesian. The recommended scheme
+  gives 0.889 and 8°.
+
+**Carlisle**, A5 and Cartesian side by side. All runs use `--limiter
+positivity --q-centre-theta 1 --boundary-limiter positivity --eta-filter
+0.05` plus the momentum damping shown; runs are in `test/wp1_runs/d6/`.
+Columns: storage at 6 h; twin-run and Courant 0.7 vs 0.35 rms depth
+difference; end-of-run local extrema and velocity noise dv_rms (§15.2
+metric, Courant 0.7); mean speed in cells over 3 m deep.
+
+| mesh | momentum damping | storage C 0.7 / 0.35 (Mm³) | twin rms | Courant rms | extrema | dv_rms | speed ≥ 3 m |
+|---|---|---|---|---|---|---|---|
+| A5 | recommended scheme | 4.902 / 5.375 | 2.3 cm | 17.5 cm | 6.0% | 0.24 | 0.42 |
+| A5 | none (η filter only) | 3.381 / 3.386 | 2.8 cm | 3.5 cm | 5.8% | 0.65 | 1.34 |
+| A5 | wave 0.05 | 3.444 / 3.445 | 2.5 cm | 2.9 cm | 6.1% | 0.30 | 0.95 |
+| A5 | wave 0.2 | 4.202 / 4.186 | 2.5 cm | 4.7 cm | 5.5% | 0.18 | 0.66 |
+| A5 | flow 0.5 | 4.089 / 4.071 | 7.4 cm | 6.3 cm | 6.1% | 0.25 | 0.84 |
+| Cartesian | recommended scheme | 3.804 / 4.426 | 2.5 µm | — | 1.8% | 0.11 | 0.67 |
+| Cartesian | none (η filter only) | 2.447 / 2.354 | 2.3 µm | 12.5 cm | 1.5% | 0.25 | 1.39 |
+| Cartesian | wave 0.05 | 2.682 / 2.623 | 6 µm | 11.5 cm | 1.4% | 0.16 | 1.10 |
+| Cartesian | wave 0.2 | 2.896 / 2.938 | 8×10⁻¹¹ m | 4.8 cm | 2.3% | 0.14 | 1.00 |
+| Cartesian | flow 0.5 | 2.739 / 2.750 | 3×10⁻¹⁰ m | 5.6 cm | 1.8% | 0.15 | 1.08 |
+
+(The A5 and Cartesian meshes differ in resolution and in how the DEM is
+sampled, so their storages are not directly comparable; compare changes
+within a mesh.)
+
+**Rained planar slope** (res-18, 20 mm/h, Courant 0.7), against the
+recommended scheme (in brackets):
+- interior mean depth 0.0605–0.0608 m (0.0649; Δt-converged 0.059);
+- extrema 3.1% / 2.7% / 2.7% for wave 0.05 / wave 0.2 / flow 0.5 (1.3%);
+- dv_rms 0.10 / 0.054 / 0.063 m/s (0.052);
+- N/S asymmetry +0.011 / +0.028 / +0.025 (−0.005; η filter only +0.006).
+
+**Findings.**
+- The circulating modes are the velocity noise. Damping them removes it
+  without touching the water-surface dynamics. At wave 0.2 it is at or below
+  the recommended scheme on every mesh (A5 0.18 vs 0.24 m/s), and the
+  runs stay Δt-converged (A5 storage within 0.4%, Cartesian within 2.2%).
+  Cartesian runs become reproducible to 10⁻¹⁰ m.
+- **It is an eddy viscosity, and its strength is a modelling choice with a
+  first-order effect.** Lateral momentum exchange slows the channels (deep
+  speed 1.34 → 0.66 m/s on A5) and raises 6 h storage, by 2% (wave 0.05) to
+  24% (wave 0.2) on A5 and 11% to 25% on Cartesian (at Courant 0.35). In 3 m of water on these
+  meshes ν ≈ 5–20 m²/s for C_m = 0.05–0.2, one to two orders of magnitude
+  above typical depth-averaged turbulent viscosities. The recommended
+  scheme's Q-centring adds the same kind of resistance implicitly, more
+  strongly and Δt-dependently (deep speed 0.42 m/s).
+- **Polygon dependence.** For the strong settings the relative effect is
+  similar on both meshes (wave 0.2: +24% A5, +25% Cartesian; flow 0.5: +20%,
+  +17%). For wave 0.05 it is not (+2%, +11%). On A5 the vertex operator adds
+  a small directional bias on the planar slope (asymmetry up to 0.03). The
+  vertex fans are irregular there (three or four cells per vertex), and the
+  operator weights them by dual area only.
+- Cost: 10–30% more step time on top of the filter.
+
+**Consequence.** With the η filter and the momentum damping, a
+Δt-consistent scheme is reproducible and convergent, and its noise matches
+the recommended scheme. What it cannot decide is how much lateral momentum
+exchange is right. The local-inertial equations have neither advection nor
+a turbulence closure, so that amount is set by C_m, and the answer moves
+6 h storage by up to a quarter. Settling it needs a reference that resolves
+these terms: a full shallow-water (HLL/HLLC) solver on the same polygon
+meshes, with a physical eddy viscosity.

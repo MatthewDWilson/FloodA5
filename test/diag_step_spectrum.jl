@@ -134,6 +134,12 @@ for cs in (0.02, 0.05, 0.08, 0.12)
     push!(configs, ("positivity, θ = 1, η filter $(cs)",
                     merge(scheme_options(:recommended, :standard), (; limiter = :positivity, q_centre_theta = 1.0, eta_filter = cs))))
 end
+# D6′ (2026-10): divergence-free momentum damping on top of the η filter (C_s = 0.05)
+for (cm, sc) in ((0.05, :wave), (0.2, :wave), (0.5, :flow))
+    push!(configs, ("pos, θ1, η 0.05, mom $(cm) $(sc)",
+                    merge(scheme_options(:recommended, :standard), (; limiter = :positivity, q_centre_theta = 1.0,
+                          eta_filter = 0.05, momentum_damping = cm, momentum_damping_scale = sc))))
+end
 
 mesh = _quiet(_mesh)
 println("Full-step spectrum: mesh=$(MESHKIND) ($(length(mesh.cells)) cells), base=$(BASE), depth=$(H0) m, Courant=$(COURANT)",
