@@ -980,3 +980,177 @@ consistent replacement must provide the damping that the A5 diamond operator
 and the square grid need, with a coefficient in physical units rather than per
 step. That is D4, the conservative η filter. Positivity scaling with free
 boundary outflow is the Δt-consistent limiter baseline it would run on.
+
+### 15.8 Δt-consistent damping: the η filter (D4, 2026-10)
+
+**Why the square grid needs damping.** Linearised and without friction, the
+local-inertial step is a forward–backward integration of the wave equation:
+q is updated from the old surface, then the surface from the new q. For a
+mode whose free-surface operator eigenvalue is λ, with κ = g·h·Δt²·λ, the
+amplification factors solve μ² − (2 − κ)μ + 1 = 0. For κ ≤ 4 both have
+|μ| = 1 exactly. Every resolved mode is neutral and the scheme has **no
+numerical dissipation**; it turns through a phase φ per step, with
+cos φ = 1 − κ/2. Friction is the only sink. Manning friction is quadratic, so
+it vanishes to first order around slow, deep water: in a 3 m channel at
+0.5 m/s with n = 0.035, a perturbation decays with an e-folding time of
+6–12 minutes (along or across the flow), against a time step of a few
+seconds, and in still water not at all.
+
+On a square grid the stiffest mode is the 2Δx checkerboard, λ = 8/Δx², so
+κ = 8C² and the scheme's limit is C* = 1/√2 = 0.707 (`lam.jl` on the Carlisle
+Cartesian mesh: 0.707). At the LISFLOOD-FP value C = 0.7 the checkerboard sits
+at κ = 3.92, 98% of the limit, and flips sign almost every step (φ = 0.91π).
+A5 has no checkerboard: its cell graph is not bipartite (where three cells
+meet at a vertex they are mutually adjacent, so the graph has triangles, and
+no field can alternate in sign across every face). Its stiffest mode lies lower (C* = 0.876 on Carlisle
+res-18), so at C = 0.7 κ = 2.55 and φ = 0.59π.
+
+Meanwhile the discrete switches inject grid-scale perturbations every step:
+the Froude cap binds on a third of shallow edges, and 16–20% of shallow edges
+change their limiter state from one step to the next (§15.7). With nothing to
+remove it, that energy accumulates in the neutral grid-scale modes. On the
+square grid near C* the checkerboard is also close to resonance with
+anything that alternates step by step. Measured on Carlisle with no
+Q-centring and no per-step limiters (§15.7): the Cartesian end-of-run WSE
+residual is 0.87 m at Courant 0.7 and 0.21 m at 0.35 (A5: 52 mm at both),
+and its twin-run divergence is 56 cm. This is the known LISFLOOD-FP
+behaviour that de Almeida et al. (2012) addressed with their θ weighting of
+the discharge, which Q-centring implements here.
+
+**Why damping q is the wrong place, and η the right one.** Let a damping
+remove a fraction β of a mode per step. Applied to the discharge, as
+Q-centring does (q′ = (1 − β)q − …), the 2×2 amplification matrix has
+det = 1 − β and trace = 2 − β − κ. The Jury conditions then give
+κ < 4 − 2β: **the damping lowers the stability limit**. On the square grid at
+Courant 0.7 (κ = 3.92), any β > 0.04 on the checkerboard is unstable. That is
+the |μ| = 1.6 of Q-centring θ = 0.9 found in §15.6. Applied instead to the
+water surface after the continuity update (η′ = (1 − β)·η⁺), det = 1 − β and
+trace = 1 + (1 − β)(1 − κ), and the conditions become β < 1 and
+κ < (4 − 2β)/(1 − β). **The limit rises.** Damping the surface stabilises
+the very mode that damping the discharge destabilises, provided the damping
+per step stays below 1.
+
+**The filter** (`--eta-filter C_s`, `surfacewater/eta_filter.jl`; the
+"conservative free-surface high-pass filter" of the damping recommendations).
+After the volume update, each cell's high-frequency residual is computed:
+r_i = η_i − a_i, where a_i is the cell-centre value of a weighted planar fit
+to the cell and its wet neighbours. Water is then exchanged across every wet
+face:
+
+  F_f = C_s · √(g h_f) · w_f · (r_j − r_i),   h_f = min(η_i, η_j) − z_sill > 0.
+
+- *Conservative*: the exchange is pairwise; a donor cell's filter outflows
+  are scaled so that it cannot lose more than it holds.
+- *Well-balanced and consistent*: constants and planes have r = 0, so a lake
+  at rest and a uniform slope are untouched (`test/test_eta_filter.jl` E2,
+  E6), and smooth surfaces barely move (r ∝ ℓ²·curvature). It acts like a
+  fourth-order (∇⁴) operator, not a diffusion.
+- *Δt-consistent*: the rate C_s·√(gh)/ℓ is in physical units. A field is
+  damped by the same amount over the same time whatever Δt is (E4).
+- *Wet/dry*: neighbours enter the fit with weight ramp clamp(h_f/5 cm, 0, 1),
+  so a dry bank never enters it and nothing switches discontinuously; no
+  water crosses a face whose sill is above either side's surface.
+- *Strength*: on a square grid r = ±1.6δ for a checkerboard of amplitude δ,
+  and it decays by 1 − 12.8·C_s·C per step (E3). β < 1 then requires
+  C_s < 0.11 at Courant 0.7.
+
+**Linear stability** (`test/diag_step_spectrum.jl`, lake at rest, 3 m,
+Courant 0.7; positivity limiter, θ = 1):
+
+| C_s | Cartesian max\|μ\| (growing modes) | A5 max\|μ\| (growing modes) |
+|---|---|---|
+| 0 | 1.000000 (1052 neutral) | 1.001420 (304) |
+| 0.02 | 1.000000 (0) | 1.000000 (0) |
+| 0.05 | 0.999999 (0) | 1.000000 (0) |
+| 0.08 | 0.999998 (0) | 1.000000 (0) |
+| 0.12 | 1.240578 (8) | 1.000000 (0) |
+
+(Recommended scheme with Q-centring θ = 0.9 on the square grid: 1.601.) The
+filter removes the diamond operator's slow growth on A5 already at
+C_s = 0.02. On the square grid it is stable up to the predicted bound of
+0.11. On a sloping, friction-dominated base flow (A5, 1‰), every C_s is
+stable.
+
+**Uniform-flow conveyance** (frozen-coefficient test, planar res-16, slope
+10⁻³, n = 0.03, mean conductance relative to Manning / maximum mean
+deflection over 12 bearings):
+
+| | h = 1 m, Δt = 2 / 8 s | h = 3 m, Δt = 2 s | h = 3 m, Δt = 8 s |
+|---|---|---|---|
+| recommended (Q-centring θ 0.9, hybrid limiter) | 1.000 / 0.2° | 0.999 / 0.2° | **0.889 / 8.0°** |
+| recommended, θ = 1 (hybrid limiter) | 1.000 / 0° | 1.000 / 0° | **0.927 / 4.0°** |
+| positivity, θ = 1 (± η filter 0.05) | 1.000 / 0° | 1.000 / 0° | 1.000 / 0° |
+
+In deep water at a realistic time step, the volume limiter
+(q ≤ h·w/(N·Δt)) removes up to 11% of the Manning conveyance, depending on
+direction. That is the steady-flow face of the Courant sensitivity in
+§15.7. Without it the scheme is exact, and the filter does not change that:
+the surface is planar, so r = 0.
+
+**Carlisle** (res-18 A5 and 20 m Cartesian, inflows + 10 mm/h, 6 h;
+`--limiter positivity --q-centre-theta 1 --boundary-limiter positivity
+[--eta-filter C_s]`; runs in `test/wp1_runs/d4/`):
+
+| | storage at 6 h, C 0.7 / 0.5 / 0.35 (Mm³) | twin rms | rms C 0.7 vs 0.35 | extrema | r_rms |
+|---|---|---|---|---|---|
+| A5 recommended | 4.902 / 5.060 / 5.375 | 2.3 cm | 17.5 cm | 6.0% | 31 mm |
+| A5, no filter | 3.382 / 3.382 / 3.386 | 6.5 cm | 4.7 cm | 10.6% | 52 mm |
+| A5, C_s = 0.02 | 3.382 / 3.388 / 3.388 | 3.2 cm | 4.2 cm | 7.4% | 51 mm |
+| A5, C_s = 0.05 | 3.381 / 3.385 / 3.386 | 2.8 cm | 3.5 cm | 5.8% | 54 mm |
+| Cartesian recommended | 3.804 / 4.082 / 4.426 | 2.5 µm | — | 1.8% | 43 mm |
+| Cartesian, no filter | 2.751 / 2.550 / 2.480 | 56 cm | 46 cm | 21% | 872 mm |
+| Cartesian, C_s = 0.02 | 2.559 / 2.487 / 2.378 | 26 cm | — | 5.7% | 299 mm |
+| Cartesian, C_s = 0.05 | 2.447 / 2.356 / 2.354 | **2.3 µm** | 12.5 cm (0.5 vs 0.35: 4.4 cm) | 1.5% | 68 mm |
+
+(Extrema and r_rms at Courant 0.7, end of run, §15.2 metric.)
+
+- On A5 the filter keeps the Δt convergence of §15.7 (storage within 0.2%)
+  and brings local extrema down to the recommended scheme's level. Twin-run
+  and Courant divergence are both about 3 cm, against 17.5 cm Courant
+  divergence for the recommended scheme.
+- On the square grid, C_s = 0.05 turns a chaotic run into a reproducible one:
+  twin divergence is at round-off (2.3 µm, as for the recommended Cartesian
+  scheme) and extrema are lower than recommended. Storage converges between
+  Courant 0.5 and 0.35. At 0.7, just under the square grid's limit of 0.707,
+  it is 4% higher. C_s = 0.02 is too weak for the square grid.
+- Mass balance is exact in every run, and the filter costs 15–22% in step
+  throughput (a full pass over all cells; it could use the active-edge set).
+- Deep-channel speed (cells ≥ 3 m deep): 1.34 m/s for A5 and 1.39 m/s for
+  Cartesian (Δt-consistent, filtered), against 0.42 m/s for recommended A5.
+  The 6 h storage difference (3.4 vs 4.9–5.4 Mm³) is mainly this extra
+  resistance from the Δt-scaled terms.
+
+**Planar slope, res-18.**
+- *Point source* (closed boundaries, 20 h, Δt ≤ 2 s): N/S asymmetry +0.176 for
+  the baseline, with or without the filter (unchanged to 10⁻⁴), against
+  +0.193 for recommended.
+- *Rained* (20 mm/h, open boundaries, 6 h, Courant 0.7 / 0.35): interior mean
+  depth 0.0592 / 0.0596 m (baseline), 0.0603 / 0.0602 m (C_s = 0.05) and
+  0.0649 / 0.0628 m (recommended), against the Δt-converged 0.059 m of §15.4.
+  Asymmetry is below 0.01 for all. Local extrema 6.2% → 4.3% (C_s = 0.05) at
+  Courant 0.7, against 1.3% for recommended; interior velocity noise 0.12 vs
+  0.05 m/s.
+
+**What the filter does not do.** The remaining noise is in the velocity
+field. These are discharge patterns that circulate without moving the water
+surface (one per independent cycle of the face graph, E − N ≈ 1.5 per cell on A5
+with its 2.5 faces per cell, against 1 on a square grid), so a surface filter cannot see them. Q-centring damped them,
+at the cost of Δt-dependence and conveyance. On Carlisle part of the A5
+velocity "noise" is shear between fast channel cells and slow bank cells.
+Relative to the mean speed it rises only from 0.78 to 0.89 in cells over 3 m
+deep (Cartesian 0.19 → 0.30). On the shallow rained slope it is a genuine
+2.4× increase over recommended.
+
+**Status.** The filter is opt-in; defaults are unchanged. The Δt-consistent
+candidate for standard flow, `--limiter positivity --q-centre-theta 1
+--boundary-limiter positivity --eta-filter 0.05`, meets these criteria:
+- Δt convergence;
+- reproducibility at the recommended scheme's level (Cartesian at round-off);
+- exact uniform-flow conveyance;
+- Carlisle surface extrema at the recommended scheme's level.
+
+It does not yet meet the noise criterion for velocity, or for surface extrema
+on shallow sheet flow. The missing piece is a Δt-consistent damping of the
+circulating discharge modes. That is face-momentum diffusion acting on the
+edge discharges, with a coefficient in physical units and vanishing for
+uniform velocity: item 4 of the damping recommendations.

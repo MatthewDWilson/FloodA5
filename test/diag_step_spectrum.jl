@@ -23,6 +23,9 @@
 #   FLOODA5_NO_VIS=1 julia --project=. -t 4 test/diag_step_spectrum.jl \
 #       [--mesh a5|cart] [--base rest|slope] [--depth 3.0] [--courant 0.7]
 #
+# D4: the last configurations add the η filter (--eta-filter C_s) to the
+# positivity-limiter, θ = 1 baseline.
+#
 # Prints, per configuration: max |μ|, number of growing modes (|μ| > 1 + 1e-9),
 # and the least-damped |μ| among the rough gravity modes: modes with at least
 # 20% of their linear energy (½gAη² + ½(Lw/h)q²) in the water surface, whose
@@ -124,7 +127,13 @@ configs = Any[
     ("two-point (no GC), vector, θ = 1", merge(scheme_options(:recommended, :standard), (; gradient_correction = false, q_centre_theta = 1.0))),
     ("legacy scheme (QC θ0.9)",          scheme_options(:legacy, :standard)),
     ("legacy scheme, θ = 1",             merge(scheme_options(:legacy, :standard), (; q_centre_theta = 1.0))),
+    # D4 (2026-10): the Δt-consistent baseline (positivity limiter, θ = 1) and the η filter
+    ("positivity, θ = 1",                merge(scheme_options(:recommended, :standard), (; limiter = :positivity, q_centre_theta = 1.0))),
 ]
+for cs in (0.02, 0.05, 0.08, 0.12)
+    push!(configs, ("positivity, θ = 1, η filter $(cs)",
+                    merge(scheme_options(:recommended, :standard), (; limiter = :positivity, q_centre_theta = 1.0, eta_filter = cs))))
+end
 
 mesh = _quiet(_mesh)
 println("Full-step spectrum: mesh=$(MESHKIND) ($(length(mesh.cells)) cells), base=$(BASE), depth=$(H0) m, Courant=$(COURANT)",

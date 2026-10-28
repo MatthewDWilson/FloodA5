@@ -33,6 +33,39 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-10-28
+
+Default results unchanged (PATCH).
+
+### Added
+- `--eta-filter C_s` (experimental, standard flow; D4 of the deep-channel
+  damping work). A conservative free-surface high-pass filter: after the
+  volume update, water is exchanged across wet faces in proportion to the
+  jump in each cell's residual from a local planar fit of the WSE, at a rate
+  C_s·√(g h)/ℓ that does not depend on Δt (`surfacewater/eta_filter.jl`). It
+  leaves a lake at rest and planar surfaces untouched, conserves volume,
+  keeps volumes non-negative, and has no wet/dry switch. Default 0 (off).
+  `test/test_eta_filter.jl` (E1–E6); a determinism fingerprint
+  (`d4_eta_filter`); filter configurations in `test/diag_step_spectrum.jl`.
+
+### Findings (see `HYDRAULICS.md` §15.8)
+- Why the square grid needs damping: the forward–backward step is neutral
+  for every resolved mode. At Courant 0.7 the Cartesian checkerboard sits at
+  98% of its stability limit (C* = 1/√2). A5 has no checkerboard mode
+  (C* = 0.876). Damping the discharge, as Q-centring does, lowers the limit
+  (κ < 4 − 2β); damping the water surface raises it (κ < (4 − 2β)/(1 − β)).
+- In steady uniform flow 3 m deep at Δt = 8 s, the recommended scheme loses
+  11% of the Manning conveyance (8° deflection) to the volume limiter. The
+  positivity limiter is exact, with or without the filter.
+- With `--limiter positivity --q-centre-theta 1 --boundary-limiter positivity
+  --eta-filter 0.05` on Carlisle:
+  - A5 stays Δt-converged (3.381–3.386 Mm³) and reaches the recommended
+    scheme's surface-extrema level.
+  - Cartesian goes from chaotic (twin divergence 56 cm) to reproducible at
+    round-off (2.3 µm).
+  - The remaining gap is velocity noise in shallow sheet flow, which a
+    surface filter cannot reach.
+
 ## [0.2.2] — 2026-10-25
 
 Default results unchanged (PATCH).

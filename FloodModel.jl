@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.2.2"
+const FLOODA5_VERSION = "0.2.3"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -350,11 +350,19 @@ mutable struct StepWorkspace
     prev_all  :: Bool
     vact      :: Vector{Int}       # vertices of the active edges (diamond)
     vstamp    :: Vector{UInt32}
+    # η filter (D4, surfacewater/eta_filter.jl), built on first use
+    f_dx      :: Matrix{Float64}   # neighbour offsets per adjacency slot (m)
+    f_dy      :: Matrix{Float64}
+    f_eta     :: Vector{Float64}   # post-update WSE (n)
+    f_r       :: Vector{Float64}   # high-frequency residual (n)
+    f_out     :: Vector{Float64}   # per-cell positivity scale (n)
+    f_flux    :: Vector{Float64}   # face exchange this step, m³, positive into cell_i (ne)
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Float64[], Bool[], Int[], Int[],
                                 Int[], 0, Int[], UInt32[], UInt32(0), Int[], NaN, false, true,
-                                Int[], UInt32[])
+                                Int[], UInt32[],
+                                zeros(0, 0), zeros(0, 0), Float64[], Float64[], Float64[], Float64[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -606,6 +614,10 @@ mutable struct FlowState
     q_centre_mode  :: Symbol
     # ── Reused per-step work arrays (WP4, 2026-10) — see StepWorkspace ────
     ws             :: StepWorkspace
+    # ── Free-surface filter (D4, 2026-10) ─────────────────────────────────
+    # C_s of the conservative η high-pass filter (surfacewater/eta_filter.jl);
+    # 0.0 = off (the default). Set via --eta-filter. Standard flow only.
+    eta_filter_cs  :: Float64
 end
 
 # ---------------------------------------------------------------------------
@@ -729,6 +741,30 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       q_centre_mode, StepWorkspace())
+end
+
+# D4 (2026-10): `eta_filter_cs` was appended as field 39. The 38-argument form
+# defaults it to 0.0 (no filter).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode, ws::StepWorkspace)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, ws, 0.0)
 end
 
 """
@@ -2226,7 +2262,8 @@ function initialise_flow_model(mesh::A5Mesh,
                                 face_flux_method          :: Symbol  = :legacy,
                                 friction_model            :: Symbol  = :component,
                                 limiter                   :: Symbol  = :legacy,
-                                cfl_mode                  :: Symbol  = :legacy)::FlowState
+                                cfl_mode                  :: Symbol  = :legacy,
+                                eta_filter                :: Float64 = 0.0)::FlowState
     friction_model in (:component, :vector) ||
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     momentum_model in (:edge, :cell, :blend) ||
@@ -2237,6 +2274,10 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
     q_centre_mode in (:legacy, :oriented, :consistent) ||
         throw(ArgumentError("q_centre_mode must be :legacy, :oriented or :consistent (got :$q_centre_mode)"))
+    (isfinite(eta_filter) && eta_filter >= 0.0) ||
+        throw(ArgumentError("eta_filter must be ≥ 0 (got $eta_filter)"))
+    eta_filter > 0.0 && method isa SGSFlow &&
+        throw(ArgumentError("the η filter (--eta-filter) is implemented for standard flow only"))
     n       = length(mesh)
     # Normalise cell IDs to 16-char zero-padded hex throughout — ensures
     # consistency between parquet-stored IDs (via pya5 u64_to_hex, may omit
@@ -2552,6 +2593,7 @@ function initialise_flow_model(mesh::A5Mesh,
         cell_length,
         q_centre_mode,
         StepWorkspace(),
+        eta_filter,
     )
 end
 
@@ -3058,6 +3100,9 @@ function step_standard!(state::FlowState, dt::Float64; velocity::Bool = true)
         _apply_ghost_fluxes_standard!(state, dt)
     end
 
+    # ── Phase D2: conservative η high-pass filter (D4, --eta-filter) ──────
+    state.eta_filter_cs > 0.0 && _eta_filter!(state, ws, dt)
+
     # ── Phase E: velocity ─────────────────────────────────────────────────
     # (WP4: `velocity = false` skips it; run_simulation! then computes it only
     # for the steps that are written or pushed to the visualiser — the result
@@ -3244,6 +3289,7 @@ end
 include(joinpath(@__DIR__, "surfacewater", "reference_steps.jl"))
 include(joinpath(@__DIR__, "surfacewater", "limiter_stats.jl"))
 include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
+include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3688,6 +3734,7 @@ function run_flood_model(;
     courant           :: Float64 = 0.7,
     limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
     boundary_limiter  :: Symbol  = :legacy,   # D1b experiment: :legacy | :positivity
+    eta_filter        :: Float64 = 0.0,       # D4: η filter coefficient C_s (0 = off)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -3953,7 +4000,8 @@ function run_flood_model(;
                                         face_flux_method          = face_flux_method,
                                         friction_model            = friction_model,
                                         limiter                   = limiter,
-                                        cfl_mode                  = cfl_mode)
+                                        cfl_mode                  = cfl_mode,
+                                        eta_filter                = eta_filter)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
@@ -3964,7 +4012,9 @@ function run_flood_model(;
           "momentum_model = $(momentum_model), " *
           "face_flux_method = $(face_flux_method), " *
           "friction_model = $(friction_model), " *
-          "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme))"
+          "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme)" *
+          (eta_filter > 0.0 ? "; eta_filter = $(eta_filter)" : "") *
+          (boundary_limiter === :legacy ? "" : "; boundary_limiter = $(boundary_limiter)") * ")"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -4438,6 +4488,11 @@ Flow model options:
                      the volume limiter and the per-step donor cap, both of
                      which scale with 1/Δt. positivity: only "no more than the
                      boundary cell holds".
+  --eta-filter C_S   (experiment, D4; standard flow) Conservative free-surface
+                     high-pass filter: water is exchanged across wet faces in
+                     proportion to the jump in the WSE residual from a local
+                     planar fit, at a rate C_s·√(g h)/ℓ that does not depend on
+                     Δt. 0 (default) = off. Try 0.02–0.1.
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5044,6 +5099,8 @@ function main(args=String[])
     limiter_stats,  args = _pop_bool(args, "--limiter-stats")
     boundary_lim_val, args = _pop_flag(args, "--boundary-limiter")
     boundary_limiter = boundary_lim_val === nothing ? :legacy : Symbol(boundary_lim_val)
+    eta_filter_val, args = _pop_flag(args, "--eta-filter")
+    eta_filter = eta_filter_val === nothing ? 0.0 : parse(Float64, eta_filter_val)
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5201,6 +5258,7 @@ function main(args=String[])
         cell_order      = cell_order,
         limiter_stats   = limiter_stats,
         boundary_limiter = boundary_limiter,
+        eta_filter      = eta_filter,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,

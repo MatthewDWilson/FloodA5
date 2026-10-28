@@ -65,6 +65,10 @@ configs = [
     ("wp2_blend_positivity", (; friction_model = :vector, momentum_model = :blend,
                                 limiter = :positivity, gradient_correction = true,
                                 face_flux_method = :diamond)),
+    # D4: η filter (threaded per-cell residual fit, per-edge exchange, CSR gathers)
+    ("d4_eta_filter",        (; friction_model = :vector, limiter = :positivity,
+                                gradient_correction = true, face_flux_method = :diamond_wetdry,
+                                q_centre_theta = 1.0, eta_filter = 0.05)),
 ]
 
 with_logger(ConsoleLogger(stderr, Logging.Warn)) do
