@@ -18,6 +18,7 @@ TESTS=(
   test/test_wp4_equivalence.jl
   test/test_wp4_stage2.jl
   test/test_limiter_stats.jl
+  test/test_eta_filter.jl
   test/test_wp1_vector_friction.jl
   test/test_wp2_momentum_limiters.jl
   test/test_edge_geometry.jl
