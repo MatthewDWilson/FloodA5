@@ -232,7 +232,9 @@ All arguments are named flags; position does not matter.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--flow-model sgs\|standard` | `sgs` | Flow routing method. `sgs`: sub-grid hypsometric (R-A kernel). `standard`: the same local-inertial scheme on the mean cell elevation (no sub-grid tables). |
+| `--flow-model sgs\|standard\|swe` | `sgs` | Flow routing method. `sgs`: sub-grid hypsometric (R-A kernel). `standard`: the same local-inertial scheme on the mean cell elevation (no sub-grid tables). `swe`: full shallow-water reference solver on the mean cell elevation (HLLC; about 10× the cost; for benchmarking, `HYDRAULICS.md` §15.10). The local-inertial scheme options do not apply to it. |
+| `--swe-order 1\|2` | 2 | `swe` only: first order (Euler) or second order (MUSCL, Barth–Jespersen limiter, SSP-RK2). |
+| `--swe-viscosity C_E` | 0 | `swe` only: eddy viscosity ν_t = C_E·h·u* (u* the friction velocity; typical river values C_E ≈ 0.1–0.6). |
 | `--sgs-bins N` | 100 | Elevation bins for SGS hypsometric curves. |
 | `--sgs-samples N` | 512 | Halton points per cell for SGS cross-section pre-processing. |
 | `--manning-n N` | 0.03 | Global Manning's roughness coefficient (s/m^(1/3)). |

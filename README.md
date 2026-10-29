@@ -194,6 +194,12 @@ physically correct friction scaling in confined channels. Requires a DEM.
 elevation (no sub-grid tables). Faster, and useful for exploration or for runs
 without a DEM.
 
+**`--flow-model swe`** — a full shallow-water reference solver (HLLC, hydrostatic
+reconstruction, MUSCL + SSP-RK2 with `--swe-order 2`, the default) on the same meshes,
+beds, sources and boundaries. About ten times the cost of `standard`; it is there to
+benchmark the local-inertial schemes against (`docs/HYDRAULICS.md` §15.10), not for
+production runs.
+
 Both solvers use the Bates et al. (2010) local-inertial formulation with a
 Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7)
 and a momentum state that matches the flux actually transferred.

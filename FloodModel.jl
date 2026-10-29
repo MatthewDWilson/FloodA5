@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.2.4"
+const FLOODA5_VERSION = "0.2.5"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -210,6 +210,12 @@ struct SGSFlow <: FlowMethod
 end
 SGSFlow(; manning_n::Float64 = 0.03) = SGSFlow(manning_n)
 
+# R1 (2026-10): full shallow-water reference solver (surfacewater/swe_reference.jl)
+struct SWEFlow <: FlowMethod
+    manning_n :: Float64
+end
+SWEFlow(; manning_n::Float64 = 0.03) = SWEFlow(manning_n)
+
 """
     EdgeList
 
@@ -310,6 +316,8 @@ end
 # an `Any` field read in the threaded edge loop costs a dynamic dispatch per
 # edge per step).
 include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
+# SWEWork (R1 shallow-water reference solver), for FlowState.swe
+include(joinpath(@__DIR__, "surfacewater", "swe_types.jl"))
 
 """
     StepWorkspace
@@ -413,7 +421,15 @@ mutable struct GhostEdge
                                  # the outward normal; used for gradient extrapolation.
                                  # 0 if no interior neighbour found (isolated boundary).
     interior_nb_L    :: Float64  # haversine distance ci → interior_nb (m)
+    # R1 (2026-10): geometric face data for the shallow-water reference solver
+    nx               :: Float64  # outward unit normal of the polygon side (local east/north)
+    ny               :: Float64
+    rx               :: Float64  # side midpoint − cell centre (m, local frame)
+    ry               :: Float64
 end
+GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L) =
+    GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
+              0.0, 0.0, 0.0, 0.0)
 
 # InjectionPoint and RainPoint are defined here (before FlowState and before the
 # boundaryinputs includes) because sources.jl dispatches apply_source! on these
@@ -638,6 +654,10 @@ mutable struct FlowState
     # --momentum-damping / --momentum-damping-scale. Standard flow only.
     mom_damping_cs    :: Float64
     mom_damping_scale :: Symbol
+    # ── Shallow-water reference solver (R1, 2026-10) ────────────────────────
+    # Geometry and work arrays of `--flow-model swe` (SWEFlow); `nothing` for
+    # the local-inertial solvers. See surfacewater/swe_reference.jl.
+    swe               :: Union{Nothing,SWEWork}
 end
 
 # ---------------------------------------------------------------------------
@@ -809,6 +829,32 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       q_centre_mode, ws, eta_filter_cs, 0.0, :wave)
+end
+
+# R1 (2026-10): `swe` was appended as field 42. The 41-argument form defaults
+# it to `nothing` (a local-inertial state).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode, ws::StepWorkspace, eta_filter_cs::Float64,
+                    mom_damping_cs::Float64, mom_damping_scale::Symbol)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, ws, eta_filter_cs, mom_damping_cs, mom_damping_scale,
+                      nothing)
 end
 
 """
@@ -2309,7 +2355,10 @@ function initialise_flow_model(mesh::A5Mesh,
                                 cfl_mode                  :: Symbol  = :legacy,
                                 eta_filter                :: Float64 = 0.0,
                                 momentum_damping          :: Float64 = 0.0,
-                                momentum_damping_scale    :: Symbol  = :wave)::FlowState
+                                momentum_damping_scale    :: Symbol  = :wave,
+                                swe_order                 :: Int     = 2,
+                                swe_viscosity             :: Float64 = 0.0,
+                                swe_open_inflow           :: Bool    = false)::FlowState
     friction_model in (:component, :vector) ||
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     momentum_model in (:edge, :cell, :blend) ||
@@ -2615,7 +2664,7 @@ function initialise_flow_model(mesh::A5Mesh,
         nothing
     end
 
-    return FlowState(
+    state = FlowState(
         ids,
         zeros(Float64, n),
         volumes,
@@ -2657,7 +2706,13 @@ function initialise_flow_model(mesh::A5Mesh,
         eta_filter,
         momentum_damping,
         momentum_damping_scale,
+        nothing,
     )
+    # R1: the shallow-water reference solver's geometry (needs the polygons)
+    method isa SWEFlow &&
+        (state.swe = _build_swe_work(mesh, state; order = swe_order, visc_ce = swe_viscosity,
+                                     open_inflow = swe_open_inflow))
+    return state
 end
 
 # Backwards-compatible no-method overload
@@ -3360,6 +3415,7 @@ include(joinpath(@__DIR__, "surfacewater", "limiter_stats.jl"))
 include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
+include(joinpath(@__DIR__, "surfacewater", "swe_reference.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3463,6 +3519,7 @@ function run_simulation!(state            :: FlowState,
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
+    use_swe = method isa SWEFlow
 
     # Merge legacy injection_points / rain_points into all_sources.
     # Callers that still pass the old keyword args continue to work unchanged.
@@ -3498,7 +3555,7 @@ function run_simulation!(state            :: FlowState,
 
         # Adaptive dt
         dt = min(_cfl_dt(state, method; courant = courant), dt_max, sim_duration - t)
-        dt = max(dt, 0.1)
+        use_swe || (dt = max(dt, 0.1))      # R1: the reference solver keeps its CFL step
 
         # ── Apply all water sources (before routing) ────────────────────────
         # Uniform rainfall
@@ -3547,6 +3604,8 @@ function run_simulation!(state            :: FlowState,
         # Physics step (includes Phase D ghost-edge outflow)
         if use_sgs
             step_sgs!(state, dt; velocity = false)
+        elseif use_swe
+            step_swe!(state, dt; courant = courant)      # sub-steps if the sources need it
         else
             step_standard!(state, dt; velocity = false)
         end
@@ -3557,7 +3616,7 @@ function run_simulation!(state            :: FlowState,
 
         # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
         ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
-            _compute_velocity!(state)
+            (use_swe ? _swe_velocity!(state) : _compute_velocity!(state))
 
         # Visualiser push
         if vis !== nothing && step % VIS_INTERVAL == 0
@@ -3620,11 +3679,13 @@ function run_simulation!(state            :: FlowState,
         end
     end
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
+    use_swe && @info "SWE: volume added by clamping negative cells: " *
+                     "$(round(sum(state.swe.clamp_vol), sigdigits = 4)) m³"
     LIMITER_STATS[] && _lstats_report()
 
     if output.enabled && t > output.last_write_t
         t_hdf5 = time()
-        _compute_velocity!(state)
+        use_swe ? _swe_velocity!(state) : _compute_velocity!(state)
         _write_frame!(output, state, t)
         timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
     end
@@ -3807,6 +3868,8 @@ function run_flood_model(;
     eta_filter        :: Float64 = 0.0,       # D4: η filter coefficient C_s (0 = off)
     momentum_damping  :: Float64 = 0.0,       # D6′: momentum damping C_m (0 = off)
     momentum_damping_scale :: Symbol = :wave, # D6′: :wave | :flow
+    swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
+    swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4058,7 +4121,9 @@ function run_flood_model(;
     end
 
     # 7. Initialise flow model
-    method_obj = flow_method === :sgs ? SGSFlow() : StandardFlow()
+    flow_method in (:sgs, :standard, :swe) ||
+        throw(ArgumentError("flow_method must be :sgs, :standard or :swe (got :$flow_method)"))
+    method_obj = flow_method === :sgs ? SGSFlow() : flow_method === :swe ? SWEFlow() : StandardFlow()
     @info "Initialising flow model ($(flow_method)) on $(length(mesh)) cells..."
     t0 = time()
     flow_state = initialise_flow_model(mesh, method_obj;
@@ -4075,7 +4140,9 @@ function run_flood_model(;
                                         cfl_mode                  = cfl_mode,
                                         eta_filter                = eta_filter,
                                         momentum_damping          = momentum_damping,
-                                        momentum_damping_scale    = momentum_damping_scale)
+                                        momentum_damping_scale    = momentum_damping_scale,
+                                        swe_order                 = swe_order,
+                                        swe_viscosity             = swe_viscosity)
     tl.flow_init = time() - t0
     @info "Flow model ready in $(_fmt_elapsed(tl.flow_init))  " *
           "(adjacency: $(length(flow_state.adjacency)) cells, " *
@@ -4398,6 +4465,10 @@ Flow model options:
                                  Captures partial wetting, ditches, channels.
                                  Requires DEM for pre-processing (auto-run).
                        standard  Local inertial on mean cell elevation (fast).
+                       swe       Full shallow-water equations (R1 reference
+                                 solver: HLLC, hydrostatic reconstruction,
+                                 mean cell elevation). A benchmark for the
+                                 local-inertial solvers; slower.
   --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
   --sgs-samples N    Halton points per cell for SGS pre-processing (default: 512).
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
@@ -4577,6 +4648,11 @@ Flow model options:
   --momentum-damping-scale wave|flow
                      V = √(g h) (wave, default: a numerical floor) or the local
                      flow speed |u| (flow: eddy-viscosity-like).
+  --swe-order 1|2    (--flow-model swe) 2 (default): MUSCL reconstruction with
+                     SSP-RK2; 1: first order.
+  --swe-viscosity C_E
+                     (--flow-model swe) eddy viscosity ν_t = C_E·h·u*, u* from
+                     Manning; 0 (default) = off. Typical rivers: 0.1–0.6.
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5062,7 +5138,7 @@ function main(args=String[])
         print_help(1)
     end
 
-    flow_method ∉ (:sgs, :standard) &&
+    flow_method ∉ (:sgs, :standard, :swe) &&
         (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
 
     # --friction-model component|vector  (WP1, 2026-10; default: component —
@@ -5189,6 +5265,10 @@ function main(args=String[])
     momentum_damping = mom_damp_val === nothing ? 0.0 : parse(Float64, mom_damp_val)
     mom_scale_val, args = _pop_flag(args, "--momentum-damping-scale")
     momentum_damping_scale = mom_scale_val === nothing ? :wave : Symbol(mom_scale_val)
+    swe_order_val, args = _pop_flag(args, "--swe-order")
+    swe_order = swe_order_val === nothing ? 2 : parse(Int, swe_order_val)
+    swe_visc_val, args = _pop_flag(args, "--swe-viscosity")
+    swe_viscosity = swe_visc_val === nothing ? 0.0 : parse(Float64, swe_visc_val)
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5349,6 +5429,8 @@ function main(args=String[])
         eta_filter      = eta_filter,
         momentum_damping = momentum_damping,
         momentum_damping_scale = momentum_damping_scale,
+        swe_order       = swe_order,
+        swe_viscosity   = swe_viscosity,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,

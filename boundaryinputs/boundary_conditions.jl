@@ -371,8 +371,16 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             # If all neighbours are on the outward side (rare corner cell), fall back to 0.
             best_dot > 0.5 && (best_nb_idx = 0)   # no clearly inward neighbour
 
+            # R1: geometric outward normal of the side and its midpoint offset
+            # (local metric frame at the cell centre)
+            Rm  = A5Grid._EARTH_R
+            tx  = deg2rad(v2[1] - v1[1]) * Rm * cos_lat; ty = deg2rad(v2[2] - v1[2]) * Rm
+            tl  = max(hypot(tx, ty), 1e-12)
+            gnx, gny = ty / tl, -tx / tl
+            rx  = deg2rad(mid_lon - cell_lon) * Rm * cos_lat; ry = deg2rad(mid_lat - cell_lat) * Rm
+            gnx * rx + gny * ry < 0.0 && (gnx = -gnx; gny = -gny)
             push!(ghost_edges,   GhostEdge(i, width, L, sill, 0.0, use_sgs,
-                                            best_nb_idx, best_nb_L))
+                                            best_nb_idx, best_nb_L, gnx, gny, rx, ry))
             push!(ghost_cell_bc, default_bc)
         end
     end

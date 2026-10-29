@@ -75,9 +75,30 @@ configs = [
                                 q_centre_theta = 1.0, eta_filter = 0.05, momentum_damping = 0.2)),
 ]
 
+# R1: the shallow-water reference solver (threaded face/cell passes, RK2)
+function _det_swe(; nsteps::Int = 300, kwargs...)
+    R = A5Grid._EARTH_R; dx = 20.0; dd = rad2deg(dx / R); nrc = 41
+    mesh = generate_cartesian_mesh_bounds(0.0, 0.0, (nrc - 0.5) * dd, (nrc - 0.5) * dd, dx; lat_ref = 0.0)
+    n = length(mesh.cells)
+    mesh.static_vars["elevation"] =
+        [0.001 * (mesh.cells[i].center_lon / dd) * dx + 0.002 * sin(1.3 * i) for i in 1:n]
+    state = initialise_flow_model(mesh, SWEFlow(); kwargs...)
+    fill!(state.ghost_cell_bc, Closed)
+    src = div(n, 2) + 1
+    for _ in 1:nsteps
+        state.volume[src] += 2.0 * 0.5
+        step_swe!(state, 0.5)
+    end
+    return hash((state.volume, state.qvec_u, state.qvec_v))
+end
+
 with_logger(ConsoleLogger(stderr, Logging.Warn)) do
     for (label, kw) in configs
         h = _det_case(; kw...)
+        println("FINGERPRINT $label $(string(h, base = 16))")
+    end
+    for (label, kw) in (("r1_swe_order2", (;)), ("r1_swe_order1_visc", (; swe_order = 1, swe_viscosity = 1.0)))
+        h = _det_swe(; kw...)
         println("FINGERPRINT $label $(string(h, base = 16))")
     end
 end
