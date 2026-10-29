@@ -20,6 +20,7 @@ TESTS=(
   test/test_limiter_stats.jl
   test/test_eta_filter.jl
   test/test_momentum_damping.jl
+  test/test_swe_reference.jl
   test/test_wp1_vector_friction.jl
   test/test_wp2_momentum_limiters.jl
   test/test_edge_geometry.jl

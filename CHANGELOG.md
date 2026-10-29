@@ -33,6 +33,44 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-10-29
+
+Default results unchanged (PATCH): the default-scheme Carlisle run is
+bit-identical to 0.2.4 on A5 and Cartesian (`--cell-order file`, 4 h, every
+frame).
+
+### Added
+- `--flow-model swe`: a full shallow-water reference solver (R1 of the
+  deep-channel damping work) on any polygon mesh. HLLC fluxes with
+  hydrostatic reconstruction (well-balanced, positivity-preserving); MUSCL
+  with WLSQ gradients and the Barth–Jespersen limiter plus SSP-RK2
+  (`--swe-order 2`, default; `1` for first order); point-implicit Manning
+  friction; optional eddy viscosity `--swe-viscosity C_E`. It uses the same
+  volume, sources, rainfall and boundary types as the other solvers; open
+  boundaries are outflow-only, as in the standard solver. Struct-of-arrays
+  per-face/per-cell kernels without atomics, as a GPU backend needs
+  (`surfacewater/swe_reference.jl`, `swe_types.jl`). FlowState field 42
+  `swe`, with a 41-argument constructor shim; GhostEdge gains the outward
+  face normal and midpoint offset (8-argument constructor kept).
+- `test/test_swe_reference.jl` (S1–S9): lake at rest, mass and positivity,
+  Stoker and Ritter dam breaks, open-boundary mass balance, uniform Manning
+  flow, eddy viscosity, HDF5 velocity. Determinism fingerprints
+  `r1_swe_order2`, `r1_swe_order1_visc`.
+- `test/bench_swe_dambreak.jl` (circular dam break, A5 vs Cartesian vs a
+  fine grid) and `test/diag_vs_reference.jl` (storage, rms depth, extent CSI
+  and deep-water speed of runs against a reference run on the same mesh).
+
+### Findings (see `HYDRAULICS.md` §15.10)
+- Carlisle, against the reference on the same mesh: the recommended scheme
+  stores 42–44% more and moves deep water at less than half the speed. The
+  Δt-consistent scheme with the η filter and weak momentum damping (0.05,
+  wave) matches storage within 1–2% on A5 and Cartesian.
+- The reference converges in Courant number and is insensitive to round-off
+  and to a physical eddy viscosity, but not in resolution: 40/20/10 m
+  Cartesian grids store 3.56/2.63/2.18 Mm³ at 6 h. A5 res-18 behaves like a
+  28–37 m Cartesian grid on Carlisle's narrow channels; on a smooth dam break
+  both meshes are equally accurate.
+
 ## [0.2.4] — 2026-10-28
 
 Default results unchanged (PATCH).
