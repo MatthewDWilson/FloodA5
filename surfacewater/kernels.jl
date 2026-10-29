@@ -28,6 +28,20 @@ function StdOpts(state::FlowState)
 end
 
 """
+    _edge_view(E) / _dtab_view(table)
+
+The edge-list and diamond-table arrays the face kernels read, as NamedTuples
+(WP5): plain arrays that `to_device` can move to a GPU. `nothing` without a
+diamond table.
+"""
+_edge_view(E::EdgeList) = (width = E.width, nf_x = E.nf_x, nf_y = E.nf_y,
+                           collinear_i = E.collinear_i, collinear_j = E.collinear_j,
+                           cell_i = E.cell_i, cell_j = E.cell_j)
+_dtab_view(::Nothing) = nothing
+_dtab_view(T) = (valid = T.valid, va_idx = T.va_idx, vb_idx = T.vb_idx,
+                 c_i = T.c_i, c_va = T.c_va, c_j = T.c_j, c_vb = T.c_vb)
+
+"""
     _std_arrays(state, ws, flux_prev) → NamedTuple
 
 The arrays and scalars `_face_flux_std!` reads or writes, gathered once per step
@@ -37,15 +51,15 @@ function _std_arrays(state::FlowState, ws::StepWorkspace, flux_prev)
     E = state.edges
     return (ci = E.cell_i, cj = E.cell_j, width = E.width, L = E.L, cos_theta = E.cos_theta,
             sill = E.sill, nf_x = E.nf_x, nf_y = E.nf_y, skew_x = E.skew_x, skew_y = E.skew_y,
-            col_i = E.collinear_i, col_j = E.collinear_j, edges = E,
+            col_i = E.collinear_i, col_j = E.collinear_j, edges = _edge_view(E),
             elevation = state.elevation, volume = state.volume, cell_area = state.cell_area,
             water_depth = state.water_depth, manning_n = state.manning_n,
             qvec_u = state.qvec_u, qvec_v = state.qvec_v, grad_wse = state.grad_wse,
             flux = E.flux, flux_prev = flux_prev, edge_vol = ws.edge_vol,
-            veta = ws.veta, vwet = ws.vwet, dtab = state.diamond_table,
+            veta = ws.veta, vwet = ws.vwet, dtab = _dtab_view(state.diamond_table),
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
             max_nb = Float64(state.max_neighbours), donor_div = _donor_edge_divisor(state),
-            lflag = _lf_flag(), lhf = _lf_hf())               # D1b (--limiter-stats)
+            stats = LIMITER_STATS[], lflag = _lf_flag(), lhf = _lf_hf())   # D1b (--limiter-stats)
 end
 
 """
@@ -65,7 +79,7 @@ Transcribed from the stage-1 loop body; bit-identical to it.
             isnan(M.elevation[ci])   || isnan(M.elevation[cj]))
             M.edge_vol[e] = 0.0
             M.flux[e] = 0.0
-            LIMITER_STATS[] && (M.lflag[e] = 0x00)
+            M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
         wse_ci = M.elevation[ci] + M.volume[ci] / max(M.cell_area[ci], 1.0)
@@ -74,7 +88,7 @@ Transcribed from the stage-1 loop body; bit-identical to it.
         if max(wse_ci, wse_cj) - M.sill[e] <= HFLOW_THRESHOLD
             M.flux[e] = 0.0
             M.edge_vol[e] = 0.0
-            LIMITER_STATS[] && (M.lflag[e] = 0x00)
+            M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
         depth_donor = !FIXB ? 0.0 :
@@ -127,7 +141,7 @@ Transcribed from the stage-1 loop body; bit-identical to it.
                             max(ev, -M.volume[ci] / M.donor_div)
         end
         M.edge_vol[e] = ev
-        if LIMITER_STATS[]                     # D1b: which limiters bound (no effect on results)
+        if M.stats                             # D1b: which limiters bound (no effect on results)
             hs = max(max(wse_ci, wse_cj) - M.sill[e], 1e-6)
             fl = LF_WET
             qmax = hs * sqrt(_G * hs) * FROUDE_LIMIT
@@ -180,14 +194,14 @@ function _sgs_arrays(state::FlowState, ws::StepWorkspace)
     E = state.edges
     return (ci = E.cell_i, cj = E.cell_j, width = E.width, L = E.L, cos_theta = E.cos_theta,
             sill = E.sill, nf_x = E.nf_x, nf_y = E.nf_y, skew_x = E.skew_x, skew_y = E.skew_y,
-            col_i = E.collinear_i, col_j = E.collinear_j, edges = E,
+            col_i = E.collinear_i, col_j = E.collinear_j, edges = _edge_view(E),
             elevation = state.elevation, volume = state.volume, manning_n = state.manning_n,
             qvec_u = state.qvec_u, qvec_v = state.qvec_v, grad_wse = state.grad_wse,
             tables = state.sgs_tables, slot_i = ws.slot_i, slot_j = ws.slot_j, wse = ws.wse,
             flux_Q = E.flux_Q, flux_Q_prev = ws.flux_prev, edge_vol = ws.edge_vol,
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
             donor_div = _donor_edge_divisor(state),
-            lflag = _lf_flag(), lhf = _lf_hf())               # D1b (--limiter-stats)
+            stats = LIMITER_STATS[], lflag = _lf_flag(), lhf = _lf_hf())   # D1b (--limiter-stats)
 end
 
 """
@@ -203,7 +217,7 @@ from the stage-1 loop body; bit-identical to it.
         ci = M.ci[e]; cj = M.cj[e]
         if isnan(M.elevation[ci]) || isnan(M.elevation[cj])
             M.edge_vol[e] = 0.0                # flux_Q left as is (as before)
-            LIMITER_STATS[] && (M.lflag[e] = 0x00)
+            M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
         ti = M.tables[ci]; tj = M.tables[cj]
@@ -211,7 +225,7 @@ from the stage-1 loop body; bit-identical to it.
         isnan(z_sill) && (z_sill = min(ti.z_min, tj.z_min))
         if isnan(M.width[e]) || isnan(M.L[e]) || isnan(M.cos_theta[e])
             M.edge_vol[e] = 0.0
-            LIMITER_STATS[] && (M.lflag[e] = 0x00)
+            M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
         # Bug 48/49: a dry cell's effective WSE clears the sill and its own floor
@@ -220,7 +234,7 @@ from the stage-1 loop body; bit-identical to it.
         if M.volume[ci] <= 0.0 && M.volume[cj] <= 0.0
             M.edge_vol[e] = 0.0
             M.flux_Q[e] = 0.0
-            LIMITER_STATS[] && (M.lflag[e] = 0x00)
+            M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
         wse_flow = max(wse_ci_eff, wse_cj_eff)
@@ -263,7 +277,7 @@ from the stage-1 loop body; bit-identical to it.
             ev = ev_capped
         end
         M.edge_vol[e] = ev
-        if LIMITER_STATS[]                     # D1b (no effect on results)
+        if M.stats                             # D1b (no effect on results)
             hs = wse_flow - z_sill
             M.lflag[e] = (hs > HFLOW_THRESHOLD && A_edge > 1e-6 ? LF_WET : 0x00) |
                          (ev != ev_raw ? LF_DONOR : 0x00)

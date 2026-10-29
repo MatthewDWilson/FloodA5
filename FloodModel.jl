@@ -318,6 +318,8 @@ end
 include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 # SWEWork (R1 shallow-water reference solver), for FlowState.swe
 include(joinpath(@__DIR__, "surfacewater", "swe_types.jl"))
+# WP5: compute backends (CPU threads, KernelAbstractions devices)
+include(joinpath(@__DIR__, "surfacewater", "backend.jl"))
 
 """
     StepWorkspace
@@ -2307,7 +2309,7 @@ discharge with their own width and the result scaled by edge e's width.
 `qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
 snapshot (WP0 thread-safety rule).
 """
-@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges::EdgeList,
+@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges,   # EdgeList or _edge_view
                                        qu::AbstractVector{Float64}, qv::AbstractVector{Float64},
                                        theta::Float64; volumetric::Bool = false)::Float64
     w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
@@ -3468,6 +3470,7 @@ include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
 include(joinpath(@__DIR__, "surfacewater", "swe_reference.jl"))
+include(joinpath(@__DIR__, "surfacewater", "device_run.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3567,7 +3570,8 @@ function run_simulation!(state            :: FlowState,
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
                          rain_points      :: Vector{RainPoint}      = RainPoint[],
                          sgs_diag                                   = nothing,
-                         timing           :: Union{TimingLog, Nothing} = nothing)
+                         timing           :: Union{TimingLog, Nothing} = nothing,
+                         backend          :: ComputeBackend = CPUThreads())
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
@@ -3576,6 +3580,12 @@ function run_simulation!(state            :: FlowState,
     # Merge legacy injection_points / rain_points into all_sources.
     # Callers that still pass the old keyword args continue to work unchanged.
     merged_sources = AbstractSource[all_sources..., injection_points..., rain_points...]
+
+    # WP5: on a device backend the state lives on the device during the run
+    # (surfacewater/device_run.jl); `state` is brought up to date when read.
+    dev = backend isa CPUThreads ? nothing : DeviceRun(state, method, backend, merged_sources)
+    dev !== nothing && LIMITER_STATS[] &&
+        throw(ArgumentError("--limiter-stats is not available on a device backend"))
 
     # ── Debug: pre-simulation state check ──────────────────────────────────
     n_inflow = count(s -> s isa InflowPoint,      merged_sources)
@@ -3606,25 +3616,31 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Adaptive dt
-        dt = min(_cfl_dt(state, method; courant = courant), dt_max, sim_duration - t)
+        dt = min(dev === nothing ? _cfl_dt(state, method; courant = courant) : _device_cfl(dev, courant),
+                 dt_max, sim_duration - t)
         use_swe || (dt = max(dt, 0.1))      # R1: the reference solver keeps its CFL step
 
         # ── Apply all water sources (before routing) ────────────────────────
-        # Uniform rainfall
-        if rainfall_rate > 0.0
-            for i in eachindex(state.cell_ids)
-                state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+        if dev === nothing
+            # Uniform rainfall
+            if rainfall_rate > 0.0
+                for i in eachindex(state.cell_ids)
+                    state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+                end
             end
-        end
-        # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
-        for src in merged_sources
-            apply_source!(state, src, t, dt)
+            # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
+            for src in merged_sources
+                apply_source!(state, src, t, dt)
+            end
+        else
+            _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
         end
 
         # ── Debug: post-source volume check (first 5 steps + every 500th) ──
         # WP4 (2026-10): was every 10th step, with an O(cells × sources) scan —
         # about as costly as the step itself on a mostly dry domain. The
         # every-50-step mass-balance line below is unchanged.
+        dev !== nothing && (step <= 5 || step % 500 == 0) && _device_sync!(dev, state)
         if step <= 5 || step % 500 == 0
             # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
             # so src_vol is non-empty when only InflowPoints are active.
@@ -3646,7 +3662,9 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Sync water_depth from volume (standard solver only; SGS syncs inside step_sgs!)
-        if !use_sgs
+        if dev !== nothing
+            _device_depth!(dev)
+        elseif !use_sgs
             for i in eachindex(state.cell_ids)
                 state.cell_area[i] >= 1.0 &&
                     (state.water_depth[i] = state.volume[i] / state.cell_area[i])
@@ -3654,7 +3672,9 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Physics step (includes Phase D ghost-edge outflow)
-        if use_sgs
+        if dev !== nothing
+            _device_step!(dev, dt, courant)
+        elseif use_sgs
             step_sgs!(state, dt; velocity = false)
         elseif use_swe
             step_swe!(state, dt; courant = courant)      # sub-steps if the sources need it
@@ -3665,6 +3685,10 @@ function run_simulation!(state            :: FlowState,
         t    += dt
         step += 1
         LIMITER_STATS[] && _lstats_step!(t)                 # D1b (--limiter-stats)
+        # WP5: bring the host state up to date where it is read below
+        dev !== nothing && ((vis !== nothing && step % VIS_INTERVAL == 0) ||
+                            _should_write_frame(output, t) || step % 50 == 0) &&
+            _device_sync!(dev, state)
 
         # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
         ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
@@ -3730,6 +3754,7 @@ function run_simulation!(state            :: FlowState,
             @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  vol_removed=$(round(state.vol_removed,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³$nan_warn"
         end
     end
+    dev !== nothing && _device_sync!(dev, state)
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
     use_swe && @info "SWE: volume added by clamping negative cells: " *
                      "$(round(sum(state.swe.clamp_vol), sigdigits = 4)) m³"
@@ -3958,6 +3983,7 @@ function run_flood_model(;
     open_boundary     :: Union{Symbol,Nothing} = nothing,  # :normal | :legacy (0.3.0)
     swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
     swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
+    backend           :: Symbol  = :cpu,      # WP5: :cpu | :gpu (CUDA) | :ka_cpu (device path on the CPU)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4425,14 +4451,22 @@ function run_flood_model(;
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
           "sources=$(length(all_sources))  open_bc=$(count(bc -> bc !== Closed, flow_state.ghost_cell_bc))"
     t0 = time()
-    run_simulation!(flow_state, mesh, sim_duration, dt_max,
-                    vis, vis_mode, sim_output;
-                    method        = method_obj,
-                    courant       = courant,
-                    rainfall_rate = rainfall_rate,
-                    all_sources   = all_sources,
-                    sgs_diag      = sgs_diag,
-                    timing        = tl)
+    # WP5: a GPU run goes through invokelatest, so that it sees the methods
+    # CUDA.jl defines when _cuda_backend() loads it
+    compute = backend === :cpu    ? CPUThreads() :
+              backend === :gpu    ? _cuda_backend() :
+              backend === :ka_cpu ? KADevice(KernelAbstractions.CPU()) :
+              throw(ArgumentError("backend must be :cpu, :gpu or :ka_cpu (got :$backend)"))
+    backend === :cpu || @info "Compute backend: $(backend) ($(typeof(compute)))"
+    Base.invokelatest(run_simulation!, flow_state, mesh, sim_duration, dt_max,
+                      vis, vis_mode, sim_output;
+                      method        = method_obj,
+                      courant       = courant,
+                      rainfall_rate = rainfall_rate,
+                      all_sources   = all_sources,
+                      sgs_diag      = sgs_diag,
+                      timing        = tl,
+                      backend       = compute)
     tl.simulation = time() - t0
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
@@ -4769,6 +4803,12 @@ Flow model options:
   --swe-viscosity C_E
                      (--flow-model swe) eddy viscosity ν_t = C_E·h·u*, u* from
                      Manning; 0 (default) = off. Typical rivers: 0.1–0.6.
+  --backend cpu|gpu|ka-cpu
+                     (WP5) Where the time steps run. cpu (default): CPU
+                     threads. gpu: an NVIDIA GPU through CUDA.jl (full
+                     project environment; --flow-model swe so far); the state
+                     stays on the GPU and is copied back for output and log
+                     lines. ka-cpu: the GPU code path on the CPU (testing).
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5391,6 +5431,11 @@ function main(args=String[])
     swe_order = swe_order_val === nothing ? 2 : parse(Int, swe_order_val)
     swe_visc_val, args = _pop_flag(args, "--swe-viscosity")
     swe_viscosity = swe_visc_val === nothing ? 0.0 : parse(Float64, swe_visc_val)
+    backend_val, args = _pop_flag(args, "--backend")
+    backend = backend_val === nothing ? :cpu : Symbol(replace(backend_val, "-" => "_"))
+    backend in (:cpu, :gpu, :ka_cpu) ||
+        (println("ERROR: --backend requires 'cpu', 'gpu' or 'ka-cpu' (got '$backend_val')
+"); print_help(1))
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5554,6 +5599,7 @@ function main(args=String[])
         open_boundary   = open_boundary,
         swe_order       = swe_order,
         swe_viscosity   = swe_viscosity,
+        backend         = backend,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
