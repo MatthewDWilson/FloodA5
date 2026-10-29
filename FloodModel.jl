@@ -946,34 +946,12 @@ function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Fl
                                    volume::Vector{Float64}, edges::EdgeList,
                                    state::FlowState, ws::StepWorkspace)
     cptr, cedge = _cell_csr!(state, ws)
-    out = ws.out; ci = edges.cell_i; cj = edges.cell_j
-    @batch per=core for i in eachindex(volume)
-        s = 0.0
-        @inbounds for k in cptr[i]:cptr[i + 1] - 1
-            e = cedge[k]; ev = edge_vol[e]
-            if ev > 0.0
-                cj[e] == i && (s += ev)
-            elseif ev < 0.0
-                ci[e] == i && (s -= ev)
-            end
-        end
-        @inbounds out[i] = s
-    end
-    @batch per=core for e in eachindex(edge_vol)
-        @inbounds begin
-            ev = edge_vol[e]
-            iszero(ev) && continue
-            d = ev > 0.0 ? cj[e] : ci[e]
-            o = out[d]
-            V = max(volume[d], 0.0)
-            if o > V
-                sc = V / o
-                edge_vol[e] = ev * sc
-                q_store[e] *= sc
-                LIMITER_STATS[] && (_LSTATS[].flag[e] |= LF_POS)   # D1b
-            end
-        end
-    end
+    # WP5: the kernel bodies are shared with the device path (std_device.jl)
+    a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, flux = q_store, volume = volume,
+         ci = edges.cell_i, cj = edges.cell_j, out = ws.out,
+         stats = LIMITER_STATS[], lflag = _lf_flag())
+    foreach_index!(CPUThreads(), length(volume), _pos_out_k!, a)
+    foreach_index!(CPUThreads(), length(edge_vol), _pos_scale_k!, a)
     return edge_vol
 end
 
@@ -989,6 +967,12 @@ function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
                         ws::StepWorkspace, sgs::Bool)
     cptr, cedge = _cell_csr!(state, ws)
     ci = state.edges.cell_i
+    if !sgs                                  # WP5: body shared with the device path
+        a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, ci = ci, cell_area = state.cell_area,
+             volume = state.volume, water_depth = state.water_depth)
+        foreach_index!(CPUThreads(), length(state.cell_ids), _gather_std_k!, a)
+        return nothing
+    end
     @batch per=core for i in 1:length(state.cell_ids)
         s = 0.0
         @inbounds for k in cptr[i]:cptr[i + 1] - 1
@@ -1818,52 +1802,17 @@ since the legacy kernels never read it).
   method produced it.
 """
 function _compute_wse_gradients!(state::FlowState, wse::AbstractVector{Float64})
-    n      = length(state.cell_ids)
-    max_nb = size(state.adj_matrix, 1)
-
-    # Threaded (WP4 stage 3): each cell writes only its own column.
-    @batch per=core for i in 1:n
-        # If cell i's own WSE is non-finite (e.g. NaN elevation — Bug
-        # tracked in FloodA5_NonOrthogonal_Correction_Plan.md §10.6.7's
-        # "outstanding risk" note, this being the real-mesh manifestation
-        # of that class of issue: a per-cell invalid value reaching
-        # _compute_wse_gradients! unguarded and propagating outward through
-        # the gradient stencil to cells that never directly touch the bad
-        # cell), there is no meaningful gradient to compute here. Leave it
-        # at the safe (0,0) "no correction" fallback — same convention as
-        # the underdetermined/degenerate stencil case in
-        # _build_wlsq_weights!.
-        if !isfinite(wse[i])
-            state.grad_wse[1, i] = 0.0
-            state.grad_wse[2, i] = 0.0
-            continue
-        end
-
-        gx = 0.0
-        gy = 0.0
-        for s in 1:max_nb
-            j = state.adj_matrix[s, i]
-            j == 0 && continue
-            # Skip a non-finite neighbour WSE (e.g. j has NaN elevation)
-            # rather than letting it poison gx/gy for cell i — without this
-            # guard, a single NaN-elevation cell contaminates the gradient
-            # of every cell adjacent to it, which then poisons every edge
-            # of THOSE cells (not just the edge touching the bad cell),
-            # spreading NaN outward by one mesh-hop per timestep. This is
-            # the bug confirmed against a real mesh with 6 NaN-elevation
-            # boundary cells: NaN_cells grew 194→413→607→794→976→1103
-            # (= n_cells − 6) over successive steps before this guard was
-            # added. Treating a non-finite neighbour as if its slot were
-            # empty (adj_matrix[s,i] == 0) is the same fallback already
-            # used elsewhere for missing/degenerate geometry.
-            isfinite(wse[j]) || continue
-            dWSE = wse[j] - wse[i]
-            gx += state.wlsq_weights[s,          i] * dWSE
-            gy += state.wlsq_weights[max_nb + s, i] * dWSE
-        end
-        state.grad_wse[1, i] = gx
-        state.grad_wse[2, i] = gy
-    end
+    # Threaded (WP4 stage 3): each cell writes only its own column. A
+    # non-finite WSE (e.g. NaN elevation, outside the DEM) gets the (0, 0)
+    # "no correction" gradient, and non-finite neighbours are skipped as if
+    # their slot were empty — otherwise one NaN cell poisons its neighbours'
+    # gradients and spreads NaN outward one mesh hop per step (seen on a real
+    # mesh with six NaN-elevation boundary cells). Body: _grad_wse_k!
+    # (std_device.jl), shared with the device path (WP5).
+    a = (wse = wse, grad_wse = state.grad_wse, adj = state.adj_matrix,
+         W = state.wlsq_weights, nbmax = size(state.adj_matrix, 1))
+    foreach_index!(CPUThreads(), length(state.cell_ids), _grad_wse_k!, a)
+    return nothing
 end
 
 
@@ -3320,21 +3269,12 @@ Per-cell gather with no shared writes, so it is threaded and deterministic
 (WP1, 2026-10: previously an inline serial loop in step_standard!, :cell only).
 """
 function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
-    edges  = state.edges
-    max_nb = state.max_neighbours
-    @batch per=core for i in 1:length(state.cell_ids)
-        qu = 0.0;  qv = 0.0
-        @inbounds for s in 1:max_nb
-            e = state.cell_edge_index[s, i]
-            e == 0 && continue
-            q_e = use_flux_Q ? edges.flux_Q[e] / max(edges.width[e], 1e-9) : edges.flux[e]
-            obs = -q_e         # observation: qvec_i · n̂_f = −q_e
-            qu += state.mom_weights[s,          i] * obs
-            qv += state.mom_weights[max_nb + s, i] * obs
-        end
-        state.qvec_u[i] = qu
-        state.qvec_v[i] = qv
-    end
+    edges = state.edges
+    a = (cei = state.cell_edge_index, flux = edges.flux, flux_Q = edges.flux_Q, width = edges.width,
+         mom_weights = state.mom_weights, maxnb = state.max_neighbours,
+         qvec_u = state.qvec_u, qvec_v = state.qvec_v)
+    foreach_index!(CPUThreads(), length(state.cell_ids), _qvec_k!, a, use_flux_Q)  # std_device.jl
+    return nothing
 end
 
 """
@@ -3470,6 +3410,7 @@ include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
 include(joinpath(@__DIR__, "surfacewater", "swe_reference.jl"))
+include(joinpath(@__DIR__, "surfacewater", "std_device.jl"))
 include(joinpath(@__DIR__, "surfacewater", "device_run.jl"))
 
 # ---------------------------------------------------------------------------

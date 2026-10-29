@@ -100,6 +100,14 @@ function _minimum(x::Array{Float64})
     return m
 end
 _minimum(x::AbstractArray) = minimum(x; init = Inf)
+function _maximum(x::Array{Float64})
+    m = 0.0
+    @inbounds for v in x
+        m = max(m, v)
+    end
+    return m
+end
+_maximum(x::AbstractArray) = maximum(x; init = 0.0)     # for non-negative x
 
 "Σ_k dt·x[k]·y[k], in index order on host arrays."
 function _dot_sum(dt::Float64, x::Array{Float64}, y::Array{Float64})

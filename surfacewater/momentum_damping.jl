@@ -129,53 +129,15 @@ function _momentum_damping!(state::FlowState, ws::StepWorkspace, dt::Float64)
     tail = ws.m_tail; head = ws.m_head; vptr = ws.m_vptr; vedge = ws.m_vedge; vsign = ws.m_vsign
     interior = ws.m_interior; nv = length(psi)
 
-    @batch per=core for e in 1:ne
-        @inbounds begin
-            i = ci[e]; j = cj[e]
-            ηi = z[i] + V[i] / max(A[i], 1.0); ηj = z[j] + V[j] / max(A[j], 1.0)
-            hmin = min(ηi, ηj) - sill[e]
-            if hmin > 0.0 && tail[e] != 0          # also false for NaN
-                hf = max(ηi, ηj) - sill[e]
-                nx = nfx[e]; ny = nfy[e]; dx = dxm[e] / L[e]; dy = dym[e] / L[e]
-                qt = 0.5 * ((qu[i] + qu[j]) * -ny + (qv[i] + qv[j]) * nx)   # t̂ = n̂ turned +90°
-                hfl[e] = hf
-                u[e] = (-q[e] * (nx * dx + ny * dy) + qt * (-ny * dx + nx * dy)) / hf
-                wf[e] = min(hmin / MOM_DAMP_HW, 1.0)
-            else
-                hfl[e] = 0.0; u[e] = 0.0; wf[e] = 0.0
-            end
-        end
-    end
-    @batch per=core for v in 1:nv
-        @inbounds begin
-            ps = 0.0
-            if interior[v]
-                Γ = 0.0; Av = 0.0; ω = 1.0; hs = 0.0; us = 0.0; m = 0
-                for k in vptr[v]:vptr[v + 1] - 1
-                    e = vedge[k]
-                    ω = min(ω, wf[e])
-                    Γ += vsign[k] * u[e] * L[e]
-                    Av += wid[e] * L[e] / 4
-                    hs += hfl[e]; us += abs(u[e]); m += 1
-                end
-                if ω > 0.0 && Av > 0.0
-                    hv = hs / m
-                    Vref = wave ? sqrt(_G * hv) : us / m
-                    ν = Cm * Vref * sqrt(Av)
-                    ps = -ν * dt * hv * (Γ / Av) * ω
-                end
-            end
-            psi[v] = ps
-        end
-    end
-    @batch per=core for e in 1:ne
-        @inbounds begin
-            a = tail[e]
-            if a != 0
-                dQ = psi[head[e]] - psi[a]
-                iszero(dQ) || (q[e] -= dQ / wid[e])
-            end
-        end
-    end
+    # the passes as kernel bodies, shared with the device path (std_device.jl)
+    a = (elevation = z, volume = V, cell_area = A, ci = ci, cj = cj, sill = sill, L = L,
+         width = wid, flux = q, nf_x = nfx, nf_y = nfy, dx_m = dxm, dy_m = dym,
+         qvec_u = qu, qvec_v = qv, m_tail = tail, m_head = head, m_vptr = vptr,
+         m_vedge = vedge, m_vsign = vsign, m_interior = interior, m_psi = psi,
+         m_u = u, m_w = wf, m_h = hfl)
+    be = CPUThreads()
+    foreach_index!(be, ne, _md_face_k!, a)
+    foreach_index!(be, nv, _md_vertex_k!, a, Cm, wave, dt)
+    foreach_index!(be, ne, _md_apply_k!, a)
     return nothing
 end
