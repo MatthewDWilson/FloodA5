@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.2.6"
+const FLOODA5_VERSION = "0.3.0"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -3791,13 +3791,25 @@ end
 """
     scheme_options(scheme, flow_method) → NamedTuple
 
-Default numerical options for `--scheme` (WP2b, 2026-10): the values that
-`run_flood_model`/the CLI use for any of `gradient_correction`,
+Default numerical options for `--scheme` (WP2b, 2026-10; 0.3.0): the
+values that `run_flood_model`/the CLI use for any of `gradient_correction`,
 `face_flux_method`, `friction_model`, `limiter`, `cfl_mode`,
-`momentum_model`, `q_centre_mode` and `q_centre_theta` (WP2c) that the
-caller does not set explicitly.
+`momentum_model`, `q_centre_mode`, `q_centre_theta` (WP2c), `eta_filter`,
+`momentum_damping` and `momentum_damping_scale` that the caller does not set
+explicitly. All of them are `initialise_flow_model` keywords; the run-level
+boundary limiter comes from `scheme_boundary_limiter`.
 
-  :recommended (default)
+  :recommended (default since 0.3.0)
+      standard  the Δt-consistent scheme: gradient correction on,
+                diamond-wetdry face gradient, vector friction, positivity
+                limiter (and positivity at open boundaries), local CFL, edge
+                momentum, no Q-centring (θ = 1), η filter C_s = 0.05 and
+                momentum damping C_m = 0.05 (wave). Closest local-inertial
+                configuration to the full shallow-water reference on both
+                A5 and Cartesian meshes (HYDRAULICS.md §15.10–15.11).
+      sgs       as :v02 (no reference yet: the SWE solver has no sub-grid
+                representation)
+  :v02        the 0.2.x default ("recommended" until 0.3.0)
       standard  gradient correction on, diamond-wetdry face gradient, vector
                 friction, hybrid limiter, local CFL, edge momentum,
                 consistent Q-centring at θ = 0.9 (WP2c)
@@ -3812,23 +3824,39 @@ caller does not set explicitly.
               unoriented Q-centring at θ = 0.9 — which on A5 acts as a
               dt-dependent resistance, HYDRAULICS.md §15.4)
 
+`--flow-model swe` takes the :legacy values whatever the scheme: none of
+these options applies to it.
+
 Evidence: docs/HYDRAULICS.md §15. `initialise_flow_model`'s own keyword
 defaults remain the legacy values (library level; test fixtures rely on them).
 """
 function scheme_options(scheme::Symbol, flow_method::Symbol)
     legacy = (gradient_correction = false, face_flux_method = :legacy,
               friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
-              momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9)
-    scheme === :legacy && return legacy
-    scheme === :recommended ||
-        throw(ArgumentError("scheme must be :recommended or :legacy (got :$scheme)"))
+              momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9,
+              eta_filter = 0.0, momentum_damping = 0.0, momentum_damping_scale = :wave)
+    scheme in (:recommended, :v02, :legacy) ||
+        throw(ArgumentError("scheme must be :recommended, :v02 or :legacy (got :$scheme)"))
+    (scheme === :legacy || flow_method === :swe) && return legacy
     flow_method === :sgs &&
         return merge(legacy, (friction_model = :vector, cfl_mode = :local,
                               q_centre_theta = 1.0))
-    return merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
-                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
-                          q_centre_mode = :consistent))
+    v02 = merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
+                         friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
+                         q_centre_mode = :consistent))
+    scheme === :v02 && return v02
+    return merge(v02, (limiter = :positivity, q_centre_theta = 1.0,
+                       eta_filter = 0.05, momentum_damping = 0.05))
 end
+
+"""
+    scheme_boundary_limiter(scheme, flow_method) → Symbol
+
+The open-boundary limiter (`--boundary-limiter`, D1b) of a scheme:
+`:positivity` for standard flow under `:recommended` (0.3.0), else `:legacy`.
+"""
+scheme_boundary_limiter(scheme::Symbol, flow_method::Symbol) =
+    scheme === :recommended && flow_method === :standard ? :positivity : :legacy
 
 function run_flood_model(;
     mesh_source      :: Tuple,
@@ -3864,10 +3892,11 @@ function run_flood_model(;
     dt_max            :: Float64 = 60.0,
     courant           :: Float64 = 0.7,
     limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
-    boundary_limiter  :: Symbol  = :legacy,   # D1b experiment: :legacy | :positivity
-    eta_filter        :: Float64 = 0.0,       # D4: η filter coefficient C_s (0 = off)
-    momentum_damping  :: Float64 = 0.0,       # D6′: momentum damping C_m (0 = off)
-    momentum_damping_scale :: Symbol = :wave, # D6′: :wave | :flow
+    # D1b/D4/D6′ (0.3.0): `nothing` takes the scheme's value
+    boundary_limiter  :: Union{Symbol,Nothing}  = nothing,  # :legacy | :positivity
+    eta_filter        :: Union{Float64,Nothing} = nothing,  # η filter C_s (0 = off)
+    momentum_damping  :: Union{Float64,Nothing} = nothing,  # momentum damping C_m (0 = off)
+    momentum_damping_scale :: Union{Symbol,Nothing} = nothing, # :wave | :flow
     swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
     swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
     rainfall_rate     :: Float64 = 0.0,
@@ -3893,6 +3922,22 @@ function run_flood_model(;
     cfl_mode            = something(cfl_mode,            so.cfl_mode)
     q_centre_mode = something(q_centre_mode, so.q_centre_mode)
     q_centre_theta      = something(q_centre_theta,      so.q_centre_theta)
+    damping_from_scheme = momentum_damping === nothing
+    eta_filter          = something(eta_filter,          so.eta_filter)
+    momentum_damping    = something(momentum_damping,    so.momentum_damping)
+    momentum_damping_scale = something(momentum_damping_scale, so.momentum_damping_scale)
+    boundary_limiter    = something(boundary_limiter, scheme_boundary_limiter(scheme, flow_method))
+    # The scheme's momentum damping needs the diamond gradient, edge momentum
+    # and vector friction; if explicit flags remove one of them, drop the
+    # damping (an explicit --momentum-damping is validated, and refused, by
+    # initialise_flow_model instead).
+    if damping_from_scheme && momentum_damping > 0.0 &&
+       !(gradient_correction && face_flux_method in (:diamond, :diamond_wetdry) &&
+         momentum_model === :edge && friction_model === :vector)
+        @info "Momentum damping of --scheme $(scheme) switched off: it needs the diamond " *
+              "face gradient, edge momentum and vector friction"
+        momentum_damping = 0.0
+    end
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
@@ -4476,9 +4521,9 @@ Flow model options:
                      cell centres; overrides --manning-n where finite.
   --q-centre-theta N Spatial momentum smoothing parameter θ for the
                      Q-centred scheme (checkerboard suppression).
-                     Range [0.0, 1.0]. Default: from --scheme — 0.9 (the
-                     LISFLOOD-FP value) except 1.0 for SGS under
-                     --scheme recommended. θ = 1.0 disables the scheme entirely
+                     Range [0.0, 1.0]. Default: from --scheme — 1.0 under
+                     --scheme recommended; 0.9 (the LISFLOOD-FP value) for
+                     standard flow under v0.2 and legacy. θ = 1.0 disables the scheme entirely
                      (pure Bates semi-implicit momentum, no smoothing).
                      Lower values damp oscillations more strongly but
                      reduce inertial accuracy. Note: disabling (θ = 1.0)
@@ -4500,14 +4545,22 @@ Flow model options:
                        consistent  signs corrected and each partner mapped
                                    onto the edge normal with the cell
                                    vectors: exact for uniform flow.
-  --scheme recommended|legacy
-                     Default numerical options (WP2b, 2026-10). Each of
+  --scheme recommended|v0.2|legacy
+                     Default numerical options (WP2b, 2026-10; 0.3.0). Each of
                      --gradient-correction, --face-flux-method,
                      --friction-model, --limiter, --cfl-mode,
-                     --momentum-model, --q-centre-mode and --q-centre-theta
-                     that is not given takes the scheme's value; explicit
-                     flags always win.
-                       recommended (default)
+                     --momentum-model, --q-centre-mode, --q-centre-theta,
+                     --boundary-limiter, --eta-filter, --momentum-damping and
+                     --momentum-damping-scale that is not given takes the
+                     scheme's value; explicit flags always win.
+                       recommended (default since 0.3.0)
+                         standard: gradient correction on, diamond-wetdry,
+                                   vector friction, positivity limiter (also
+                                   at open boundaries), local CFL, no
+                                   Q-centring, η filter 0.05, momentum
+                                   damping 0.05 (wave)
+                         sgs:      as v0.2
+                       v0.2    the 0.2.x default
                          standard: gradient correction on, diamond-wetdry,
                                    vector friction, hybrid limiter, local CFL,
                                    consistent Q-centring (θ 0.9)
@@ -4606,7 +4659,8 @@ Flow model options:
                      See FloodA5_Review_and_ForwardPlan_2026-10.md §3.
   --limiter legacy|positivity|hybrid
                      Wet–dry / overdraft limiting (WP2). Default: from
-                     --scheme (hybrid for standard, legacy for SGS).
+                     --scheme (positivity for standard, legacy for SGS;
+                     hybrid for standard under --scheme v0.2).
                        legacy per-edge volume limiter
                               (h_donor·w/(N·dt)) plus a per-edge donor cap
                               (V/(2N)); both depend on face count and width.
@@ -4630,21 +4684,26 @@ Flow model options:
                      diamond wet/dry fallback — by flow-depth band, with an hourly
                      log line and an end-of-run table. Results are unchanged.
   --boundary-limiter legacy|positivity
-                     (experiment, D1b) legacy (default): boundary outflow keeps
-                     the volume limiter and the per-step donor cap, both of
-                     which scale with 1/Δt. positivity: only "no more than the
-                     boundary cell holds".
-  --eta-filter C_S   (experiment, D4; standard flow) Conservative free-surface
+                     (D1b) legacy: boundary outflow keeps the volume limiter
+                     and the per-step donor cap, both of which scale with 1/Δt.
+                     positivity: only "no more than the boundary cell holds".
+                     Default: from --scheme (positivity for standard flow,
+                     legacy otherwise and under v0.2/legacy).
+  --eta-filter C_S   (D4; standard flow) Conservative free-surface
                      high-pass filter: water is exchanged across wet faces in
                      proportion to the jump in the WSE residual from a local
                      planar fit, at a rate C_s·√(g h)/ℓ that does not depend on
-                     Δt. 0 (default) = off. Try 0.02–0.1.
+                     Δt. 0 = off. Default: from --scheme (0.05 for standard
+                     flow, 0 under v0.2/legacy).
   --momentum-damping C_M
-                     (experiment, D6′; standard flow, diamond gradient) Damps the
+                     (D6′; standard flow, diamond gradient) Damps the
                      circulating part of the face discharges — exactly
                      divergence-free, so it moves no water — at a rate in
                      physical units: eddy viscosity ν = C_m·V·ℓ around each
-                     mesh vertex. 0 (default) = off.
+                     mesh vertex. 0 = off. Default: from --scheme (0.05 for
+                     standard flow, 0 under v0.2/legacy; switched off if
+                     explicit flags remove the diamond gradient, edge
+                     momentum or vector friction it needs).
   --momentum-damping-scale wave|flow
                      V = √(g h) (wave, default: a numerical floor) or the local
                      flow speed |u| (flow: eddy-viscosity-like).
@@ -5196,15 +5255,18 @@ function main(args=String[])
         print_help(1)
     end
 
-    # --scheme recommended|legacy (WP2b, 2026-10; default: recommended). Any of
-    # the six options above that was not given takes the scheme's value for
-    # this flow model — see scheme_options. Explicit flags always win.
+    # --scheme recommended|v0.2|legacy (WP2b, 2026-10; 0.3.0; default:
+    # recommended). Any of the options above that was not given takes the
+    # scheme's value for this flow model — see scheme_options. Explicit flags
+    # always win.
     scheme = if scheme_val === nothing || scheme_val in ("recommended", "Recommended")
         :recommended
+    elseif scheme_val in ("v0.2", "v02", "0.2")
+        :v02
     elseif scheme_val in ("legacy", "Legacy")
         :legacy
     else
-        println("ERROR: --scheme requires 'recommended' or 'legacy' (got '$scheme_val')\n")
+        println("ERROR: --scheme requires 'recommended', 'v0.2' or 'legacy' (got '$scheme_val')\n")
         print_help(1)
     end
     let so = scheme_options(scheme, flow_method)
@@ -5258,13 +5320,14 @@ function main(args=String[])
     cell_order_val, args = _pop_flag(args, "--cell-order")
     limiter_stats,  args = _pop_bool(args, "--limiter-stats")
     boundary_lim_val, args = _pop_flag(args, "--boundary-limiter")
-    boundary_limiter = boundary_lim_val === nothing ? :legacy : Symbol(boundary_lim_val)
+    # nothing: from --scheme (resolved in run_flood_model, 0.3.0)
+    boundary_limiter = boundary_lim_val === nothing ? nothing : Symbol(boundary_lim_val)
     eta_filter_val, args = _pop_flag(args, "--eta-filter")
-    eta_filter = eta_filter_val === nothing ? 0.0 : parse(Float64, eta_filter_val)
+    eta_filter = eta_filter_val === nothing ? nothing : parse(Float64, eta_filter_val)
     mom_damp_val, args = _pop_flag(args, "--momentum-damping")
-    momentum_damping = mom_damp_val === nothing ? 0.0 : parse(Float64, mom_damp_val)
+    momentum_damping = mom_damp_val === nothing ? nothing : parse(Float64, mom_damp_val)
     mom_scale_val, args = _pop_flag(args, "--momentum-damping-scale")
-    momentum_damping_scale = mom_scale_val === nothing ? :wave : Symbol(mom_scale_val)
+    momentum_damping_scale = mom_scale_val === nothing ? nothing : Symbol(mom_scale_val)
     swe_order_val, args = _pop_flag(args, "--swe-order")
     swe_order = swe_order_val === nothing ? 2 : parse(Int, swe_order_val)
     swe_visc_val, args = _pop_flag(args, "--swe-viscosity")

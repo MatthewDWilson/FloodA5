@@ -36,7 +36,7 @@ function _state(mesh; cm = 0.1, scale = :wave, z = nothing, kw...)
     m = deepcopy(mesh)
     m.static_vars["elevation"] = z === nothing ? zeros(length(m.cells)) : z
     s = _quiet(() -> initialise_flow_model(m, StandardFlow();
-                                          merge(scheme_options(:recommended, :standard),
+                                          merge(scheme_options(:v02, :standard),
                                                 (; limiter = :positivity, q_centre_theta = 1.0,
                                                    momentum_damping = cm, momentum_damping_scale = scale),
                                                 NamedTuple(kw))...))
@@ -73,9 +73,9 @@ _enstrophy(s) = sum(abs2, s.edges.flux)
     @test_throws ArgumentError init(StandardFlow(); momentum_damping = -1.0)
     @test_throws ArgumentError init(SGSFlow(); momentum_damping = 0.1)
     @test_throws ArgumentError init(StandardFlow(); momentum_damping = 0.1)           # no diamond gradient
-    @test_throws ArgumentError init(StandardFlow(); merge(scheme_options(:recommended, :standard),
+    @test_throws ArgumentError init(StandardFlow(); merge(scheme_options(:v02, :standard),
                                     (; friction_model = :component, momentum_damping = 0.1))...)
-    @test_throws ArgumentError init(StandardFlow(); merge(scheme_options(:recommended, :standard),
+    @test_throws ArgumentError init(StandardFlow(); merge(scheme_options(:v02, :standard),
                                     (; momentum_damping = 0.1, momentum_damping_scale = :other))...)
 end
 

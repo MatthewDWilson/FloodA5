@@ -262,10 +262,10 @@ recommendation and open items).
 
 | Flag | Default | Description |
 |---|---|---|
-| `--q-centre-mode legacy\|oriented\|consistent` | `legacy` (`consistent` under `--scheme recommended`, standard flow) | (WP2c) How Q-centring uses its collinear partner faces. `legacy`: as stored — on A5 about two partners in three are oriented against the edge, which makes Q-centring a dt-dependent resistance (lower conveyance; `HYDRAULICS.md` §15.4). `oriented`: signs corrected, but pentagon partners are not parallel (deflects the flow). `consistent`: signs corrected and each partner mapped onto the edge normal — exact for uniform flow. All three are identical on Cartesian grids. |
+| `--q-centre-mode legacy\|oriented\|consistent` | `legacy` (`consistent` under `--scheme recommended` and `v0.2`, standard flow; no effect at θ = 1) | (WP2c) How Q-centring uses its collinear partner faces. `legacy`: as stored — on A5 about two partners in three are oriented against the edge, which makes Q-centring a dt-dependent resistance (lower conveyance; `HYDRAULICS.md` §15.4). `oriented`: signs corrected, but pentagon partners are not parallel (deflects the flow). `consistent`: signs corrected and each partner mapped onto the edge normal — exact for uniform flow. All three are identical on Cartesian grids. |
 | `--courant C` | `0.7` | Courant number of the adaptive timestep, in (0, 1]. |
 | `--cell-order spatial\|file` | `spatial` | (WP4) Order of the cells in memory during the simulation. `spatial` sorts them along a Morton curve (1.4–1.7× faster steps); `file` keeps the mesh file's order. Results agree to round-off (but see `HYDRAULICS.md` §15.5 for the standard solver); HDF5 output is in the file's order either way. Ignored with legacy Q-centring, which depends on the order. |
-| `--q-centre-theta N` | `0.9` (`1` under `--scheme recommended`, SGS) | Spatial momentum-smoothing parameter θ for the Q-centred scheme (checkerboard suppression), range `[0.0, 1.0]`. `0.9` is the LISFLOOD-FP standard (light smoothing); `1.0` disables the scheme (pure Bates semi-implicit momentum — may reveal period-2 checkerboarding on fine/irregular meshes). |
+| `--q-centre-theta N` | `0.9` (`1` under `--scheme recommended`) | Spatial momentum-smoothing parameter θ for the Q-centred scheme (checkerboard suppression), range `[0.0, 1.0]`. `0.9` is the LISFLOOD-FP standard (light smoothing); `1.0` disables the scheme (pure Bates semi-implicit momentum — may reveal period-2 checkerboarding on fine/irregular meshes). |
 | `--gradient-correction on\|off` | `off` | Enables the WLSQ non-orthogonal gradient correction in place of the legacy `cos θ`-only scaling. When `on`, the driving-head term is constructed by `--face-flux-method` below. Must be given an explicit `on`/`off` value (a bare flag is an error, to avoid accidentally swallowing the next argument). |
 | `--gradient-correction-alpha N` | `1.0` | Only applies when `--gradient-correction on --face-flux-method legacy`. Scales the tangential (non-orthogonal) correction term. `1.0` = full over-relaxed correction; `0.0` = orthogonal-only correction (direct WSE-difference term alone, no tangential term). **`0.0` is the empirically more stable interim setting** found during real-mesh testing (see `HYDRAULICS.md` §8) — `1.0` gives a larger correction but has been observed to overshoot into a mirrored bias under sustained ponding. Has no effect with `--face-flux-method diamond`. |
 | `--face-flux-method legacy\|diamond\|diamond-wetdry` | `legacy` | Only applies when `--gradient-correction on`. Selects how the corrected driving head is constructed. `legacy`: cell-centred WLSQ gradient, averaged onto the face, then skewness-corrected. `diamond`: face-local reconstruction built directly from the two adjacent cell centres and the edge's own two shared vertices, with no cell-averaged-then-shared gradient. Proven exact for linear fields; falls back to `legacy` automatically on any individual edge whose diamond geometry is degenerate (rare, confined to AOI-boundary vertices — see `HYDRAULICS.md` §7). |
@@ -275,25 +275,32 @@ recommendation and open items).
 | `--momentum-model blend` | — | (WP2) θ·q_face + (1−θ)·(projection of the averaged cell vector), θ from `--q-centre-theta`; θ = 1 is edge momentum without smoothing, θ = 0 is `cell`. **Checkerboards on the Carlisle DEM at θ = 0.9** (as does `cell`); experimental. |
 | `--limiter legacy\|positivity\|hybrid` | `legacy` | (WP2) `positivity`: one positivity-preserving scale factor per donor cell in place of the per-edge volume limiter and donor cap — **not stable on its own** on real terrain. `hybrid`: keeps the per-edge volume limiter and replaces only the per-edge donor cap; as smooth as `legacy`. |
 | `--cfl-mode legacy\|local` | `legacy` | (WP2) `local`: dt = 0.7·min over wet cells of ℓ/√(g h), ℓ = 4·area/perimeter, instead of √(min area) with the 99th-percentile depth. About 25% more steps on Carlisle; removes the early rain-on-slopes noise. |
+| `--boundary-limiter legacy\|positivity` | `legacy` | (D1b) `positivity`: open-boundary outflow is limited only by what the boundary cell holds, not by the 1/Δt volume limiter and donor cap. |
+| `--eta-filter C_S` | `0` | (D4, standard flow) Conservative free-surface high-pass filter: water exchanged across wet faces in proportion to the jump in the residual of a local planar fit, at a rate C_s·√(gh)/ℓ that does not depend on Δt (`HYDRAULICS.md` §15.8). |
+| `--momentum-damping C_M` | `0` | (D6′, standard flow; needs the diamond face gradient, edge momentum and vector friction) Exactly divergence-free damping of the circulating part of the face discharges, an eddy viscosity ν = C_m·V·ℓ at each mesh vertex (`HYDRAULICS.md` §15.9). |
+| `--momentum-damping-scale wave\|flow` | `wave` | V = √(gh) (`wave`) or the local speed \|u\| (`flow`). |
 
 `--face-flux-method diamond-wetdry` (WP2) is `diamond` with the two-point face
 gradient wherever an edge's vertex stencil includes a dry cell.
 
-**Defaults (since 2026-10-21): `--scheme recommended`.** Any of
+**Defaults (0.3.0): `--scheme recommended`.** Any of
 `--gradient-correction`, `--face-flux-method`, `--friction-model`,
-`--limiter`, `--cfl-mode`, `--momentum-model`, `--q-centre-mode` and `--q-centre-theta` that you do not give takes
-the recommended value for the flow model; explicit flags always win, and
-`--scheme legacy` restores the pre-2026-10 behaviour exactly.
+`--limiter`, `--cfl-mode`, `--momentum-model`, `--q-centre-mode`,
+`--q-centre-theta`, `--boundary-limiter`, `--eta-filter`, `--momentum-damping`
+and `--momentum-damping-scale` that you do not give takes the scheme's value
+for the flow model; explicit flags always win. `--scheme v0.2` restores the
+0.2.x default and `--scheme legacy` the pre-2026-10 behaviour, both exactly.
 
-| Flow model | `--scheme recommended` (default) |
-|---|---|
-| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
-| sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1` |
+| Flow model | `--scheme recommended` (default) | `--scheme v0.2` |
+|---|---|---|
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter positivity --boundary-limiter positivity --cfl-mode local --q-centre-theta 1 --eta-filter 0.05 --momentum-damping 0.05` | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1` | the same |
 
-See `HYDRAULICS.md` §15.3 for the checks and the one known trade-off (the
-diamond gradient adds velocity noise in shallow sheet flow). The defaults
-listed in the table above for the individual flags are their `--scheme legacy`
-values.
+If explicit flags remove what the momentum damping needs (the diamond face
+gradient, edge momentum, vector friction), the scheme's damping is switched
+off with a notice; an explicit `--momentum-damping` with such flags is an
+error. See `HYDRAULICS.md` §15.11 for the evidence. The defaults listed in the
+table above for the individual flags are their `--scheme legacy` values.
 
 ### 4.4 Water source options
 

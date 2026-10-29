@@ -4,7 +4,7 @@
 # sensible flags.
 #
 #   L1  steps with stats on are bit-identical to steps with stats off
-#       (standard: recommended, legacy limiter, positivity; SGS) on a partly wet
+#       (standard: v0.2 scheme, legacy limiter, positivity; SGS) on a partly wet
 #       A5 domain draining down a slope
 #   L2  the flags: wet edges are counted, a Froude-capped or volume-limited
 #       edge is detected, the report runs
@@ -59,10 +59,10 @@ function _run!(s, method, stats::Bool; steps = 150, dt = 2.0)
 end
 
 @testset "L1 — stats on == stats off ($lab)" for (lab, method, kw) in [
-        ("std recommended",    StandardFlow(), scheme_options(:recommended, :standard)),
-        ("std legacy limiter", StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :legacy))),
-        ("std positivity",     StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :positivity))),
-        ("sgs recommended",    SGSFlow(),      scheme_options(:recommended, :sgs)),
+        ("std v0.2",    StandardFlow(), scheme_options(:v02, :standard)),
+        ("std legacy limiter", StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :legacy))),
+        ("std positivity",     StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :positivity))),
+        ("sgs v0.2",    SGSFlow(),      scheme_options(:v02, :sgs)),
     ]
     a = _run!(_state(method; kw...), method, false)
     b = _run!(_state(method; kw...), method, true)
@@ -71,7 +71,7 @@ end
 end
 
 @testset "L2 — flags recorded" begin
-    s = _run!(_state(StandardFlow(); merge(scheme_options(:recommended, :standard),
+    s = _run!(_state(StandardFlow(); merge(scheme_options(:v02, :standard),
                                             (; limiter = :legacy))...), StandardFlow(), true)
     st = _LSTATS[]
     @test st.steps == 150
@@ -82,8 +82,8 @@ end
 end
 
 @testset "L3 — --boundary-limiter positivity ($lab)" for (lab, method, kw) in [
-        ("std positivity", StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :positivity))),
-        ("sgs recommended", SGSFlow(),     scheme_options(:recommended, :sgs)),
+        ("std positivity", StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :positivity))),
+        ("sgs v0.2", SGSFlow(),     scheme_options(:v02, :sgs)),
     ]
     @test BOUNDARY_POSITIVITY[] == false                       # off by default
     s0 = _state(method; kw...); M0 = sum(s0.volume)

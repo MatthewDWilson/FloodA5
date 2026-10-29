@@ -65,12 +65,17 @@ available on request. The documents above summarise the current state of
 the model; they don't duplicate that history, but do point to it where it's
 relevant (e.g. `HYDRAULICS.md`'s directional-bias sections).
 
-**Current defaults (since October 2026):** `--scheme recommended`, i.e. the
-directional-bias corrections, vector friction, a local CFL timestep and
-consistent Q-centring — see [Solvers](#solvers). `--scheme legacy` reproduces
-the original Bates (2010) configuration exactly. Results from earlier versions
-differ: the October 2026 changes (listed in [CHANGELOG.md](CHANGELOG.md) and
-marked ⚠ there) include two bugs that affected all earlier SGS and A5 results.
+**Current defaults (0.3.0):** `--scheme recommended`. For the standard solver
+that is the Δt-consistent scheme: the directional-bias corrections, vector
+friction, a local CFL timestep, positivity limiting, a free-surface filter and
+divergence-free momentum damping in place of Q-centring — see
+[Solvers](#solvers). It is the local-inertial configuration closest to the
+full shallow-water reference (`--flow-model swe`) on A5 and Cartesian meshes.
+`--scheme v0.2` reproduces the 0.2.x default exactly, and `--scheme legacy` the
+original Bates (2010) configuration. Results from earlier versions differ: the
+changes are listed in [CHANGELOG.md](CHANGELOG.md) and marked ⚠ there; the
+October 2026 ones include two bugs that affected all earlier SGS and A5
+results.
 
 ---
 
@@ -205,16 +210,18 @@ Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7
 and a momentum state that matches the flux actually transferred.
 
 **Default numerical options: `--scheme recommended`.** Any option you don't set
-takes the value for your flow model; explicit flags always win, and
-`--scheme legacy` restores the original configuration.
+takes the value for your flow model; explicit flags always win.
+`--scheme v0.2` restores the 0.2.x default and `--scheme legacy` the original
+configuration.
 
-| Option | `standard` | `sgs` | `--scheme legacy` |
-|---|---|---|---|
-| Face gradient | diamond, two-point next to dry cells (`--gradient-correction on --face-flux-method diamond-wetdry`) | two-point | two-point |
-| Friction | vector, \|q\| (`--friction-model vector`) | vector | face-normal only |
-| Wet/dry limiter | hybrid (`--limiter hybrid`) | per-edge (legacy) | per-edge |
-| Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | smallest cell, 99th-percentile depth |
-| Momentum smoothing | consistent Q-centring, θ = 0.9 (`--q-centre-mode consistent`) | none (`--q-centre-theta 1`) | Q-centring θ = 0.9 as originally written |
+| Option | `standard` | `sgs` | `standard`, `--scheme v0.2` | `--scheme legacy` |
+|---|---|---|---|---|
+| Face gradient | diamond, two-point next to dry cells (`--gradient-correction on --face-flux-method diamond-wetdry`) | two-point | as default | two-point |
+| Friction | vector, \|q\| (`--friction-model vector`) | vector | vector | face-normal only |
+| Wet/dry limiter | positivity, one scale per donor cell, also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | per-edge (legacy) | hybrid | per-edge |
+| Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | per-cell CFL | smallest cell, 99th-percentile depth |
+| Momentum smoothing | none (`--q-centre-theta 1`) | none | consistent Q-centring, θ = 0.9 | Q-centring θ = 0.9 as originally written |
+| Damping | free-surface filter and divergence-free momentum damping, both at rates that do not depend on Δt (`--eta-filter 0.05 --momentum-damping 0.05`) | none | none | none |
 
 Why these:
 - **Directional bias** has two causes: the face-normal gradient on
@@ -229,18 +236,27 @@ Why these:
   Cartesian grid. The consistent form maps each partner face onto the
   edge's own direction; on Cartesian grids it is exactly LISFLOOD-FP's
   Q-centring.
+- **Q-centring is replaced in 0.3.0** because even in its consistent form it
+  damps as a resistance that grows with Δt: results changed with the Courant
+  number, and against the full shallow-water reference it held 42–44% too
+  much water on the Carlisle test, on both mesh types. The free-surface
+  filter and the momentum damping remove the same grid-scale noise at rates
+  set in physical units, so results converge with Δt; with them the
+  standard solver matches the reference's storage to within 1–2% on both
+  meshes (`docs/HYDRAULICS.md` §15.8–15.11).
 
 > **Results from before October 2026 are affected** by that Q-centring defect
 > (A5, both solvers) and, for SGS, by a table bug that attached edge sills and
 > R–A curves to the wrong neighbour for most cells. Old SGS meshes are refused
 > until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
 
-Known limitations: with the default options, the standard solver still shows
-more grid-scale water-surface noise in deep channels than the legacy scheme
-did (the old Q-centring suppressed it, at the cost of conveyance). Results on
-the Carlisle test are also sensitive to the Courant number. Both are open; see
-[docs/HYDRAULICS.md §15.3–15.4](docs/HYDRAULICS.md), which also records the
-options that were tried and rejected. The CLI flags are documented in
+Known limitations: the momentum damping is an eddy viscosity whose strength
+(0.05) is calibrated against the full shallow-water reference on two test
+domains, not derived; open (zero-gradient) boundaries hold water back on
+slopes; and channels narrower than a cell are resolved differently on A5 and
+Cartesian meshes, an effect as large as a factor-two change in resolution on
+the Carlisle test. See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md), which also
+records the options that were tried and rejected. The CLI flags are documented in
 [docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md), and the physics in
 [docs/METHODS.md](docs/METHODS.md).
 
