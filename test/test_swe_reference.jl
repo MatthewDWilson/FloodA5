@@ -18,6 +18,8 @@
 #   S8  the eddy viscosity (--swe-viscosity) removes shear energy, keeps mass
 #   S9  HDF5 frames (including the last, written after the loop) carry the
 #       SWE cell velocity
+#   S10 thin sheet flow (2 cm) at normal depth: second-order face bed and
+#       stage-start friction
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_swe_reference.jl
 
@@ -163,6 +165,35 @@ end
     @test maximum(abs.(h .- h0)) < 0.01 * h0
     @test maximum(abs.(u .- U)) < 0.02 * U
     @test maximum(abs.(s.qvec_v[inner])) < 0.005 * h0 * U
+end
+
+@testset "S10 — thin sheet flow at normal depth ($lab)" for (lab, mesh) in _MESHES
+    # S6 at h0 = 2 cm, where the bed step across a face (2.5 cm on the 25 m
+    # Cartesian grid, ~9 cm on A5 res-16) exceeds the depth. Needs the
+    # second-order face bed (z_L = η_L − h_L) and the semi-implicit friction
+    # with |q| from the stage start; before both, the sheet ran 34–80% slow.
+    # Measured (order 2, T = 300 s): Cartesian 0.04% depth, 0.1% velocity;
+    # A5 up to 7.9% / 7.5% (the irregular stepped bed's WLSQ face bed).
+    S = 1e-3; n = 0.03; h0 = 0.02; T = 300.0
+    st = _swe(mesh, zeros(length(mesh.cells)); n = n, bc = ZeroGradient)
+    x = deg2rad.(st.cell_lons .- minimum(st.cell_lons)) .* _R .* cosd.(st.cell_lats)
+    y = deg2rad.(st.cell_lats .- minimum(st.cell_lats)) .* _R
+    m = deepcopy(mesh); m.static_vars["elevation"] = S .* (maximum(x) .- x)
+    s = _quiet(() -> initialise_flow_model(m, SWEFlow(); manning_n = n, swe_open_inflow = true))
+    fill!(s.ghost_cell_bc, ZeroGradient)
+    _setwse!(s, s.elevation .+ h0)
+    U = h0^(2 / 3) * sqrt(S) / n
+    s.qvec_u .= h0 * U; s.qvec_v .= 0.0
+    _run!(s, T)
+    bnd = findall(s.boundary_mask)
+    reach = 1.3 * (U + sqrt(_G * h0)) * T
+    inner = [i for i in eachindex(x) if minimum(hypot(x[i] - x[b], y[i] - y[b]) for b in bnd) > reach]
+    @test length(inner) >= 10
+    h = s.volume[inner] ./ s.cell_area[inner]; u = s.qvec_u[inner] ./ h
+    @info "$lab thin sheet ($(length(inner)) cells): depth $(extrema(h)), u $(extrema(u)) (normal $h0, $(round(U, digits = 5)))"
+    tol = lab == "Cartesian" ? 0.005 : 0.10
+    @test maximum(abs.(h .- h0)) < tol * h0
+    @test maximum(abs.(u .- U)) < tol * U
 end
 
 @testset "S8 — eddy viscosity damps a shear layer ($lab)" for (lab, mesh) in _MESHES

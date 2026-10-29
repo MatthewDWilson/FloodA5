@@ -18,7 +18,15 @@
 #   viscosity on exactly the lateral momentum exchange this solver is meant
 #   to measure.
 # - Hydrostatic reconstruction (Audusse et al. 2004) at the face bed
-#   z_f = max(sill, z_i, z_j): positivity-preserving with wet/dry fronts.
+#   z_f = max(z_iL, z_jR), with each side's face bed z_iL = η_iL − h_iL
+#   from the reconstructed states (z_i at first order) and a centred source
+#   ½g·(h_iL + h_i)·(z_iL − z_i) per face — the second-order scheme of
+#   Audusse et al. (2004, §4). Positivity-preserving with wet/dry fronts;
+#   an edge sill above both cell beds (an obstacle) also bounds z_f.
+#   Reconstructing the face bed matters on thin films over a slope: with
+#   cell-centre beds every face removes the bed step Δz from the
+#   downstream depth, which on a rained 0.1% slope at 22 m cells made the
+#   sheet flow 6–11 mm (10–50%) too deep (HYDRAULICS.md §15.10).
 #   Each side's momentum flux is taken relative to its own cell's
 #   hydrostatic pressure ½g·h_i²·n (a term whose sum over the cell's faces,
 #   ½g·h_i²·Σ w·n, is zero for a closed planar polygon). On the sphere the
@@ -26,14 +34,17 @@
 #   this a lake at rest feels the closure error (10⁻⁴ m drift on A5); with
 #   it the lake at rest balances face by face, whatever the geometry.
 # - Order 1: first-order states, forward Euler. Order 2: MUSCL — WLSQ
-#   gradients of η, u, v (the solver's wlsq_weights), Barth–Jespersen
+#   gradients of η, h, u, v (the solver's wlsq_weights), Barth–Jespersen
 #   limiter, first order in cells next to a dry one — with SSP-RK2 (Heun).
-#   η (not h) is reconstructed, which keeps a lake at rest exact; but under
-#   a thin film on a stepped bed η follows the bed, so its gradient is
-#   additionally limited to keep every face depth within [0, 2·h_i]
-#   (|∇η·r| ≤ h_i): deep water keeps second order, thin films fall back to
-#   first order continuously.
-# - Manning friction point-implicit in each stage.
+#   η and h are both reconstructed: η keeps a lake at rest exact, and the
+#   face depth h_iL comes from h's own limited reconstruction, so it stays
+#   within the neighbours' depths (non-negative) even where η follows a
+#   stepped bed under a thin film.
+# - Manning friction semi-implicit in each stage, with |q| from the stage's
+#   start: q ← (q + Δt·F)/(1 + Δt·g·n²·|q₀|/h^{7/3}), whose fixed point is
+#   exactly Manning's normal flow. (Taking |q| from the predicted q + Δt·F
+#   moves the fixed point to q² + Δt·F·q = q_Manning²; on thin films, where
+#   Δt·g·h·S is as large as q itself, that slowed sheet flow by up to 40%.)
 # - Optional eddy viscosity ν_t = C_E·h·u* (u* = √g·n·|u|/h^{1/6}),
 #   `--swe-viscosity C_E`, as a face-based momentum diffusion.
 # - Boundaries: Closed → reflecting wall; ZeroGradient → transmissive for
@@ -126,7 +137,7 @@ function _build_swe_work(mesh::A5Mesh, state::FlowState; order::Int = 2, visc_ce
     z(k) = zeros(k)
     return SWEWork(order, visc_ce, open_inflow, nx, ny, rxi, ryi, rxj, ryj,
                    gcell, gnx, gny, gw, gz, grx, gry, gbc, gptr, gface, perim,
-                   z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n),
+                   z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n), z(n),
                    z(ne), z(ne), z(ne), z(ne), z(ne), z(ne), z(ne),
                    z(ng), z(ng), z(ng), z(n), z(n), z(n), z(n))
 end
@@ -209,7 +220,7 @@ end
     return max(α, 0.0)
 end
 
-# limited WLSQ gradients of η, u, v (order 2); zero next to dry cells
+# limited WLSQ gradients of η, h, u, v (order 2); zero next to dry cells
 function _swe_gradients!(sw::SWEWork, state::FlowState, cptr, cedge)
     h = sw.h; u = sw.u; v = sw.v; eta = sw.eta
     adj = state.adj_matrix; W = state.wlsq_weights; nb = size(adj, 1)
@@ -217,11 +228,13 @@ function _swe_gradients!(sw::SWEWork, state::FlowState, cptr, cedge)
     rxi = sw.rxi; ryi = sw.ryi; rxj = sw.rxj; ryj = sw.ryj
     gptr = sw.gptr; gface = sw.gface; grx = sw.grx; gry = sw.gry
     dex = sw.dex; dey = sw.dey; dux = sw.dux; duy = sw.duy; dvx = sw.dvx; dvy = sw.dvy
+    dhx = sw.dhx; dhy = sw.dhy
     @batch per=core for i in eachindex(h)
         @inbounds begin
             ok = h[i] > SWE_HDRY
-            ex = 0.0; ey = 0.0; ux = 0.0; uy = 0.0; vx = 0.0; vy = 0.0
-            emin = eta[i]; emax = eta[i]; umin = u[i]; umax = u[i]; vmin = v[i]; vmax = v[i]
+            ex = 0.0; ey = 0.0; hx = 0.0; hy = 0.0; ux = 0.0; uy = 0.0; vx = 0.0; vy = 0.0
+            emin = eta[i]; emax = eta[i]; hmin = h[i]; hmax = h[i]
+            umin = u[i]; umax = u[i]; vmin = v[i]; vmax = v[i]
             if ok
                 for s in 1:nb
                     j = adj[s, i]; j == 0 && continue
@@ -229,33 +242,27 @@ function _swe_gradients!(sw::SWEWork, state::FlowState, cptr, cedge)
                         ok = false; break
                     end
                     wx = W[s, i]; wy = W[nb + s, i]
-                    de = eta[j] - eta[i]; du = u[j] - u[i]; dv = v[j] - v[i]
-                    ex += wx * de; ey += wy * de; ux += wx * du; uy += wy * du; vx += wx * dv; vy += wy * dv
+                    de = eta[j] - eta[i]; dh = h[j] - h[i]; du = u[j] - u[i]; dv = v[j] - v[i]
+                    ex += wx * de; ey += wy * de; hx += wx * dh; hy += wy * dh
+                    ux += wx * du; uy += wy * du; vx += wx * dv; vy += wy * dv
                     emin = min(emin, eta[j]); emax = max(emax, eta[j])
+                    hmin = min(hmin, h[j]); hmax = max(hmax, h[j])
                     umin = min(umin, u[j]); umax = max(umax, u[j])
                     vmin = min(vmin, v[j]); vmax = max(vmax, v[j])
                 end
             end
             if ok
                 ae = _bj(eta[i], emin, emax, ex, ey, i, cptr, cedge, ci, rxi, ryi, rxj, ryj, gptr, gface, grx, gry)
-                # depth bound: face depth h_i + ae·∇η·r within [0, 2h_i]
-                dm = 0.0
-                for k in cptr[i]:cptr[i + 1] - 1
-                    e = cedge[k]
-                    rx = ci[e] == i ? rxi[e] : rxj[e]; ry = ci[e] == i ? ryi[e] : ryj[e]
-                    dm = max(dm, abs(ex * rx + ey * ry))
-                end
-                for k in gptr[i]:gptr[i + 1] - 1
-                    f = gface[k]; dm = max(dm, abs(ex * grx[f] + ey * gry[f]))
-                end
-                ae * dm > h[i] && (ae = h[i] / dm)
+                ah = _bj(h[i], hmin, hmax, hx, hy, i, cptr, cedge, ci, rxi, ryi, rxj, ryj, gptr, gface, grx, gry)
                 au = _bj(u[i], umin, umax, ux, uy, i, cptr, cedge, ci, rxi, ryi, rxj, ryj, gptr, gface, grx, gry)
                 av = _bj(v[i], vmin, vmax, vx, vy, i, cptr, cedge, ci, rxi, ryi, rxj, ryj, gptr, gface, grx, gry)
                 dex[i] = ae * ex; dey[i] = ae * ey
+                dhx[i] = ah * hx; dhy[i] = ah * hy
                 dux[i] = au * ux; duy[i] = au * uy
                 dvx[i] = av * vx; dvy[i] = av * vy
             else
-                dex[i] = 0.0; dey[i] = 0.0; dux[i] = 0.0; duy[i] = 0.0; dvx[i] = 0.0; dvy[i] = 0.0
+                dex[i] = 0.0; dey[i] = 0.0; dhx[i] = 0.0; dhy[i] = 0.0
+                dux[i] = 0.0; duy[i] = 0.0; dvx[i] = 0.0; dvy[i] = 0.0
             end
         end
     end
@@ -269,6 +276,7 @@ function _swe_face_fluxes!(sw::SWEWork, state::FlowState)
     ci = E.cell_i; cj = E.cell_j; sill = E.sill; L = E.L
     h = sw.h; u = sw.u; v = sw.v; eta = sw.eta
     dex = sw.dex; dey = sw.dey; dux = sw.dux; duy = sw.duy; dvx = sw.dvx; dvy = sw.dvy
+    dhx = sw.dhx; dhy = sw.dhy
     nx = sw.nx; ny = sw.ny; rxi = sw.rxi; ryi = sw.ryi; rxj = sw.rxj; ryj = sw.ryj
     F1 = sw.F1; F2 = sw.F2; F3 = sw.F3; PL = sw.PL; PR = sw.PR; T2 = sw.T2; T3 = sw.T3
     ce = sw.visc_ce
@@ -279,20 +287,25 @@ function _swe_face_fluxes!(sw::SWEWork, state::FlowState)
                 F1[e] = 0.0; F2[e] = 0.0; F3[e] = 0.0; PL[e] = 0.0; PR[e] = 0.0; T2[e] = 0.0; T3[e] = 0.0
             else
                 ax = rxi[e]; ay = ryi[e]; bx = rxj[e]; by = ryj[e]
-                ηL = eta[i] + dex[i] * ax + dey[i] * ay; ηR = eta[j] + dex[j] * bx + dey[j] * by
+                # reconstructed depth and face bed: z_L = z_i + Δη − Δh (z_i at first order)
+                dhL = dhx[i] * ax + dhy[i] * ay; dhR = dhx[j] * bx + dhy[j] * by
+                dzL = dex[i] * ax + dey[i] * ay - dhL; dzR = dex[j] * bx + dey[j] * by - dhR
                 uL = u[i] + dux[i] * ax + duy[i] * ay;   uR = u[j] + dux[j] * bx + duy[j] * by
                 vL = v[i] + dvx[i] * ax + dvy[i] * ay;   vR = v[j] + dvx[j] * bx + dvy[j] * by
-                hL = h[i] > SWE_HDRY ? max(ηL - z[i], 0.0) : 0.0
-                hR = h[j] > SWE_HDRY ? max(ηR - z[j], 0.0) : 0.0
-                zf = max(sill[e], z[i], z[j])
-                hLs = max(hL + z[i] - zf, 0.0); hRs = max(hR + z[j] - zf, 0.0)
+                hL = h[i] > SWE_HDRY ? max(h[i] + dhL, 0.0) : 0.0
+                hR = h[j] > SWE_HDRY ? max(h[j] + dhR, 0.0) : 0.0
+                zL = z[i] + dzL; zR = z[j] + dzR
+                zf = max(zL, zR)
+                sill[e] > max(z[i], z[j]) && (zf = max(zf, sill[e]))   # an obstacle on the face
+                hLs = max(hL + zL - zf, 0.0); hRs = max(hR + zR - zf, 0.0)
                 n1 = nx[e]; n2 = ny[e]
                 unL = uL * n1 + vL * n2; utL = -uL * n2 + vL * n1
                 unR = uR * n1 + vR * n2; utR = -uR * n2 + vR * n1
                 f1, fn, ft = _swe_hllc(hLs, unL, utL, hRs, unR, utR)
                 F1[e] = f1; F2[e] = fn * n1 - ft * n2; F3[e] = fn * n2 + ft * n1
-                PL[e] = 0.5 * _G * (hL * hL - hLs * hLs - h[i] * h[i])   # relative to cell i's pressure
-                PR[e] = 0.5 * _G * (hR * hR - hRs * hRs - h[j] * h[j])
+                # relative to cell i's pressure, plus the centred bed source
+                PL[e] = 0.5 * _G * (hL * hL - hLs * hLs - h[i] * h[i] + (hL + h[i]) * dzL)
+                PR[e] = 0.5 * _G * (hR * hR - hRs * hRs - h[j] * h[j] + (hR + h[j]) * dzR)
                 if ce > 0.0 && h[i] > SWE_HDRY && h[j] > SWE_HDRY
                     hf = min(h[i], h[j])
                     sp = 0.5 * (hypot(u[i], v[i]) + hypot(u[j], v[j]))
@@ -313,6 +326,7 @@ function _swe_boundary_fluxes!(sw::SWEWork, state::FlowState)
     z = state.elevation
     h = sw.h; u = sw.u; v = sw.v; eta = sw.eta
     dex = sw.dex; dey = sw.dey; dux = sw.dux; duy = sw.duy; dvx = sw.dvx; dvy = sw.dvy
+    dhx = sw.dhx; dhy = sw.dhy
     gcell = sw.gcell; gnx = sw.gnx; gny = sw.gny; gz = sw.gz; grx = sw.grx; gry = sw.gry; gbc = sw.gbc
     G1 = sw.G1; G2 = sw.G2; G3 = sw.G3; open_in = sw.open_inflow
     @batch per=core for k in eachindex(gcell)
@@ -322,10 +336,10 @@ function _swe_boundary_fluxes!(sw::SWEWork, state::FlowState)
                 G1[k] = 0.0; G2[k] = 0.0; G3[k] = 0.0
             else
                 ax = grx[k]; ay = gry[k]; n1 = gnx[k]; n2 = gny[k]
-                ηL = eta[c] + dex[c] * ax + dey[c] * ay
+                dhL = dhx[c] * ax + dhy[c] * ay; dzL = dex[c] * ax + dey[c] * ay - dhL
                 uL = u[c] + dux[c] * ax + duy[c] * ay; vL = v[c] + dvx[c] * ax + dvy[c] * ay
-                hL = max(ηL - z[c], 0.0)
-                zf = max(gz[k], z[c]); hs = max(hL + z[c] - zf, 0.0)
+                hL = max(h[c] + dhL, 0.0); zL = z[c] + dzL
+                zf = gz[k] > z[c] ? max(zL, gz[k]) : zL; hs = max(hL + zL - zf, 0.0)
                 unL = uL * n1 + vL * n2; utL = -uL * n2 + vL * n1
                 b = gbc[k]
                 if b == SWE_BC_WALL || (b == SWE_BC_TRANSMISSIVE && unL <= 0.0 && !open_in)
@@ -335,7 +349,7 @@ function _swe_boundary_fluxes!(sw::SWEWork, state::FlowState)
                 else
                     f1, fn, ft = _swe_hllc(hs, unL, utL, hs, unL, utL)
                 end
-                P = 0.5 * _G * (hL * hL - hs * hs - h[c] * h[c])
+                P = 0.5 * _G * (hL * hL - hs * hs - h[c] * h[c] + (hL + h[c]) * dzL)
                 G1[k] = f1; G2[k] = (fn + P) * n1 - ft * n2; G3[k] = (fn + P) * n2 + ft * n1
             end
         end
@@ -343,7 +357,7 @@ function _swe_boundary_fluxes!(sw::SWEWork, state::FlowState)
     return nothing
 end
 
-# per-cell gather and update, point-implicit Manning friction
+# per-cell gather and update, semi-implicit Manning friction
 function _swe_update!(sw::SWEWork, state::FlowState, dt::Float64, cptr, cedge)
     E = state.edges; ci = E.cell_i; w = E.width
     V = state.volume; qx = state.qvec_u; qy = state.qvec_v; A = state.cell_area; z = state.elevation
@@ -379,7 +393,7 @@ function _swe_update!(sw::SWEWork, state::FlowState, dt::Float64, cptr, cedge)
             hn = Vn / A[i]
             qxn = qx[i] + dt * dx / A[i]; qyn = qy[i] + dt * dy / A[i]
             if hn > SWE_HDRY
-                qm = hypot(qxn, qyn)
+                qm = hypot(qx[i], qy[i])               # |q| at the stage start (fixed point = Manning)
                 fr = 1.0 + dt * _G * nman[i]^2 * qm / hn^(7.0 / 3.0)
                 qxn /= fr; qyn /= fr
             else
