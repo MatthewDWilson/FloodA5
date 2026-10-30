@@ -48,7 +48,6 @@ Default results unchanged (PATCH): only the opt-in `--flow-model swe` changes.
   moved its fixed point and slowed a 2 cm sheet by 36–58%; it now uses |q|
   from the stage start. Carlisle 6 h storage with the reference falls from
   3.44 to 2.69 Mm³ (A5) and 2.63 to 2.33 Mm³ (Cartesian).
-- `--flow-model swe` wrote zero velocity into the final HDF5 frame.
 
 ### Added
 - `test/test_swe_reference.jl` S10: thin sheet flow at normal depth.
