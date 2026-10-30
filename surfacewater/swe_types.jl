@@ -61,6 +61,8 @@ mutable struct SWEWork
     duy :: Vector{Float64}
     dvx :: Vector{Float64}
     dvy :: Vector{Float64}
+    dhx :: Vector{Float64}         # depth gradient (order 2: face bed z_f = η_f − h_f)
+    dhy :: Vector{Float64}
     # interior-face fluxes per unit length: mass, x/y momentum, the two
     # hydrostatic-reconstruction pressure corrections, viscous stress (ne)
     F1 :: Vector{Float64}

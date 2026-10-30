@@ -1245,7 +1245,7 @@ a turbulence closure, so that amount is set by C_m, and the answer moves
 these terms: a full shallow-water (HLL/HLLC) solver on the same polygon
 meshes, with a physical eddy viscosity.
 
-### 15.10 A full shallow-water reference solver (R1, 2026-10)
+### 15.10 A full shallow-water reference solver (R1, 2026-10; corrected in 0.2.6)
 
 `--flow-model swe` (`surfacewater/swe_reference.jl`, `swe_types.jl`) solves
 the full 2-D shallow-water equations, advection included, on the same meshes,
@@ -1254,23 +1254,37 @@ the dissipation target that §15.9 asked for: a scheme whose momentum
 transport and numerical dissipation come from the equations and a standard
 Riemann solver, not from a tuned damping coefficient.
 
+> **0.2.6 correction.** The 0.2.5 solver had two defects on thin films over
+> a slope (rain-on-grid), both found by comparing with analytic solutions:
+> the second-order hydrostatic reconstruction used cell-centre beds at the
+> faces, and the semi-implicit friction took |q| from the predicted state.
+> Together they slowed shallow sheet flow by 36–80% and made the reference
+> too dissipative: 6 h Carlisle storage fell from 3.44 to 2.69 Mm³ (A5) and
+> from 2.63 to 2.33 Mm³ (Cartesian) when they were fixed. The comparisons
+> below are with the corrected solver; the 0.2.5 conclusions about the
+> momentum damping (that C_m = 0.05 matched the reference) do not hold.
+
 **Scheme.** A cell-centred finite-volume method on arbitrary polygons:
 - HLLC flux (Toro) in each face's normal–tangential frame, with the
   two-rarefaction wave-speed estimate and the dry-bed limits.
-- Hydrostatic reconstruction (Audusse et al. 2004) at
-  z_f = max(sill, z_i, z_j). This keeps depths non-negative and a lake at
-  rest exactly at rest. Each cell's pressure correction is taken relative to
-  its own ½gh_i², so the balance holds even where the polygon's face normals
-  don't close exactly (the A5 cells are spherical).
+- Hydrostatic reconstruction (Audusse et al. 2004) at the face bed
+  z_f = max(z_iL, z_jR), with each side's face bed z_iL = η_iL − h_iL taken
+  from the reconstructed states (z_i at first order) and the centred bed
+  source ½g(h_iL + h_i)(z_iL − z_i) — the second-order scheme of Audusse et
+  al. (2004, §4). An edge sill above both cell beds also bounds z_f. This
+  keeps depths non-negative and a lake at rest exactly at rest. Each cell's
+  pressure correction is taken relative to its own ½gh_i², so the balance
+  holds even where the polygon's face normals don't close exactly (the A5
+  cells are spherical).
 - Order 2 (default; `--swe-order 1` for first order):
-  - MUSCL with weighted-least-squares gradients of η, u, v and the
-    Barth–Jespersen limiter;
+  - MUSCL with weighted-least-squares gradients of η, h, u, v and the
+    Barth–Jespersen limiter (the face depth comes from h's own limited
+    reconstruction, so it stays within the neighbours' depths);
   - first order next to dry cells;
-  - a depth bound |∇η·r| ≤ h_i that keeps thin films from reconstructing to
-    metre-deep face states;
   - SSP-RK2 in time.
-- Manning friction applied point-implicitly. An optional eddy viscosity
-  ν_t = C_E·h·u* (`--swe-viscosity C_E`, default 0).
+- Manning friction semi-implicit in each stage, with |q| from the stage's
+  start, so that its fixed point is exactly Manning's normal flow. An
+  optional eddy viscosity ν_t = C_E·h·u* (`--swe-viscosity C_E`, default 0).
 - Boundaries:
   - Closed: a reflecting wall;
   - Critical;
@@ -1284,9 +1298,8 @@ Riemann solver, not from a tuned damping coefficient.
 Volume is `state.volume` and the cell discharge (hu, hv) is `state.qvec_u/v`,
 so rainfall, inflows and outflow accounting are the ones the other solvers
 use. Every pass is a per-face kernel or a per-cell gather over a fixed CSR
-index, with no atomics, Dicts or Symbols and with Int8 boundary codes. The
-layout is the one a GPU backend needs; that backend will go on its own
-branch.
+index, with no atomics, Dicts or Symbols and with Int8 boundary codes, the
+layout a GPU backend needs.
 
 **Verification** (`test/test_swe_reference.jl`, A5 and Cartesian):
 - Lake at rest over an island stays at rest to round-off (S1). Closed
@@ -1295,8 +1308,14 @@ branch.
   0.0094 → 0.0042 (order 2) as the grid halves (S3). Ritter dry-bed front
   within 5% (S4).
 - Open boundaries: storage + outflow = initial volume (S5).
-- Uniform Manning flow holds normal depth and velocity: A5 0.4% / 1.1%,
-  Cartesian 0.07% / 0.3% (S6).
+- Uniform Manning flow at 1 m holds normal depth and velocity: A5 0.14% /
+  0.4%, Cartesian 0.05% / 0.15% (S6).
+- Thin sheet flow at 2 cm, where the bed step across a face exceeds the
+  depth: Cartesian 0.04% / 0.1%, A5 within 8% (S10). Order 1 cannot do
+  this (velocities 37–67% low): first-order hydrostatic reconstruction is
+  not a rain-on-grid reference.
+- Rained 0.1% plane, 20 mm/h, 6 h: the interior depth profile matches the
+  kinematic steady state h = (r·x·n/√S)^0.6 within 1–3 mm on both meshes.
 - The eddy viscosity removes shear energy (S8). HDF5 frames carry the SWE
   velocity (S9).
 
@@ -1312,110 +1331,100 @@ four times finer:
 The two meshes are equally accurate to within about 10%. A5 is slightly less
 isotropic.
 
-**Carlisle** (6 h, 10 mm/h rain, `--dt-max 10`; runs in `test/wp1_runs/r1/`).
+**Carlisle** (6 h, 10 mm/h rain, `--dt-max 10`; runs in `test/wp1_runs/r1b/`).
 The reference converges in its own numerical parameters:
 
 | | A5 res-18 | Cartesian 20 m |
 |---|---|---|
-| storage, order 2, C 0.7 (Mm³) | 3.439 | 2.632 |
-| C 0.35 | 3.439 (rms Δh 0.7 cm) | 2.632 (0.9 cm) |
-| twin (rain × (1 + 10⁻¹⁰)), rms Δh | 1×10⁻¹⁰ m | 3×10⁻⁵ m |
-| `--swe-viscosity 0.3` | 3.441 (0.8 cm) | 2.632 (1.0 cm) |
-| order 1 | 3.778 (CSI 0.80) | 2.911 (CSI 0.59) |
-| steps, wall time (8 threads) | 77 179, 10 m 41 s | 96 056, 13 m 46 s |
+| storage, order 2, C 0.7 (Mm³) | 2.690 | 2.331 |
+| C 0.35 | 2.690 (rms Δh 0.2 cm) | 2.331 (1.6 cm) |
+| twin (rain × (1 + 10⁻¹⁰)), rms Δh | 3×10⁻⁴ m | — |
+| `--swe-viscosity 0.3` | 2.690 (0.2 cm) | 2.332 (0.1 cm) |
+| order 1 | 3.776 | 2.911 |
+| arrival (s; 50 000 m³ out) | 6 688 | 5 736 |
 
-Clamped volume is 0 and the mass-balance error a few m³ in every run. A
-physical eddy viscosity changes nothing at this scale. Second- against
-first-order is a 10% storage difference, so first order is not a reference
-here. A run costs about 8× the steps of the local-inertial schemes, because
-the step is bounded by |u| + √(gh) summed over the faces.
+Clamped volume is 0 and the mass-balance error a few m³ in every run.
+Second- against first-order is a 25–40% storage difference: first order is
+not a reference here. A CPU run costs about 8× the steps of the
+local-inertial schemes, because the step is bounded by |u| + √(gh) summed
+over the faces; on the GPU (`--backend gpu`) the 10 m Cartesian reference
+(146 000 cells) took 36 minutes.
 
 **Local-inertial schemes against the reference, same mesh** (frame 24,
 t ≈ 20 700 s; `test/diag_vs_reference.jl`).
 - Columns: storage ratio; rms depth difference over wet cells; CSI and bias
   of the extent at 0.1 m; mean speed ratio in cells over 3 m deep.
-- Every local-inertial run uses `--limiter positivity --q-centre-theta 1
+- Every Δt-consistent run uses `--limiter positivity --q-centre-theta 1
   --boundary-limiter positivity --eta-filter 0.05` plus the momentum damping
-  shown, except the recommended-scheme rows.
-- The order-1 SWE row is the yardstick: the difference between two valid
-  discretisations of the full equations.
+  shown. "0.2 scheme" is the 0.2.x default.
 
 | mesh | run | storage | rms Δh | CSI | bias | speed ≥ 3 m |
 |---|---|---|---|---|---|---|
-| A5 | SWE order 1 | 1.097 | 0.13 m | 0.80 | 0.99 | 0.79 |
-| A5 | recommended scheme | 1.418 | 0.37 m | 0.68 | 1.19 | 0.42 |
-| A5 | η filter only | 0.992 | 0.21 m | 0.74 | 0.87 | 1.31 |
-| A5 | wave 0.05 | 1.007 | 0.23 m | 0.75 | 0.89 | 0.90 |
-| A5 | wave 0.2 | 1.212 | 0.37 m | 0.72 | 1.05 | 0.66 |
-| A5 | flow 0.5 | 1.184 | 0.38 m | 0.71 | 1.02 | 0.81 |
-| Cartesian | SWE order 1 | 1.104 | 0.19 m | 0.59 | 0.85 | 0.85 |
-| Cartesian | recommended scheme | 1.436 | 0.40 m | 0.52 | 1.05 | 0.47 |
-| Cartesian | η filter only | 0.930 | 0.19 m | 0.60 | 0.74 | 0.92 |
-| Cartesian | wave 0.05 | 1.014 | 0.20 m | 0.60 | 0.77 | 0.77 |
-| Cartesian | wave 0.2 | 1.096 | 0.23 m | 0.58 | 0.83 | 0.69 |
-| Cartesian | flow 0.5 | 1.035 | 0.20 m | 0.60 | 0.79 | 0.75 |
+| A5 | SWE order 1 | 1.394 | 0.35 m | 0.56 | 1.21 | 0.75 |
+| A5 | 0.2 scheme | 1.802 | 0.51 m | 0.48 | 1.45 | 0.40 |
+| A5 | η filter only | 1.260 | 0.29 m | 0.61 | 1.07 | 1.18 |
+| A5 | wave 0.05 | 1.280 | 0.31 m | 0.60 | 1.09 | 0.83 |
+| A5 | wave 0.2 | 1.540 | 0.46 m | 0.53 | 1.28 | 0.60 |
+| A5 | flow 0.5 | 1.504 | 0.46 m | 0.55 | 1.25 | 0.73 |
+| Cartesian | SWE order 1 | 1.244 | 0.27 m | 0.62 | 0.99 | 0.88 |
+| Cartesian | 0.2 scheme | 1.620 | 0.47 m | 0.54 | 1.23 | 0.50 |
+| Cartesian | η filter only | 1.049 | 0.19 m | 0.68 | 0.86 | 0.99 |
+| Cartesian | wave 0.05 | 1.144 | 0.21 m | 0.67 | 0.90 | 0.81 |
+| Cartesian | wave 0.2 | 1.236 | 0.26 m | 0.64 | 0.96 | 0.73 |
+| Cartesian | flow 0.5 | 1.168 | 0.22 m | 0.66 | 0.92 | 0.80 |
 
-- **The recommended scheme is too dissipative.** It stores 42–44% more than
-  the reference on both meshes, and its deep-water speeds are less than half
-  the reference's. That is the implicit resistance of Δt-dependent
-  Q-centring (§15.9).
-- **The Δt-consistent schemes bracket the reference.**
-  - The η filter alone is slightly under-dissipative: storage 0.93–0.99 and
-    deep speeds up to 1.3× on A5.
-  - Weak momentum damping (wave 0.05) matches storage within 1–2% on both
-    meshes, with deep speeds 0.77–0.90.
-  - The stronger settings over-damp.
-  - So the eddy viscosity that §15.9 could not fix by argument is fixed by
-    the reference: about C_m = 0.05 (wave). That is far above a physical
-    turbulent viscosity (§15.9). In a scheme without advection it stands in
-    for momentum transport, not turbulence.
-- **The spatial agreement is limited by the discretisation, not the
-  scheme.** The best local-inertial runs reach a CSI of 0.75 (A5) and 0.60
-  (Cartesian) against the reference; SWE order 1 reaches 0.80 and 0.59. All
-  local-inertial runs wet less area above 0.1 m (bias 0.74–0.89 for the
-  Δt-consistent ones) while storing about the same volume: they hold water
-  deeper and less widely.
+- **Every local-inertial scheme is more dissipative than the reference,
+  and the momentum damping only adds to it.** The η filter alone is
+  closest on both meshes (+5% storage on Cartesian, +26% on A5); each
+  damping setting stores more. The 0.2 scheme stores 62–80% more.
+- **On A5 the local-inertial excess is larger.** It is not at the
+  boundaries (more than 20 cells from the domain edge: +668 of +691 k m³)
+  and is spread over every depth class, the largest part (about 200 k m³)
+  on cells the reference has dry. SWE order 1 shows the same pattern, more
+  strongly (+322 k m³ on those cells). Both use a step bed with face sills
+  max(z_i, z_j); the second-order reference reconstructs a sloping face bed,
+  across which thin films leave shallow hollows that a step bed holds. So
+  on Carlisle at ~20 m much of the remaining gap is the bed representation,
+  not the dissipation.
 
-**The reference is not mesh-converged on Carlisle at ~20 m.** A Cartesian
-refinement (10, 20 and 40 m grids, all averaged from the 5 m LiDAR) and a
-cross-mesh map (nearest cell centre) give:
+**Resolution.** A Cartesian refinement (10, 20 and 40 m grids, all averaged
+from the 5 m LiDAR), each run with the reference and the local-inertial
+schemes, and a cross-mesh map to the 10 m reference (nearest cell centre):
 
-| SWE, order 2 | cell area | storage (Mm³) | arrival (s) | CSI vs 10 m | η − η₁₀ (mean) |
-|---|---|---|---|---|---|
-| Cartesian 40 m | 1600 m² | 3.564 | 11 441 | 0.35 | +0.59 m |
-| A5 res-18 | 493 m² | 3.439 | 8 668 | 0.41 | +0.54 m |
-| Cartesian 20 m | 400 m² | 2.632 | 6 641 | 0.50 | +0.23 m |
-| Cartesian 10 m | 100 m² | 2.184 | 5 231 | — | — |
+| run | 40 m | 20 m | 10 m | CSI vs SWE 10 m (20 m run) |
+|---|---|---|---|---|
+| SWE, order 2 | 3.154 | 2.331 | 2.107 | 0.53 |
+| η filter only | 3.268 | 2.447 | 2.278 | 0.56 |
+| η filter + wave 0.05 | 3.572 | 2.682 | 2.420 | — |
+| 0.2 scheme | 4.553 | 3.804 | 3.833 | — |
 
-(Arrival is when 50 000 m³ has left the domain.)
+(6 h storage, Mm³; arrival of the reference 8 971 / 5 736 / 5 031 s.)
 
-- Each halving of the cell size changes 6 h storage by 17–26% and brings
-  the arrival forward by 23–80 minutes. The finer grid conveys more: the Petteril and
-  Caldew channels are one or two 20 m cells wide, so their conveyance
-  depends on how the channel's cells connect.
+- The reference converges quickly (differences 0.82, then 0.22 Mm³;
+  extrapolated about 2.03 Mm³). The η filter converges alongside it,
+  4–8% above (extrapolated about 2.24: the local-inertial limit), and at
+  20 m its flood extent matches the fine reference as well as the 20 m
+  reference does (CSI 0.56 against 0.53). Momentum damping adds a further
+  6–10%. The 0.2 scheme does not converge at all (3.80 → 3.83): its
+  Q-centring resistance grows as Δt shrinks with the cells.
+- A5 res-18 (cells of a 22 m square) sits between the 20 and 40 m Cartesian
+  references: storage 2.690 and CSI 0.47 against the 10 m reference place it
+  at about 28–29 m. The smooth dam break shows no such gap, so it comes from
+  channels narrower than a cell (the Petteril and Caldew are one or two cells
+  wide); a straight-channel series across orientations and resolutions
+  tests that directly.
 - Swapping beds between the meshes (each cell takes the bed of the nearest
-  cell of the other mesh) makes both worse: 4.181 Mm³ on A5 geometry with
-  the Cartesian bed, 3.834 on Cartesian geometry with the A5 bed. Resampling
-  breaks narrow channels whichever way it goes. Bed and cell geometry cannot
-  be separated this way.
-- A5 res-18 behaves like a Cartesian grid of about 28–37 m, depending on
-  the measure, although its cells are the size of a 22 m square. The smooth
-  dam break shows no such gap, so it comes from how channels narrower than a
-  cell map onto the cell graph. A straight-channel test across orientations
-  on both meshes would settle it.
+  cell of the other mesh) breaks narrow channels whichever way it goes, so
+  bed and cell geometry cannot be separated that way.
 
 **Consequences.**
-- R1 is the reference for a scheme **on a given mesh and bed**: dissipation,
-  momentum exchange, Δt and Courant effects. On that footing the
-  Δt-consistent scheme with weak momentum damping (η filter 0.05, wave
-  0.05) is the closest local-inertial configuration on both polygon types.
-  The recommended scheme is the furthest.
-- Comparing A5 and Cartesian on Carlisle compares two topographic
-  discretisations; that difference is as large as a factor-two change in
-  resolution and larger than any scheme effect above. Polygon consistency of
-  the hydraulics is best judged on synthetic problems (the dam break above),
-  and of the topography on resolution sequences and channel tests.
-- A run costs about 10× the local-inertial wall time on the CPU. The
-  per-face/per-cell structure is ready for a GPU backend, which would make
-  the reference affordable at the resolutions the convergence table
-  needs (the 10 m run took 3.5 h).
+- On a given mesh and bed, the Δt-consistent scheme with the η filter alone
+  is the closest local-inertial configuration on both polygon types and at
+  every resolution tested; the momentum damping moves it away from the
+  reference (its case rests on velocity noise alone, §15.9), and the 0.2
+  scheme is far from it and not resolution-convergent.
+- The remaining local-inertial excess on A5 is mostly a bed-representation
+  effect shared with first-order SWE, and the A5/Cartesian difference on
+  Carlisle is as large as a factor-two change in resolution. Polygon
+  consistency of the hydraulics is best judged on synthetic problems, and of
+  the topography on resolution sequences and channel tests.
