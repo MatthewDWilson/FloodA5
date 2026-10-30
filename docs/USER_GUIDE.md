@@ -293,13 +293,11 @@ for the flow model; explicit flags always win. `--scheme v0.2` restores the
 
 | Flow model | `--scheme recommended` (default) | `--scheme v0.2` |
 |---|---|---|
-| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter positivity --boundary-limiter positivity --cfl-mode local --q-centre-theta 1 --eta-filter 0.05 --momentum-damping 0.05` | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter positivity --boundary-limiter positivity --cfl-mode local --q-centre-theta 1 --eta-filter 0.05` | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
 | sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1` | the same |
 
-If explicit flags remove what the momentum damping needs (the diamond face
-gradient, edge momentum, vector friction), the scheme's damping is switched
-off with a notice; an explicit `--momentum-damping` with such flags is an
-error. See `HYDRAULICS.md` §15.11 for the evidence. The defaults listed in the
+`--momentum-damping` is off in every scheme. See `HYDRAULICS.md` §15.11 for
+the evidence. The defaults listed in the
 table above for the individual flags are their `--scheme legacy` values.
 
 ### 4.4 Water source options

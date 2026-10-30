@@ -7,9 +7,8 @@
 #       scheme; every scheme's options are accepted by initialise_flow_model
 #   D2  CLI end to end on a small Cartesian mesh: the recommended (0.3.0)
 #       options by default, the 0.2.x options with --scheme v0.2, the
-#       pre-2026-10 options with --scheme legacy, explicit flags overriding
-#       the scheme, and the scheme's momentum damping dropped when explicit
-#       flags remove what it needs
+#       pre-2026-10 options with --scheme legacy, and explicit flags
+#       overriding the scheme
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_default_scheme.jl
 
@@ -29,7 +28,7 @@ const _LEGACY = (gradient_correction = false, face_flux_method = :legacy,
     @test r == merge(_LEGACY, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                                friction_model = :vector, limiter = :positivity, cfl_mode = :local,
                                q_centre_mode = :consistent, q_centre_theta = 1.0,
-                               eta_filter = 0.05, momentum_damping = 0.05))
+                               eta_filter = 0.05))
     v = scheme_options(:v02, :standard)
     @test v == merge(_LEGACY, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                                friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
@@ -51,7 +50,7 @@ const _LEGACY = (gradient_correction = false, face_flux_method = :legacy,
     mesh = generate_cartesian_mesh_bounds(0.0, 0.0, 4.5dlat, 4.5dlat, 20.0; lat_ref = 0.0)
     st = initialise_flow_model(mesh, StandardFlow(); r...)
     @test st.friction_model === :vector && st.limiter === :positivity && st.cfl_mode === :local
-    @test st.q_centre_theta == 1.0 && st.eta_filter_cs == 0.05 && st.mom_damping_cs == 0.05
+    @test st.q_centre_theta == 1.0 && st.eta_filter_cs == 0.05 && st.mom_damping_cs == 0.0
     st = initialise_flow_model(mesh, StandardFlow(); v...)
     @test st.limiter === :hybrid && st.q_centre_mode === :consistent && st.eta_filter_cs == 0.0
 end
@@ -81,7 +80,7 @@ end
     @test occursin("limiter = positivity, cfl_mode = local", rec)
     @test occursin("scheme = recommended", rec)
     @test occursin("q_centre_theta = 1.0", rec)
-    @test occursin("eta_filter = 0.05", rec) && occursin("momentum_damping = 0.05 (wave)", rec)
+    @test occursin("eta_filter = 0.05", rec) && !occursin("momentum_damping", rec)
     @test occursin("boundary_limiter = positivity", rec)
     # The 0.2.x default
     v02, _ = _cli_log("--scheme", "v0.2")
@@ -98,13 +97,7 @@ end
     @test occursin("scheme = legacy", mix)
     @test occursin("q_centre_mode = legacy", mix)
     @test !occursin("eta_filter", mix) && !occursin("momentum_damping", mix)
-    # An explicit flag that removes what the scheme's momentum damping needs
-    # switches the damping off (with a notice); the η filter stays.
-    off, full = _cli_log("--face-flux-method", "legacy")
-    @test occursin("face_flux_method = legacy", off) && !occursin("momentum_damping", off)
-    @test occursin("eta_filter = 0.05", off)
-    @test occursin("Momentum damping of --scheme recommended switched off", full)
-    # ... but an explicit --momentum-damping is honoured
+    # Explicit damping options are honoured
     exp, _ = _cli_log("--momentum-damping", "0.1", "--eta-filter", "0")
     @test occursin("momentum_damping = 0.1 (wave)", exp) && !occursin("eta_filter", exp)
 end

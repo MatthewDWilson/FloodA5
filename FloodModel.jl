@@ -3803,10 +3803,11 @@ boundary limiter comes from `scheme_boundary_limiter`.
       standard  the Δt-consistent scheme: gradient correction on,
                 diamond-wetdry face gradient, vector friction, positivity
                 limiter (and positivity at open boundaries), local CFL, edge
-                momentum, no Q-centring (θ = 1), η filter C_s = 0.05 and
-                momentum damping C_m = 0.05 (wave). Closest local-inertial
-                configuration to the full shallow-water reference on both
-                A5 and Cartesian meshes (HYDRAULICS.md §15.10–15.11).
+                momentum, no Q-centring (θ = 1), η filter C_s = 0.05; no
+                momentum damping. The closest local-inertial configuration
+                to the full shallow-water reference on A5 and Cartesian
+                meshes, and resolution-convergent (HYDRAULICS.md
+                §15.10–15.11).
       sgs       as :v02 (no reference yet: the SWE solver has no sub-grid
                 representation)
   :v02        the 0.2.x default ("recommended" until 0.3.0)
@@ -3845,8 +3846,7 @@ function scheme_options(scheme::Symbol, flow_method::Symbol)
                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
                          q_centre_mode = :consistent))
     scheme === :v02 && return v02
-    return merge(v02, (limiter = :positivity, q_centre_theta = 1.0,
-                       eta_filter = 0.05, momentum_damping = 0.05))
+    return merge(v02, (limiter = :positivity, q_centre_theta = 1.0, eta_filter = 0.05))
 end
 
 """
@@ -3922,22 +3922,10 @@ function run_flood_model(;
     cfl_mode            = something(cfl_mode,            so.cfl_mode)
     q_centre_mode = something(q_centre_mode, so.q_centre_mode)
     q_centre_theta      = something(q_centre_theta,      so.q_centre_theta)
-    damping_from_scheme = momentum_damping === nothing
     eta_filter          = something(eta_filter,          so.eta_filter)
     momentum_damping    = something(momentum_damping,    so.momentum_damping)
     momentum_damping_scale = something(momentum_damping_scale, so.momentum_damping_scale)
     boundary_limiter    = something(boundary_limiter, scheme_boundary_limiter(scheme, flow_method))
-    # The scheme's momentum damping needs the diamond gradient, edge momentum
-    # and vector friction; if explicit flags remove one of them, drop the
-    # damping (an explicit --momentum-damping is validated, and refused, by
-    # initialise_flow_model instead).
-    if damping_from_scheme && momentum_damping > 0.0 &&
-       !(gradient_correction && face_flux_method in (:diamond, :diamond_wetdry) &&
-         momentum_model === :edge && friction_model === :vector)
-        @info "Momentum damping of --scheme $(scheme) switched off: it needs the diamond " *
-              "face gradient, edge momentum and vector friction"
-        momentum_damping = 0.0
-    end
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
@@ -4557,8 +4545,7 @@ Flow model options:
                          standard: gradient correction on, diamond-wetdry,
                                    vector friction, positivity limiter (also
                                    at open boundaries), local CFL, no
-                                   Q-centring, η filter 0.05, momentum
-                                   damping 0.05 (wave)
+                                   Q-centring, η filter 0.05
                          sgs:      as v0.2
                        v0.2    the 0.2.x default
                          standard: gradient correction on, diamond-wetdry,
@@ -4700,10 +4687,9 @@ Flow model options:
                      circulating part of the face discharges — exactly
                      divergence-free, so it moves no water — at a rate in
                      physical units: eddy viscosity ν = C_m·V·ℓ around each
-                     mesh vertex. 0 = off. Default: from --scheme (0.05 for
-                     standard flow, 0 under v0.2/legacy; switched off if
-                     explicit flags remove the diamond gradient, edge
-                     momentum or vector friction it needs).
+                     mesh vertex. 0 (default, every scheme) = off. Moves
+                     results away from the full shallow-water reference
+                     (HYDRAULICS.md §15.10); use it to reduce velocity noise.
   --momentum-damping-scale wave|flow
                      V = √(g h) (wave, default: a numerical floor) or the local
                      flow speed |u| (flow: eddy-viscosity-like).

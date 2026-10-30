@@ -67,10 +67,10 @@ relevant (e.g. `HYDRAULICS.md`'s directional-bias sections).
 
 **Current defaults (0.3.0):** `--scheme recommended`. For the standard solver
 that is the Δt-consistent scheme: the directional-bias corrections, vector
-friction, a local CFL timestep, positivity limiting, a free-surface filter and
-divergence-free momentum damping in place of Q-centring — see
-[Solvers](#solvers). It is the local-inertial configuration closest to the
-full shallow-water reference (`--flow-model swe`) on A5 and Cartesian meshes.
+friction, a local CFL timestep, positivity limiting and a free-surface filter
+in place of Q-centring — see [Solvers](#solvers). It is the local-inertial
+configuration closest to the full shallow-water reference (`--flow-model
+swe`) on A5 and Cartesian meshes, and it converges with resolution.
 `--scheme v0.2` reproduces the 0.2.x default exactly, and `--scheme legacy` the
 original Bates (2010) configuration. Results from earlier versions differ: the
 changes are listed in [CHANGELOG.md](CHANGELOG.md) and marked ⚠ there; the
@@ -221,7 +221,7 @@ configuration.
 | Wet/dry limiter | positivity, one scale per donor cell, also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | per-edge (legacy) | hybrid | per-edge |
 | Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | per-cell CFL | smallest cell, 99th-percentile depth |
 | Momentum smoothing | none (`--q-centre-theta 1`) | none | consistent Q-centring, θ = 0.9 | Q-centring θ = 0.9 as originally written |
-| Damping | free-surface filter and divergence-free momentum damping, both at rates that do not depend on Δt (`--eta-filter 0.05 --momentum-damping 0.05`) | none | none | none |
+| Damping | free-surface filter at a rate that does not depend on Δt (`--eta-filter 0.05`) | none | none | none |
 
 Why these:
 - **Directional bias** has two causes: the face-normal gradient on
@@ -238,24 +238,28 @@ Why these:
   Q-centring.
 - **Q-centring is replaced in 0.3.0** because even in its consistent form it
   damps as a resistance that grows with Δt: results changed with the Courant
-  number, and against the full shallow-water reference it held 42–44% too
-  much water on the Carlisle test, on both mesh types. The free-surface
-  filter and the momentum damping remove the same grid-scale noise at rates
-  set in physical units, so results converge with Δt; with them the
-  standard solver matches the reference's storage to within 1–2% on both
-  meshes (`docs/HYDRAULICS.md` §15.8–15.11).
+  number and did not converge with resolution, and against the full
+  shallow-water reference it held 60–80% too much water on the Carlisle
+  test. The free-surface filter removes the grid-scale surface noise at a
+  rate set in physical units, so results converge with Δt and with
+  resolution; on Cartesian grids the standard solver then stays within
+  4–8% of the reference's storage at 10–40 m (`docs/HYDRAULICS.md`
+  §15.8–15.11). `--momentum-damping` (off by default) additionally removes
+  circulating velocity noise, at the cost of 6–10% more storage.
 
 > **Results from before October 2026 are affected** by that Q-centring defect
 > (A5, both solvers) and, for SGS, by a table bug that attached edge sills and
 > R–A curves to the wrong neighbour for most cells. Old SGS meshes are refused
 > until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
 
-Known limitations: the momentum damping is an eddy viscosity whose strength
-(0.05) is calibrated against the full shallow-water reference on two test
-domains, not derived; open (zero-gradient) boundaries hold water back on
-slopes; and channels narrower than a cell are resolved differently on A5 and
-Cartesian meshes, an effect as large as a factor-two change in resolution on
-the Carlisle test. See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md), which also
+Known limitations: the default leaves more velocity noise in deep channels
+than the 0.2.x scheme did (`--momentum-damping` removes it, at some cost in
+conveyance); open (zero-gradient) boundaries hold water back on slopes; on
+A5 the local-inertial solver stores more than the full shallow-water
+reference on the Carlisle test (+26%, against +5% on a Cartesian grid),
+mostly through its step-bed representation; and channels narrower than a
+cell are resolved differently on A5 and Cartesian meshes, an effect as large
+as a factor-two change in resolution there. See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md), which also
 records the options that were tried and rejected. The CLI flags are documented in
 [docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md), and the physics in
 [docs/METHODS.md](docs/METHODS.md).
