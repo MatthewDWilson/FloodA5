@@ -123,7 +123,8 @@ end
 end
 
 # Phase F (as _reconstruct_qvec!): cell discharge vectors by WLSQ projection
-@inline function _qvec_k!(i, a, use_flux_Q::Bool)
+# (Val: the unused discharge array is compiled out — SGS has no `flux` field)
+@inline function _qvec_k!(i, a, ::Val{use_flux_Q}) where {use_flux_Q}
     qu = 0.0; qv = 0.0; nb = a.maxnb
     @inbounds for s in 1:nb
         e = a.cei[s, i]
@@ -378,7 +379,7 @@ function _std_step!(be::ComputeBackend, a, dt::Float64)
         foreach_index!(be, a.ne, _ef_scale_k!, a)
         foreach_index!(be, a.n, _ef_apply_k!, a)
     end
-    a.need_qvec && foreach_index!(be, a.n, _qvec_k!, a, false)
+    a.need_qvec && foreach_index!(be, a.n, _qvec_k!, a, Val(false))
     if a.md_cs > 0.0
         foreach_index!(be, a.ne, _md_face_k!, a)
         foreach_index!(be, a.nvm, _md_vertex_k!, a, a.md_cs, a.md_wave, dt)

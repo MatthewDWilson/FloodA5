@@ -220,7 +220,7 @@ from the stage-1 loop body; bit-identical to it.
             M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
-        ti = M.tables[ci]; tj = M.tables[cj]
+        ti = _tab(M.tables, ci); tj = _tab(M.tables, cj)   # SGSTable, or views on a device (WP5)
         z_sill = M.sill[e]
         isnan(z_sill) && (z_sill = min(ti.z_min, tj.z_min))
         if isnan(M.width[e]) || isnan(M.L[e]) || isnan(M.cos_theta[e])

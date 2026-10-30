@@ -967,12 +967,11 @@ function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
                         ws::StepWorkspace, sgs::Bool)
     cptr, cedge = _cell_csr!(state, ws)
     ci = state.edges.cell_i
-    if !sgs                                  # WP5: body shared with the device path
-        a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, ci = ci, cell_area = state.cell_area,
-             volume = state.volume, water_depth = state.water_depth)
-        foreach_index!(CPUThreads(), length(state.cell_ids), _gather_std_k!, a)
-        return nothing
-    end
+    # WP5: bodies shared with the device path (std_device.jl, sgs_device.jl)
+    a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, ci = ci, cell_area = state.cell_area,
+         volume = state.volume, water_depth = state.water_depth, tables = state.sgs_tables)
+    foreach_index!(CPUThreads(), length(state.cell_ids), sgs ? _gather_sgs_k! : _gather_std_k!, a)
+    return nothing
     @batch per=core for i in 1:length(state.cell_ids)
         s = 0.0
         @inbounds for k in cptr[i]:cptr[i + 1] - 1
@@ -3273,7 +3272,7 @@ function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
     a = (cei = state.cell_edge_index, flux = edges.flux, flux_Q = edges.flux_Q, width = edges.width,
          mom_weights = state.mom_weights, maxnb = state.max_neighbours,
          qvec_u = state.qvec_u, qvec_v = state.qvec_v)
-    foreach_index!(CPUThreads(), length(state.cell_ids), _qvec_k!, a, use_flux_Q)  # std_device.jl
+    foreach_index!(CPUThreads(), length(state.cell_ids), _qvec_k!, a, Val(use_flux_Q))  # std_device.jl
     return nothing
 end
 
@@ -3332,9 +3331,9 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     # (WP4: the wetted area computed here was never used — removed.)
     ws  = _edge_slots!(state, _workspace!(state))
     wse = ws.wse
-    @batch per=core for i in 1:n                 # per-cell writes only (WP4)
-        @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
-    end
+    # per-cell writes only (WP4); body shared with the device path (WP5)
+    foreach_index!(CPUThreads(), n, _sgs_wse_k!, (wse = wse, tables = state.sgs_tables,
+                                                  volume = state.volume))
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
     # Unlike step_standard!, `wse` here is already a full per-cell array
@@ -3411,6 +3410,7 @@ include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
 include(joinpath(@__DIR__, "surfacewater", "swe_reference.jl"))
 include(joinpath(@__DIR__, "surfacewater", "std_device.jl"))
+include(joinpath(@__DIR__, "surfacewater", "sgs_device.jl"))
 include(joinpath(@__DIR__, "surfacewater", "device_run.jl"))
 
 # ---------------------------------------------------------------------------

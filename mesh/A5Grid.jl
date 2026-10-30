@@ -1788,7 +1788,7 @@ This preserves a positive driving head between neighbouring overfull cells and
 allows the SGS solver to propagate volume across a flat upstream basin even when
 individual cells have filled their hypsometric range.
 """
-@inline function wse_from_volume(t::SGSTable, V::Float64)::Float64
+@inline function wse_from_volume(t, V::Float64)::Float64      # SGSTable or a view of one (WP5)
     V <= 0.0 && return t.z_min
     V >= t.vol_curve[end] && return t.z_max + (V - t.vol_curve[end]) / t.cell_area
     # Binary search for bracketing interval
@@ -1806,7 +1806,7 @@ end
 
 Return the wetted plan area (m²) at a given WSE by interpolating area_curve.
 """
-@inline function wetted_area_from_wse(t::SGSTable, wse::Float64)::Float64
+@inline function wetted_area_from_wse(t, wse::Float64)::Float64   # SGSTable or a view (WP5)
     wse <= t.z_min && return 0.0
     wse >= t.z_max && return t.cell_area
     lo, hi = 1, length(t.elev_bins)
@@ -1869,7 +1869,7 @@ end
 with one bracket search instead of three (WP4, 2026-10). Bit-identical to the
 separate calls: same bracket, same interpolation weights, same edge cases.
 """
-@inline function edge_area_radius(t::SGSTable, slot::Int, wse::Float64)::Tuple{Float64,Float64}
+@inline function edge_area_radius(t, slot::Int, wse::Float64)::Tuple{Float64,Float64}   # SGSTable or a view
     eb = t.elev_bins; ca = t.edge_area_curves; cp = t.edge_perim_curves
     nb = length(eb)
     a_end = ca[nb, slot]; p_end = cp[nb, slot]

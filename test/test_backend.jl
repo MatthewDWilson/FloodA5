@@ -9,10 +9,11 @@
 #   K2  standard flow, likewise, for --scheme recommended (η filter,
 #       momentum damping, positivity at boundaries) and v0.2 (consistent
 #       Q-centring, hybrid limiter)
-#   K3  unsupported device options are refused (cell momentum, legacy CFL,
-#       SGS)
+#   K5  SGS (synthetic prismatic tables), likewise, with the legacy and the
+#       positivity limiter
+#   K3  unsupported device options are refused (cell momentum, legacy CFL)
 #   K4  (FLOODA5_TEST_GPU=1 only) the GPU agrees with the CPU after a short
-#       wet run: SWE to 1e-12, standard flow to 1e-9 (relative volume)
+#       wet run: SWE to 1e-12, standard flow and SGS to 1e-9 (relative volume)
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_backend.jl
 
@@ -80,22 +81,46 @@ end
     end
 end
 
+# SGS: the standard state with synthetic prismatic tables (as test_wp4_stage2.jl)
+function _sgs_state(mesh; kw...)
+    m, s, src = _state(mesh, StandardFlow(); kw...)
+    nb = 8; nsl = s.max_neighbours
+    s.sgs_tables = [begin
+        z = s.elevation[i]; A = s.cell_area[i]
+        eb = collect(range(z, z + 2.0; length = nb))
+        SGSTable(eb, A .* (eb .- z) .* (1 .+ 0.1 .* (eb .- z)), fill(A, nb), A, z, z + 2.0,
+                 repeat(10.0 .* (eb .- z) .+ 0.5, 1, nsl), repeat(10.0 .+ 2.0 .* (eb .- z), 1, nsl))
+    end for i in eachindex(s.cell_ids)]
+    return m, s, src
+end
+
+@testset "K5 — SGS: device path on the CPU = CPU threads ($lab, $(kw.limiter))" for (lab, mesh) in _MESHES,
+        kw in (scheme_options(:recommended, :sgs), merge(scheme_options(:recommended, :sgs), (; limiter = :positivity)))
+    m, s1, src = _sgs_state(mesh; kw...); s2 = deepcopy(s1)
+    _run!(m, s1, src, SGSFlow(), CPUThreads()); _run!(m, s2, src, SGSFlow(), KACPU)
+    @test s1.vol_removed > 0.0
+    @test s1.volume == s2.volume && s1.edges.flux_Q == s2.edges.flux_Q
+    @test s1.qvec_u == s2.qvec_u && s1.water_depth == s2.water_depth
+    @test s1.vol_removed == s2.vol_removed
+end
+
 @testset "K3 — unsupported device options are refused" begin
     m = _MESHES[2][2]
     for kw in ((momentum_model = :cell,), (cfl_mode = :legacy,))
         _, s, src = _state(m, StandardFlow(); merge(scheme_options(:v02, :standard), kw)...)
         @test_throws ArgumentError DeviceRun(s, StandardFlow(), KACPU, AbstractSource[src])
     end
-    _, s, src = _state(m, StandardFlow(); scheme_options(:v02, :standard)...)
+    _, s, src = _sgs_state(m; merge(scheme_options(:v02, :sgs), (; cfl_mode = :legacy))...)
     @test_throws ArgumentError DeviceRun(s, SGSFlow(), KACPU, AbstractSource[src])
 end
 
 if get(ENV, "FLOODA5_TEST_GPU", "") == "1"
     gpu = _cuda_backend()
     @testset "K4 — GPU agrees with the CPU ($lab, $(typeof(method)))" for (lab, mesh) in _MESHES,
-                                                                         method in (SWEFlow(), StandardFlow())
-        kw = method isa StandardFlow ? scheme_options(:recommended, :standard) : (;)
-        m, s1, src = _state(mesh, method; kw...); s2 = deepcopy(s1)
+                                                                         method in (SWEFlow(), StandardFlow(), SGSFlow())
+        m, s1, src = method isa SGSFlow ? _sgs_state(mesh; scheme_options(:recommended, :sgs)...) :
+                     _state(mesh, method; (method isa StandardFlow ? scheme_options(:recommended, :standard) : (;))...)
+        s2 = deepcopy(s1)
         _run!(m, s1, src, method, CPUThreads(); T = 60.0)
         Base.invokelatest(_run!, m, s2, src, method, gpu; T = 60.0)
         rel = maximum(abs.(s1.volume .- s2.volume) ./ max.(s1.volume, 1.0))

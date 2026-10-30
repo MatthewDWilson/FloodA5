@@ -11,8 +11,9 @@
 # interpolation) and added on the device in source order by a one-thread
 # kernel, so cells fed by several sources get the same sum as on the CPU.
 #
-# Solvers: `--flow-model swe` (stage 1) and `standard` (stage 2; the options
-# listed in surfacewater/std_device.jl).
+# Solvers: `--flow-model swe` (stage 1), `standard` (stage 2; the options
+# listed in surfacewater/std_device.jl) and `sgs` (stage 3, local CFL).
+# Not on a device: --limiter-stats, legacy CFL, cell/blend momentum.
 
 struct DeviceRun{K, B<:ComputeBackend, AT, VI, VF}
     be         :: B
@@ -27,8 +28,8 @@ end
 """
     DeviceRun(state, method, backend, sources) → DeviceRun
 
-Copy the solver's arrays to the device. `SWEFlow` and `StandardFlow` (with
-edge momentum and the local CFL) are supported.
+Copy the solver's arrays to the device. `SWEFlow`, `StandardFlow` (edge
+momentum, local CFL) and `SGSFlow` (local CFL) are supported.
 """
 function DeviceRun(state::FlowState, method::FlowMethod, be::ComputeBackend, sources)
     for s in sources
@@ -50,15 +51,18 @@ function DeviceRun(state::FlowState, method::FlowMethod, be::ComputeBackend, sou
         state.cfl_mode === :local ||
             throw(ArgumentError("a device backend supports --cfl-mode local only"))
         return stage(:std, to_device(be, _std_device_args(state)))
+    elseif method isa SGSFlow
+        state.cfl_mode === :local ||
+            throw(ArgumentError("a device backend supports --cfl-mode local only"))
+        return stage(:sgs, to_device(be, _sgs_device_args(state)))
     end
-    throw(ArgumentError("a device backend supports --flow-model swe and standard so far " *
-                        "(got $(typeof(method)))"))
+    throw(ArgumentError("flow method $(typeof(method)) is not supported on a device backend"))
 end
 
 _dev_V(dev::DeviceRun{:swe}) = dev.a.V
-_dev_V(dev::DeviceRun{:std}) = dev.a.volume
+_dev_V(dev::DeviceRun) = dev.a.volume
 _dev_A(dev::DeviceRun{:swe}) = dev.a.A
-_dev_A(dev::DeviceRun{:std}) = dev.a.cell_area
+_dev_A(dev::DeviceRun) = dev.a.cell_area
 
 @inline function _rain_k!(i, V, A, r)
     @inbounds V[i] += r * A[i]
@@ -94,11 +98,14 @@ end
 
 _device_cfl(dev::DeviceRun{:swe}, courant::Float64) = _swe_cfl(dev.be, dev.a, courant)
 _device_cfl(dev::DeviceRun{:std}, courant::Float64) = _std_cfl(dev.be, dev.a, courant)
+_device_cfl(dev::DeviceRun{:sgs}, courant::Float64) = _sgs_cfl(dev.be, dev.a, courant)
 _device_depth!(dev::DeviceRun{:swe}) = foreach_index!(dev.be, dev.a.n, _swe_depth_k!, dev.a)
 _device_depth!(dev::DeviceRun{:std}) = foreach_index!(dev.be, dev.a.n, _depth_std_k!, dev.a)
+_device_depth!(dev::DeviceRun{:sgs}) = nothing        # step_sgs! keeps the depth in sync itself
 _device_step!(dev::DeviceRun{:swe}, dt::Float64, courant::Float64) =
     _swe_advance!(dev.be, dev.a, dt, courant, dev.removed)
 _device_step!(dev::DeviceRun{:std}, dt::Float64, courant::Float64) = _std_step!(dev.be, dev.a, dt)
+_device_step!(dev::DeviceRun{:sgs}, dt::Float64, courant::Float64) = _sgs_step!(dev.be, dev.a, dt)
 
 "Copy the state the host reads back (volume, depth, discharges, outflow)."
 function _device_sync!(dev::DeviceRun{:swe}, state::FlowState)
@@ -110,16 +117,17 @@ function _device_sync!(dev::DeviceRun{:swe}, state::FlowState)
     state.vol_removed = dev.removed[]
     return nothing
 end
-function _device_sync!(dev::DeviceRun{:std}, state::FlowState)
+function _device_sync!(dev::DeviceRun{K}, state::FlowState) where {K}   # :std, :sgs
     synchronize!(dev.be)
     a = dev.a
     copyto!(state.volume, a.volume); copyto!(state.water_depth, a.water_depth)
-    copyto!(state.edges.flux, a.flux)
+    K === :sgs ? copyto!(state.edges.flux_Q, a.flux_Q) : copyto!(state.edges.flux, a.flux)
     copyto!(state.qvec_u, a.qvec_u); copyto!(state.qvec_v, a.qvec_v)
     state.vol_removed = Array(a.removed)[1]
     gf = Array(a.g_fprev)                     # ghost-edge momentum, for a later CPU step
     for (k, g) in enumerate(state.ghost_edges)
-        g.flux_prev = gf[k]; g.is_Q_flux = false
+        g.flux_prev = gf[k]
+        K === :std && (g.is_Q_flux = false)
     end
     return nothing
 end
