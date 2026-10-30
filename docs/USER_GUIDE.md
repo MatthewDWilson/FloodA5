@@ -276,6 +276,7 @@ recommendation and open items).
 | `--limiter legacy\|positivity\|hybrid` | `legacy` | (WP2) `positivity`: one positivity-preserving scale factor per donor cell in place of the per-edge volume limiter and donor cap — **not stable on its own** on real terrain. `hybrid`: keeps the per-edge volume limiter and replaces only the per-edge donor cap; as smooth as `legacy`. |
 | `--cfl-mode legacy\|local` | `legacy` | (WP2) `local`: dt = 0.7·min over wet cells of ℓ/√(g h), ℓ = 4·area/perimeter, instead of √(min area) with the 99th-percentile depth. About 25% more steps on Carlisle; removes the early rain-on-slopes noise. |
 | `--boundary-limiter legacy\|positivity` | `legacy` | (D1b) `positivity`: open-boundary outflow is limited only by what the boundary cell holds, not by the 1/Δt volume limiter and donor cap. |
+| `--open-boundary normal\|legacy` | `legacy` | (0.3.0) Open (zero-gradient) boundaries. `normal`: a free outflow at normal depth — the ghost cell continues the bed slope from the inward neighbour at the boundary cell's depth. `legacy`: before 0.3.0, the water-level slope from the most outward neighbour (along the edge), which held water back at outlets (`HYDRAULICS.md` §15.11). |
 | `--eta-filter C_S` | `0` | (D4, standard flow) Conservative free-surface high-pass filter: water exchanged across wet faces in proportion to the jump in the residual of a local planar fit, at a rate C_s·√(gh)/ℓ that does not depend on Δt (`HYDRAULICS.md` §15.8). |
 | `--momentum-damping C_M` | `0` | (D6′, standard flow; needs the diamond face gradient, edge momentum and vector friction) Exactly divergence-free damping of the circulating part of the face discharges, an eddy viscosity ν = C_m·V·ℓ at each mesh vertex (`HYDRAULICS.md` §15.9). |
 | `--momentum-damping-scale wave\|flow` | `wave` | V = √(gh) (`wave`) or the local speed \|u\| (`flow`). |
@@ -293,8 +294,8 @@ for the flow model; explicit flags always win. `--scheme v0.2` restores the
 
 | Flow model | `--scheme recommended` (default) | `--scheme v0.2` |
 |---|---|---|
-| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter positivity --boundary-limiter positivity --cfl-mode local --q-centre-theta 1 --eta-filter 0.05` | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
-| sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1` | the same |
+| standard | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter positivity --boundary-limiter positivity --cfl-mode local --q-centre-theta 1 --eta-filter 0.05 --open-boundary normal` | `--gradient-correction on --face-flux-method diamond-wetdry --friction-model vector --limiter hybrid --cfl-mode local --q-centre-mode consistent` |
+| sgs | `--friction-model vector --cfl-mode local --q-centre-theta 1 --open-boundary normal` | `--friction-model vector --cfl-mode local --q-centre-theta 1` |
 
 `--momentum-damping` is off in every scheme. See `HYDRAULICS.md` §15.11 for
 the evidence. The defaults listed in the

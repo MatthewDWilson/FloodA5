@@ -1432,29 +1432,54 @@ schemes, and a cross-mesh map to the 10 m reference (nearest cell centre):
 ### 15.11 Defaults in 0.3.0 (2026-10)
 
 From 0.3.0, `--scheme recommended` for **standard flow** is the Δt-consistent
-scheme. Against the 0.2.x default (`--scheme v0.2`), three options change:
+scheme, and open boundaries (standard and SGS) are normal-depth free
+outflows. Against the 0.2.x default (`--scheme v0.2`), four options change:
 
 | Option | 0.3.0 (`recommended`) | 0.2.x (`--scheme v0.2`) |
 |---|---|---|
 | Wet/dry limiter | positivity (one scale per donor cell), also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | hybrid; legacy at boundaries |
 | Momentum smoothing | none (`--q-centre-theta 1`) | consistent Q-centring, θ = 0.9 |
 | Damping | η filter, C_s = 0.05 (`--eta-filter 0.05`, §15.8) | none |
+| Open boundaries (also SGS) | normal-depth free outflow (`--open-boundary normal`, below) | the pre-0.3.0 extrapolation |
 
 The diamond-wetdry face gradient, vector friction and the local CFL are
-unchanged, and so is SGS (no reference exists yet with a sub-grid bed).
+unchanged; so is SGS apart from its open boundaries (no reference exists yet
+with a sub-grid bed).
 `--momentum-damping` (§15.9) stays available and off. `--scheme v0.2`
 reproduces 0.2.x results exactly (Carlisle, 4 h, `--cell-order file`, every
 frame, A5 and Cartesian).
 
-**Why.** Against the full shallow-water reference (§15.10, corrected solver):
-- *Same mesh, Carlisle 6 h:* the η-filter scheme stores 1.05× the reference
-  on Cartesian and 1.26× on A5; the 0.2 scheme 1.62× and 1.80×, with deep
-  channels moving at 0.40–0.50 of the reference's speed (0.99–1.18 for the
-  η filter). Adding momentum damping only increases the excess.
-- *Resolution (Cartesian 40/20/10 m):* the η-filter scheme converges with
-  the reference, 4–8% above it; the 0.2 scheme does not converge (3.80 →
-  3.83 Mm³ from 20 to 10 m), because its Q-centring resistance grows as Δt
-  shrinks with the cells.
+**Open boundaries.** A ZeroGradient (open) face extrapolates a ghost water
+level from the boundary cell and an interior neighbour. Before 0.3.0 the
+neighbour chosen was the most *outward* one — a comparison with the wrong
+sign — which is one running along the boundary, so the slope ran along the
+edge: zero at a uniform outlet (no head; water held back in the edge cells)
+and, on a narrow domain, a spurious outflow through the side edges. With
+the inward neighbour, extrapolating the *water* slope still has a flat pond
+at the edge as a fixed point (on the 4 km rained plane the Cartesian outlet
+ponded to 0.42 m). `--open-boundary normal` therefore extrapolates the
+*bed* slope from the inward neighbour at the boundary cell's own depth
+(zero gradient of depth: a free outflow at normal depth, as the SWE
+transmissive boundary). On the rained 0.1% plane the last 250 m before the
+outlet go from 0.22 m (A5) and 0.13 m (Cartesian) to 0.099 and 0.095 m;
+the kinematic depth there is 0.097 m (`test/test_open_boundary.jl` T-BC11,
+T-BC12). `--open-boundary legacy` keeps the old behaviour (`--scheme v0.2`,
+`legacy`).
+
+**Why.** Against the full shallow-water reference (§15.10, corrected solver;
+the 0.3.0 default including the open boundaries):
+- *Same mesh, Carlisle 6 h:* the 0.3.0 scheme stores 0.99× the reference on
+  Cartesian (2.297 against 2.331 Mm³) and 1.25× on A5 (3.363 against
+  2.690); the 0.2 scheme 1.62× and 1.80×, with deep channels moving at
+  0.40–0.50 of the reference's speed. Adding momentum damping only
+  increases storage.
+- *Resolution (Cartesian 40/20/10 m):* 3.265 / 2.297 / 2.035 Mm³ against the
+  reference's 3.154 / 2.331 / 2.107 — within 4% at every resolution and
+  converging with it. The 0.2 scheme does not converge (3.80 → 3.83 Mm³
+  from 20 to 10 m), because its Q-centring resistance grows as Δt shrinks
+  with the cells.
+- *SGS:* the open-boundary fix changes Carlisle 6 h storage by −0.8%
+  (4.334 → 4.299 Mm³).
 - *Time step:* halving the Courant number changes 6 h storage by 0.2% (A5)
   and 4% (Cartesian) with the η filter (§15.8), and by 10% and 16% with the
   0.2 scheme.
@@ -1463,9 +1488,8 @@ frame, A5 and Cartesian).
   the interior both schemes are the same and match the kinematic steady
   depth within 1–4 mm. The point-source spread agrees with the reference
   (CSI 0.89 on A5, 0.96 on Cartesian at 0.02 m; rms 9 and 4 mm). Next to
-  the open outlet edge the 0.2 scheme ponds more (0.34 and 0.26 m in the
-  last 250 m, against 0.22 and 0.13 m; kinematic 0.10 m, reference 0.13
-  and 0.21 m).
+  the open outlet edge the 0.2 scheme ponds (0.34 and 0.26 m in the last
+  250 m; the 0.3.0 default 0.099 and 0.095 m; kinematic 0.097 m).
 
 **Trade-off.** Without Q-centring the standard solver keeps more grid-scale
 velocity noise in deep channels: dv_rms 0.65 m/s on A5 Carlisle against

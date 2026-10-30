@@ -658,6 +658,11 @@ mutable struct FlowState
     # Geometry and work arrays of `--flow-model swe` (SWEFlow); `nothing` for
     # the local-inertial solvers. See surfacewater/swe_reference.jl.
     swe               :: Union{Nothing,SWEWork}
+    # ── Open boundaries (0.3.0) ──────────────────────────────────────────────
+    # :normal — ZeroGradient faces extrapolate the bed slope from the inward
+    # neighbour at the cell's own depth (normal-depth free outflow); :legacy —
+    # the water-surface slope from the most outward neighbour, as before 0.3.0.
+    open_boundary     :: Symbol
 end
 
 # ---------------------------------------------------------------------------
@@ -829,6 +834,32 @@ function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
                       momentum_model, face_flux_method, diamond_table,
                       max_neighbours, friction_model, limiter, cfl_mode, cell_length,
                       q_centre_mode, ws, eta_filter_cs, 0.0, :wave)
+end
+
+# 0.3.0: `open_boundary` was appended as field 43. The 42-argument form
+# defaults it to :legacy (the behaviour before 0.3.0).
+function FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                    elevation, manning_n, cell_area, cell_lons, cell_lats,
+                    adjacency, adj_matrix, edges, sgs_tables,
+                    boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                    grad_wse, wlsq_weights, q_centre_theta,
+                    gradient_correction, gradient_correction_alpha,
+                    qvec_u, qvec_v, cell_edge_index, mom_weights,
+                    momentum_model, face_flux_method, diamond_table,
+                    max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                    q_centre_mode, ws::StepWorkspace, eta_filter_cs::Float64,
+                    mom_damping_cs::Float64, mom_damping_scale::Symbol, swe)
+    return FlowState(cell_ids, water_depth, volume, velocity, vel_u, vel_v,
+                      elevation, manning_n, cell_area, cell_lons, cell_lats,
+                      adjacency, adj_matrix, edges, sgs_tables,
+                      boundary_mask, ghost_edges, ghost_cell_bc, vol_removed,
+                      grad_wse, wlsq_weights, q_centre_theta,
+                      gradient_correction, gradient_correction_alpha,
+                      qvec_u, qvec_v, cell_edge_index, mom_weights,
+                      momentum_model, face_flux_method, diamond_table,
+                      max_neighbours, friction_model, limiter, cfl_mode, cell_length,
+                      q_centre_mode, ws, eta_filter_cs, mom_damping_cs, mom_damping_scale,
+                      swe, :legacy)
 end
 
 # R1 (2026-10): `swe` was appended as field 42. The 41-argument form defaults
@@ -2358,7 +2389,8 @@ function initialise_flow_model(mesh::A5Mesh,
                                 momentum_damping_scale    :: Symbol  = :wave,
                                 swe_order                 :: Int     = 2,
                                 swe_viscosity             :: Float64 = 0.0,
-                                swe_open_inflow           :: Bool    = false)::FlowState
+                                swe_open_inflow           :: Bool    = false,
+                                open_boundary             :: Symbol  = :legacy)::FlowState
     friction_model in (:component, :vector) ||
         throw(ArgumentError("friction_model must be :component or :vector (got :$friction_model)"))
     momentum_model in (:edge, :cell, :blend) ||
@@ -2369,6 +2401,8 @@ function initialise_flow_model(mesh::A5Mesh,
         throw(ArgumentError("cfl_mode must be :legacy or :local (got :$cfl_mode)"))
     q_centre_mode in (:legacy, :oriented, :consistent) ||
         throw(ArgumentError("q_centre_mode must be :legacy, :oriented or :consistent (got :$q_centre_mode)"))
+    open_boundary in (:normal, :legacy) ||
+        throw(ArgumentError("open_boundary must be :normal or :legacy (got :$open_boundary)"))
     (isfinite(eta_filter) && eta_filter >= 0.0) ||
         throw(ArgumentError("eta_filter must be ≥ 0 (got $eta_filter)"))
     eta_filter > 0.0 && method isa SGSFlow &&
@@ -2583,7 +2617,8 @@ function initialise_flow_model(mesh::A5Mesh,
     @info "Building ghost edges (boundary BCs)..."
     boundary_mask, ghost_edges, ghost_cell_bc =
         _build_ghost_edges(mesh.cells, adj, id_idx, edges,
-                           elevations, sgs_tables, max_nb, ZeroGradient)
+                           elevations, sgs_tables, max_nb, ZeroGradient;
+                           inward = open_boundary === :normal)
 
     volumes = zeros(Float64, n)
 
@@ -2707,6 +2742,7 @@ function initialise_flow_model(mesh::A5Mesh,
         momentum_damping,
         momentum_damping_scale,
         nothing,
+        open_boundary,
     )
     # R1: the shallow-water reference solver's geometry (needs the polygons)
     method isa SWEFlow &&
@@ -2824,6 +2860,18 @@ include(joinpath(@__DIR__, "boundaryinputs", "timeseries_io.jl"))
 # ---------------------------------------------------------------------------
 
 """
+    _open_nb_wse(wse_ci, z_ci, z_nb) → Float64
+
+`--open-boundary normal` (0.3.0): the water level the interior neighbour would have
+at the boundary cell's own depth, z_nb + (wse_ci − z_ci). `_ghost_wse` then
+extrapolates the bed slope instead of the water-surface slope: zero gradient
+of depth (normal-depth outflow, as the SWE solver's transmissive boundary).
+With the water-surface slope a flat pond at the edge is a fixed point (no
+head, no outflow).
+"""
+@inline _open_nb_wse(wse_ci, z_ci, z_nb) = z_nb + (wse_ci - z_ci)
+
+"""
     _apply_ghost_fluxes_standard!(state, dt)
 
 Apply open-boundary outflow fluxes for the standard (non-SGS) solver.
@@ -2859,6 +2907,8 @@ function _apply_ghost_fluxes_standard!(state::FlowState, dt::Float64)
         wse_nb = nb_idx > 0 ?
                  state.elevation[nb_idx] + state.volume[nb_idx] / max(state.cell_area[nb_idx], 1.0) :
                  NaN
+        state.open_boundary === :normal && nb_idx > 0 &&
+            (wse_nb = _open_nb_wse(wse_ci, state.elevation[ci], state.elevation[nb_idx]))
 
         wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, ge.interior_nb_L, ge.L)
         wse_ghost == -Inf && continue
@@ -2916,6 +2966,8 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         else
             NaN
         end
+        state.open_boundary === :normal && nb_idx > 0 &&
+            (wse_nb = _open_nb_wse(wse_ci, state.elevation[ci], state.elevation[nb_idx]))
 
         wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, ge.interior_nb_L, ge.L)
         wse_ghost == -Inf && continue
@@ -3809,7 +3861,11 @@ boundary limiter comes from `scheme_boundary_limiter`.
                 meshes, and resolution-convergent (HYDRAULICS.md
                 §15.10–15.11).
       sgs       as :v02 (no reference yet: the SWE solver has no sub-grid
-                representation)
+                representation), except the open boundaries
+      both      open boundaries are normal-depth free outflows
+                (open_boundary = :normal: the bed slope from the inward
+                neighbour at the cell's own depth; before 0.3.0 the water
+                slope was taken from the most outward neighbour)
   :v02        the 0.2.x default ("recommended" until 0.3.0)
       standard  gradient correction on, diamond-wetdry face gradient, vector
                 friction, hybrid limiter, local CFL, edge momentum,
@@ -3835,18 +3891,20 @@ function scheme_options(scheme::Symbol, flow_method::Symbol)
     legacy = (gradient_correction = false, face_flux_method = :legacy,
               friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
               momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9,
-              eta_filter = 0.0, momentum_damping = 0.0, momentum_damping_scale = :wave)
+              eta_filter = 0.0, momentum_damping = 0.0, momentum_damping_scale = :wave,
+              open_boundary = :legacy)
     scheme in (:recommended, :v02, :legacy) ||
         throw(ArgumentError("scheme must be :recommended, :v02 or :legacy (got :$scheme)"))
     (scheme === :legacy || flow_method === :swe) && return legacy
     flow_method === :sgs &&
-        return merge(legacy, (friction_model = :vector, cfl_mode = :local,
-                              q_centre_theta = 1.0))
+        return merge(legacy, (friction_model = :vector, cfl_mode = :local, q_centre_theta = 1.0,
+                              open_boundary = scheme === :recommended ? :normal : :legacy))
     v02 = merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
                          q_centre_mode = :consistent))
     scheme === :v02 && return v02
-    return merge(v02, (limiter = :positivity, q_centre_theta = 1.0, eta_filter = 0.05))
+    return merge(v02, (limiter = :positivity, q_centre_theta = 1.0, eta_filter = 0.05,
+                       open_boundary = :normal))
 end
 
 """
@@ -3897,6 +3955,7 @@ function run_flood_model(;
     eta_filter        :: Union{Float64,Nothing} = nothing,  # η filter C_s (0 = off)
     momentum_damping  :: Union{Float64,Nothing} = nothing,  # momentum damping C_m (0 = off)
     momentum_damping_scale :: Union{Symbol,Nothing} = nothing, # :wave | :flow
+    open_boundary     :: Union{Symbol,Nothing} = nothing,  # :normal | :legacy (0.3.0)
     swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
     swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
     rainfall_rate     :: Float64 = 0.0,
@@ -3925,6 +3984,7 @@ function run_flood_model(;
     eta_filter          = something(eta_filter,          so.eta_filter)
     momentum_damping    = something(momentum_damping,    so.momentum_damping)
     momentum_damping_scale = something(momentum_damping_scale, so.momentum_damping_scale)
+    open_boundary       = something(open_boundary,       so.open_boundary)
     boundary_limiter    = something(boundary_limiter, scheme_boundary_limiter(scheme, flow_method))
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
@@ -4174,6 +4234,7 @@ function run_flood_model(;
                                         eta_filter                = eta_filter,
                                         momentum_damping          = momentum_damping,
                                         momentum_damping_scale    = momentum_damping_scale,
+                                        open_boundary             = open_boundary,
                                         swe_order                 = swe_order,
                                         swe_viscosity             = swe_viscosity)
     tl.flow_init = time() - t0
@@ -4189,7 +4250,8 @@ function run_flood_model(;
           "limiter = $(limiter), cfl_mode = $(cfl_mode); scheme = $(scheme)" *
           (eta_filter > 0.0 ? "; eta_filter = $(eta_filter)" : "") *
           (momentum_damping > 0.0 ? "; momentum_damping = $(momentum_damping) ($(momentum_damping_scale))" : "") *
-          (boundary_limiter === :legacy ? "" : "; boundary_limiter = $(boundary_limiter)") * ")"
+          (boundary_limiter === :legacy ? "" : "; boundary_limiter = $(boundary_limiter)") *
+          "; open_boundary = $(open_boundary))"
 
     # Resolve injection point specs (lon, lat, rate_m3s) → InjectionPoint structs
     t0_src = time()
@@ -4690,6 +4752,15 @@ Flow model options:
                      mesh vertex. 0 (default, every scheme) = off. Moves
                      results away from the full shallow-water reference
                      (HYDRAULICS.md §15.10); use it to reduce velocity noise.
+  --open-boundary normal|legacy
+                     Open (ZeroGradient) boundaries. normal: a free outflow
+                     at normal depth — the ghost cell continues the bed slope
+                     from the inward neighbour at the boundary cell's depth
+                     (default from 0.3.0). legacy: before 0.3.0 — the water
+                     slope from the most outward neighbour (along the
+                     boundary), which held water back at outlets. Default:
+                     from --scheme (normal for recommended, legacy for v0.2
+                     and legacy).
   --momentum-damping-scale wave|flow
                      V = √(g h) (wave, default: a numerical floor) or the local
                      flow speed |u| (flow: eddy-viscosity-like).
@@ -5314,6 +5385,8 @@ function main(args=String[])
     momentum_damping = mom_damp_val === nothing ? nothing : parse(Float64, mom_damp_val)
     mom_scale_val, args = _pop_flag(args, "--momentum-damping-scale")
     momentum_damping_scale = mom_scale_val === nothing ? nothing : Symbol(mom_scale_val)
+    obnd_val, args = _pop_flag(args, "--open-boundary")
+    open_boundary = obnd_val === nothing ? nothing : Symbol(obnd_val)
     swe_order_val, args = _pop_flag(args, "--swe-order")
     swe_order = swe_order_val === nothing ? 2 : parse(Int, swe_order_val)
     swe_visc_val, args = _pop_flag(args, "--swe-viscosity")
@@ -5478,6 +5551,7 @@ function main(args=String[])
         eta_filter      = eta_filter,
         momentum_damping = momentum_damping,
         momentum_damping_scale = momentum_damping_scale,
+        open_boundary   = open_boundary,
         swe_order       = swe_order,
         swe_viscosity   = swe_viscosity,
         rainfall_rate    = rainfall_rate,

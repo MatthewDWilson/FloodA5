@@ -21,21 +21,23 @@ using Test
 const _LEGACY = (gradient_correction = false, face_flux_method = :legacy,
                  friction_model = :component, limiter = :legacy, cfl_mode = :legacy,
                  momentum_model = :edge, q_centre_mode = :legacy, q_centre_theta = 0.9,
-                 eta_filter = 0.0, momentum_damping = 0.0, momentum_damping_scale = :wave)
+                 eta_filter = 0.0, momentum_damping = 0.0, momentum_damping_scale = :wave,
+                 open_boundary = :legacy)
 
 @testset "D1 — scheme_options" begin
     r = scheme_options(:recommended, :standard)
     @test r == merge(_LEGACY, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                                friction_model = :vector, limiter = :positivity, cfl_mode = :local,
                                q_centre_mode = :consistent, q_centre_theta = 1.0,
-                               eta_filter = 0.05))
+                               eta_filter = 0.05, open_boundary = :normal))
     v = scheme_options(:v02, :standard)
     @test v == merge(_LEGACY, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                                friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
                                q_centre_mode = :consistent))
-    for s in (:recommended, :v02)                     # SGS: unchanged in 0.3.0
+    for s in (:recommended, :v02)                     # SGS: only the boundary neighbour changes in 0.3.0
         g = scheme_options(s, :sgs)
-        @test g == merge(_LEGACY, (friction_model = :vector, cfl_mode = :local, q_centre_theta = 1.0))
+        @test g == merge(_LEGACY, (friction_model = :vector, cfl_mode = :local, q_centre_theta = 1.0,
+                                   open_boundary = s === :recommended ? :normal : :legacy))
     end
     for f in (:standard, :sgs, :swe), s in (:legacy, :recommended, :v02)
         (s === :legacy || f === :swe) && @test scheme_options(s, f) == _LEGACY
@@ -81,13 +83,13 @@ end
     @test occursin("scheme = recommended", rec)
     @test occursin("q_centre_theta = 1.0", rec)
     @test occursin("eta_filter = 0.05", rec) && !occursin("momentum_damping", rec)
-    @test occursin("boundary_limiter = positivity", rec)
+    @test occursin("boundary_limiter = positivity", rec) && occursin("open_boundary = normal", rec)
     # The 0.2.x default
     v02, _ = _cli_log("--scheme", "v0.2")
     @test occursin("limiter = hybrid, cfl_mode = local", v02) && occursin("scheme = v02", v02)
     @test occursin("q_centre_mode = consistent", v02) && occursin("q_centre_theta = 0.9", v02)
     @test !occursin("eta_filter", v02) && !occursin("momentum_damping", v02)
-    @test !occursin("boundary_limiter", v02)
+    @test !occursin("boundary_limiter", v02) && occursin("open_boundary = legacy", v02)
     # Legacy scheme with one explicit override: the override wins, every other
     # unset option takes the legacy value.
     mix, _ = _cli_log("--scheme", "legacy", "--friction-model", "vector")
