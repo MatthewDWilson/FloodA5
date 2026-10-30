@@ -33,6 +33,35 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-10-30
+
+Default results unchanged (PATCH): only the opt-in `--flow-model swe` changes.
+
+### Fixed
+- ⚠ `--flow-model swe` (the R1 reference) on thin films over a slope
+  (rain-on-grid). The second-order hydrostatic reconstruction used
+  cell-centre beds at the faces, removing the bed step from every downstream
+  face depth; it now reconstructs the face bed (z_L = η_L − h_L, with a
+  limited depth gradient) with the centred bed source of Audusse et al.
+  (2004, §4), and the thin-film depth bound is no longer needed. The
+  semi-implicit Manning factor took |q| from the predicted state, which
+  moved its fixed point and slowed a 2 cm sheet by 36–58%; it now uses |q|
+  from the stage start. Carlisle 6 h storage with the reference falls from
+  3.44 to 2.69 Mm³ (A5) and 2.63 to 2.33 Mm³ (Cartesian).
+- `--flow-model swe` wrote zero velocity into the final HDF5 frame.
+
+### Added
+- `test/test_swe_reference.jl` S10: thin sheet flow at normal depth.
+
+### Findings (see `HYDRAULICS.md` §15.10, rewritten)
+- Against the corrected reference, every local-inertial scheme is more
+  dissipative; the η filter alone is closest (Carlisle storage +5%
+  Cartesian, +26% A5) and the momentum damping only adds to it. The 0.2.5
+  conclusion that momentum damping 0.05 matched the reference does not hold.
+- Resolution (Cartesian 40/20/10 m): the reference converges (3.15/2.33/2.11
+  Mm³); the η-filter scheme converges alongside it, 4–8% above; the 0.2.x
+  default does not converge (3.80 → 3.83 from 20 to 10 m).
+
 ## [0.2.5] — 2026-10-29
 
 Default results unchanged (PATCH): the default-scheme Carlisle run is
