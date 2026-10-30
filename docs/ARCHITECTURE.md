@@ -404,6 +404,9 @@ A companion file (e.g. `surfacewater/infiltration.jl`) is preferable for larger
 additions, following the same pattern: pure scalar kernels, no `FlowState`
 dependency, included by `FloodModel.jl`.
 
+A pass over cells or edges that uses such a kernel must run on every compute
+backend: write it as a kernel body launched by `foreach_index!` (§6a).
+
 ### Adding a new time-series format
 
 1. Define a new struct `<: AbstractTimeSeriesReader` in `boundaryinputs/timeseries_io.jl`.
@@ -530,6 +533,86 @@ resolution levels. Always follow with `pya5.uncompact(disk, target_resolution)`
   order is not changed under legacy (orientation-dependent) Q-centring.
 - **Ghost-edge Phase E** — serial (ghost edges are owned by single cells).
 - **Cell queries** (`lonlat_to_cell` etc.) — thread-safe via `ReentrantLock(_pycall_lock)`.
+- **Compute backends** (WP5) — see §6a.
+
+## 6a. Compute Backends (CPU threads and GPUs)
+
+Every solver (`standard`, `sgs`, `swe`) runs on the CPU or on an NVIDIA GPU
+from one code base (`--backend cpu|gpu`; `run_flood_model(...; backend =
+:cpu | :gpu | :ka_cpu)`).
+
+**Kernel bodies and launchers** (`surfacewater/backend.jl`). Each per-step
+pass is an `@inline` body `body(i, args...)` for one cell, face, boundary
+face or mesh vertex, writing only the slots that index owns. `args` is a
+`NamedTuple` of arrays and scalars. `foreach_index!(backend, n, body,
+args...)` launches it:
+
+| Backend | What runs | Used for |
+|---|---|---|
+| `CPUThreads()` | Polyester `@batch per=core` | the default; bit-identical to the loops it replaced |
+| `KADevice(CUDABackend())` | a KernelAbstractions kernel on the GPU | `--backend gpu` |
+| `KADevice(KernelAbstractions.CPU())` | the device code path on the CPU | `--backend ka-cpu`; tests without a GPU |
+
+`on_host_order!` runs a short loop whose order matters (point sources, open
+boundaries) on one device thread. Reductions (`_minimum`, `_maximum`,
+`_dot_sum`) keep the serial order on host arrays and use the device's own
+reductions on GPU arrays. CUDA.jl is loaded only for `--backend gpu`
+(`_cuda_backend()`), and the GPU run is entered through `Base.invokelatest`
+so that it sees CUDA.jl's methods; CPU runs and CI need neither CUDA nor a
+GPU.
+
+**Data on the device.** `_swe_args`, `_std_device_args` and
+`_sgs_device_args` gather everything a solver's passes touch into one
+NamedTuple; `to_device` adapts it (CuArrays on a GPU; the same Arrays on the
+CPU backends). Structures a GPU cannot hold are converted first: the edge
+list and diamond table become NamedTuples of arrays (`_edge_view`,
+`_dtab_view`), `BitVector`s become `Vector{Bool}`, ghost edges become
+struct-of-arrays, and the per-cell SGS tables are packed into padded
+arrays, read through `_tab(tables, i)` (the `SGSTable` on the CPU, a
+NamedTuple of views on a device), so the A5Grid lookups run unchanged.
+Never put the same array into a device NamedTuple under two names: `Adapt`
+would make two device copies. Alias after the transfer instead (see
+`_sgs_step!`).
+
+**The run loop on a device** (`surfacewater/device_run.jl`). `DeviceRun{K}`
+(K = `:swe`, `:std`, `:sgs`) holds the device arrays for the whole run. Each
+step computes Δt, rainfall, point sources, the depth sync and the step on
+the device. The host `FlowState` is brought up to date
+(`_device_sync!`) only where it is read: output frames, the visualiser, the
+every-50-steps log line, the debug lines and the end of the run.
+
+**Supported on a device:** the options of `--scheme recommended` and `v0.2` (and
+`legacy` with `--cfl-mode local`): edge momentum, the local CFL, any
+Q-centring mode and face gradient; η filter, momentum damping,
+positivity at boundaries; all source types; open, closed and critical
+boundaries. Not on a device (refused with an error): `--momentum-model
+cell|blend`, `--cfl-mode legacy` (a sort), `--limiter-stats`.
+
+**Two passes are serial on a device**: point sources and open-boundary
+outflow (Phase D). Phase D on the CPU walks the ghost edges in order and
+reads a neighbour's volume after earlier ghost edges have changed it, so
+the order is part of the result; the device replicates it on one thread.
+It is a small fraction of a step but does not scale; an order-independent
+formulation would change results and needs its own validation.
+
+**Precision and agreement.** Float64 throughout. The device path run on the
+CPU is bit-identical to `CPUThreads` for all three solvers
+(`test/test_backend.jl`, in CI). On the GPU, single steps agree to round-off
+(10⁻¹⁵ relative); over a run the local-inertial solvers amplify round-off
+at wet/dry thresholds (depth rms 10⁻⁸–10⁻⁶ m on a rained plane over 1 h,
+shrinking with time), as they do between thread counts with a different
+cell order (HYDRAULICS.md §15.5). FP64 throughput varies a lot between GPUs
+(1/64 of FP32 on most workstation and consumer cards); a Float32 option is
+future work.
+
+**Adding a pass** (or a phase to an existing solver): write the body in the
+solver's `*_device.jl` (or `kernels.jl`), make the CPU function call it
+through `foreach_index!(CPUThreads(), ...)`, add its arrays to the solver's
+device-args builder, and call it from the device driver in the same place as
+in the CPU step. Bodies must not allocate, call `@info`/`error` with
+interpolated strings, read global `Ref`s, or dispatch on runtime values (use
+`Val` or type parameters). `test/test_backend.jl` must stay bit-identical
+on `KADevice(CPU())`, and the frozen-reference test must still pass.
 
 ---
 
