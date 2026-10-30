@@ -7,8 +7,8 @@
 #       device code path, run on the CPU — is bit-identical to CPUThreads
 #       (rain, a point source, open boundaries; A5 and Cartesian)
 #   K2  standard flow, likewise, for --scheme recommended (η filter,
-#       momentum damping, positivity at boundaries) and v0.2 (consistent
-#       Q-centring, hybrid limiter)
+#       positivity at boundaries), recommended with momentum damping, and
+#       v0.2 (consistent Q-centring, hybrid limiter)
 #   K5  SGS (synthetic prismatic tables), likewise, with the legacy and the
 #       positivity limiter
 #   K3  unsupported device options are refused (cell momentum, legacy CFL)
@@ -64,9 +64,10 @@ const KACPU = KADevice(KernelAbstractions.CPU())
     @test s1.water_depth == s2.water_depth && s1.vol_removed == s2.vol_removed
 end
 
-@testset "K2 — standard: device path on the CPU = CPU threads ($lab, $sch)" for (lab, mesh) in _MESHES,
-                                                                          sch in (:recommended, :v02)
-    opts = scheme_options(sch, :standard)
+@testset "K2 — standard: device path on the CPU = CPU threads ($lab, $name)" for (lab, mesh) in _MESHES,
+        (name, sch, extra) in (("recommended", :recommended, (;)), ("v0.2", :v02, (;)),
+                               ("momentum damping", :recommended, (momentum_damping = 0.05,)))
+    opts = merge(scheme_options(sch, :standard), extra)
     BOUNDARY_POSITIVITY[] = scheme_boundary_limiter(sch, :standard) === :positivity
     try
         m, s1, src = _state(mesh, StandardFlow(); opts...); s2 = deepcopy(s1)
