@@ -1428,3 +1428,48 @@ schemes, and a cross-mesh map to the 10 m reference (nearest cell centre):
   Carlisle is as large as a factor-two change in resolution. Polygon
   consistency of the hydraulics is best judged on synthetic problems, and of
   the topography on resolution sequences and channel tests.
+
+### 15.11 Defaults in 0.3.0 (2026-10)
+
+From 0.3.0, `--scheme recommended` for **standard flow** is the Δt-consistent
+scheme. Against the 0.2.x default (`--scheme v0.2`), three options change:
+
+| Option | 0.3.0 (`recommended`) | 0.2.x (`--scheme v0.2`) |
+|---|---|---|
+| Wet/dry limiter | positivity (one scale per donor cell), also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | hybrid; legacy at boundaries |
+| Momentum smoothing | none (`--q-centre-theta 1`) | consistent Q-centring, θ = 0.9 |
+| Damping | η filter, C_s = 0.05 (`--eta-filter 0.05`, §15.8) | none |
+
+The diamond-wetdry face gradient, vector friction and the local CFL are
+unchanged, and so is SGS (no reference exists yet with a sub-grid bed).
+`--momentum-damping` (§15.9) stays available and off. `--scheme v0.2`
+reproduces 0.2.x results exactly (Carlisle, 4 h, `--cell-order file`, every
+frame, A5 and Cartesian).
+
+**Why.** Against the full shallow-water reference (§15.10, corrected solver):
+- *Same mesh, Carlisle 6 h:* the η-filter scheme stores 1.05× the reference
+  on Cartesian and 1.26× on A5; the 0.2 scheme 1.62× and 1.80×, with deep
+  channels moving at 0.40–0.50 of the reference's speed (0.99–1.18 for the
+  η filter). Adding momentum damping only increases the excess.
+- *Resolution (Cartesian 40/20/10 m):* the η-filter scheme converges with
+  the reference, 4–8% above it; the 0.2 scheme does not converge (3.80 →
+  3.83 Mm³ from 20 to 10 m), because its Q-centring resistance grows as Δt
+  shrinks with the cells.
+- *Time step:* halving the Courant number changes 6 h storage by 0.2% (A5)
+  and 4% (Cartesian) with the η filter (§15.8), and by 10% and 16% with the
+  0.2 scheme.
+- *Planar tests* (0.1% slope, 20 mm/h rain or a 10 m³/s point source, 6 h,
+  A5 res-18 and an equal-area Cartesian grid; `test/wp1_runs/v030/`): in
+  the interior both schemes are the same and match the kinematic steady
+  depth within 1–4 mm. The point-source spread agrees with the reference
+  (CSI 0.89 on A5, 0.96 on Cartesian at 0.02 m; rms 9 and 4 mm). Next to
+  the open outlet edge the 0.2 scheme ponds more (0.34 and 0.26 m in the
+  last 250 m, against 0.22 and 0.13 m; kinematic 0.10 m, reference 0.13
+  and 0.21 m).
+
+**Trade-off.** Without Q-centring the standard solver keeps more grid-scale
+velocity noise in deep channels: dv_rms 0.65 m/s on A5 Carlisle against
+0.24 m/s for the 0.2 scheme (§15.9). The water surface is as smooth (the η
+filter, §15.8). Where velocities matter more than conveyance,
+`--momentum-damping 0.05` removes most of the noise (0.30 m/s) for 6–10%
+more storage.
