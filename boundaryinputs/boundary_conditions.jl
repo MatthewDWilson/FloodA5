@@ -210,6 +210,9 @@ Ghost edge geometry:
 
 Called once from initialise_flow_model after _build_edge_list.
 """
+# an inward neighbour must lie within acos(INWARD_NB_COS) of the inward normal
+const INWARD_NB_COS = 0.5
+
 function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                               adj         :: Dict{String,Vector{String}},
                               id_idx      :: Dict{String,Int},
@@ -217,7 +220,8 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                               elevations  :: Vector{Float64},
                               sgs_tables  :: AbstractVector,
                               n_sides     :: Int,
-                              default_bc  :: BCType
+                              default_bc  :: BCType;
+                              inward      :: Bool = false
                               )::Tuple{BitVector, Vector{GhostEdge}, Vector{BCType}}
     n             = length(cells)
     use_sgs       = !isempty(sgs_tables)
@@ -348,9 +352,16 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             out_dx  /= max(out_len, 1e-12)
             out_dy  /= max(out_len, 1e-12)
 
+            # The neighbour for the ZeroGradient extrapolation should be the
+            # most inward one (most negative cosine with the outward normal).
+            # Before 0.3.0 the comparison picked the most OUTWARD neighbour —
+            # one along the boundary — so the extrapolated slope ran along the
+            # edge. `inward = true` (--open-boundary normal, the default
+            # scheme from 0.3.0) selects as intended; `false` keeps the old
+            # choice (--open-boundary legacy: --scheme v0.2 and legacy).
             best_nb_idx = 0
             best_nb_L   = L       # fallback: use ghost L as interior distance
-            best_dot    = -Inf    # most negative dot = most opposite to outward = most inward
+            best_dot    = inward ? Inf : -Inf
             for nb_id in nbr_ids
                 j = get(id_idx, nb_id, 0)
                 j == 0 && continue
@@ -360,16 +371,20 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                 nlen = sqrt(ndx^2 + ndy^2)
                 nlen < 1e-12 && continue
                 dot = (ndx * out_dx + ndy * out_dy) / nlen   # cosine of angle with outward
-                if dot > best_dot
+                if inward ? dot < best_dot : dot > best_dot
                     best_dot    = dot
                     best_nb_idx = j
                     best_nb_L   = A5Grid._haversine_m(cell_lon, cell_lat,
                                                        nb.center_lon, nb.center_lat)
                 end
             end
-            # If best_dot < 0, the best neighbour is on the inward side — good.
-            # If all neighbours are on the outward side (rare corner cell), fall back to 0.
-            best_dot > 0.5 && (best_nb_idx = 0)   # no clearly inward neighbour
+            # No clearly inward neighbour (a corner, or a sliver of domain):
+            # flat extrapolation (ghost WSE = cell WSE).
+            if inward
+                best_dot > -INWARD_NB_COS && (best_nb_idx = 0)
+            else
+                best_dot > 0.5 && (best_nb_idx = 0)   # (the old test, on the old choice)
+            end
 
             # R1: geometric outward normal of the side and its midpoint offset
             # (local metric frame at the cell centre)

@@ -35,8 +35,8 @@ fully resolves the bias on its own.
 
 ## [0.3.0] — 2026-10-30
 
-⚠ Default results change for `--flow-model standard` (MINOR). SGS and SWE
-defaults are unchanged.
+⚠ Default results change for `--flow-model standard` (MINOR), and for
+`--flow-model sgs` through its open boundaries. SWE is unchanged.
 
 ### Changed
 - ⚠ `--scheme recommended` (the default) for standard flow is now the
@@ -52,6 +52,17 @@ defaults are unchanged.
   (`scheme_options` gains `eta_filter`, `momentum_damping`,
   `momentum_damping_scale`; `scheme_boundary_limiter`). Momentum damping is
   off in every scheme.
+
+### Fixed
+- ⚠ Open (ZeroGradient) boundaries extrapolated the ghost water level from
+  the most *outward* neighbour (a comparison with the wrong sign) — one
+  along the boundary — so outlets held water back and narrow domains leaked
+  through their sides. `--open-boundary normal` (the default for standard
+  and SGS flow under `--scheme recommended`) extrapolates the bed slope
+  from the inward neighbour at the boundary cell's depth: a free outflow at
+  normal depth. `--open-boundary legacy` (and `--scheme v0.2`/`legacy`)
+  keeps the old behaviour. FlowState field 43 `open_boundary`, with a
+  42-argument constructor shim. Tests T-BC11/12.
 
 ### Added
 - `--scheme v0.2`: the 0.2.x default, bit-identical to 0.2.5

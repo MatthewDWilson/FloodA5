@@ -222,6 +222,7 @@ configuration.
 | Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | per-cell CFL | smallest cell, 99th-percentile depth |
 | Momentum smoothing | none (`--q-centre-theta 1`) | none | consistent Q-centring, θ = 0.9 | Q-centring θ = 0.9 as originally written |
 | Damping | free-surface filter at a rate that does not depend on Δt (`--eta-filter 0.05`) | none | none | none |
+| Open boundaries | free outflow at normal depth: the bed slope from the inward neighbour (`--open-boundary normal`) | normal depth | as before 0.3.0 | as before 0.3.0 |
 
 Why these:
 - **Directional bias** has two causes: the face-normal gradient on
@@ -236,6 +237,13 @@ Why these:
   Cartesian grid. The consistent form maps each partner face onto the
   edge's own direction; on Cartesian grids it is exactly LISFLOOD-FP's
   Q-centring.
+- **Open boundaries were fixed in 0.3.0.** The zero-gradient boundary took
+  its water-level slope from the wrong neighbour (the most outward one,
+  running along the edge), so outlets held water back or, on narrow
+  domains, leaked sideways. They are now free outflows at normal depth: the
+  ghost cell continues the bed slope from the inward neighbour. On a rained
+  plane the depth profile now matches the analytic one up to the outlet
+  edge, on A5 and Cartesian meshes.
 - **Q-centring is replaced in 0.3.0** because even in its consistent form it
   damps as a resistance that grows with Δt: results changed with the Courant
   number and did not converge with resolution, and against the full
@@ -243,7 +251,7 @@ Why these:
   test. The free-surface filter removes the grid-scale surface noise at a
   rate set in physical units, so results converge with Δt and with
   resolution; on Cartesian grids the standard solver then stays within
-  4–8% of the reference's storage at 10–40 m (`docs/HYDRAULICS.md`
+  4% of the reference's storage at 10–40 m (`docs/HYDRAULICS.md`
   §15.8–15.11). `--momentum-damping` (off by default) additionally removes
   circulating velocity noise, at the cost of 6–10% more storage.
 
@@ -254,10 +262,9 @@ Why these:
 
 Known limitations: the default leaves more velocity noise in deep channels
 than the 0.2.x scheme did (`--momentum-damping` removes it, at some cost in
-conveyance); open (zero-gradient) boundaries hold water back on slopes; on
-A5 the local-inertial solver stores more than the full shallow-water
-reference on the Carlisle test (+26%, against +5% on a Cartesian grid),
-mostly through its step-bed representation; and channels narrower than a
+conveyance); on A5 the local-inertial solver stores more than the full
+shallow-water reference on the Carlisle test (+25%, against −1% on a
+Cartesian grid), mostly through its step-bed representation; and channels narrower than a
 cell are resolved differently on A5 and Cartesian meshes, an effect as large
 as a factor-two change in resolution there. See [docs/HYDRAULICS.md §15](docs/HYDRAULICS.md), which also
 records the options that were tried and rejected. The CLI flags are documented in

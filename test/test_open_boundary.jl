@@ -1,9 +1,10 @@
 # test/test_open_boundary.jl
 # --------------------------
 # Unit tests for open outflow boundary conditions.
-# Tests T-BC1 through T-BC10 covering ghost edge detection, geometry,
+# Tests T-BC1 through T-BC12 covering ghost edge detection, geometry,
 # ghost-cell WSE computation, one-way flux enforcement, mass balance,
-# and GeoJSON bc-file segment matching.
+# GeoJSON bc-file segment matching, and (0.3.0) the inward neighbour used
+# for the ZeroGradient water-level extrapolation.
 #
 # Run standalone:
 #   julia --project=. test/test_open_boundary.jl
@@ -294,6 +295,68 @@ end
 
     @test state.vol_removed > vol_before   # water left the domain on step 1
     @test n_nonzero > 0                    # momentum persists for next step
+end
+
+# ---------------------------------------------------------------------------
+# T-BC11/12 (0.3.0): open boundaries. Before 0.3.0 the ZeroGradient water-level
+# extrapolation took its slope from the most OUTWARD neighbour (along the
+# boundary); --open-boundary normal takes the bed slope from the inward
+# neighbour at the cell's own depth (a normal-depth free outflow).
+# ---------------------------------------------------------------------------
+function _bc_slope(nx, ny; ob)
+    dx = 20.0; d = rad2deg(dx / A5Grid._EARTH_R)
+    mesh = generate_cartesian_mesh_bounds(0.0, 0.0, (nx - 0.5) * d, (ny - 0.5) * d, dx; lat_ref = 0.0)
+    x = [c.center_lon for c in mesh.cells] ./ d .* dx; x .-= minimum(x)
+    mesh.static_vars["elevation"] = 1e-3 .* (maximum(x) .- x)
+    s = initialise_flow_model(mesh, StandardFlow();
+                              merge(scheme_options(:recommended, :standard), (open_boundary = ob,))...)
+    fill!(s.ghost_cell_bc, ZeroGradient)
+    return s, x, dx
+end
+
+@testset "T-BC11: the extrapolation neighbour is the inward one" begin
+    s, x, dx = _bc_slope(12, 8; ob = :normal)
+    lo = s.cell_lons; la = s.cell_lats
+    n_in = 0; n_corner = 0
+    for g in s.ghost_edges
+        g.interior_nb_idx == 0 && (n_corner += 1; continue)
+        c = g.cell_index; j = g.interior_nb_idx
+        dxn = (lo[j] - lo[c]) * cosd(la[c]); dyn = la[j] - la[c]
+        (dxn * g.nx + dyn * g.ny) / hypot(dxn, dyn) < -0.99 && (n_in += 1)   # opposite the outward normal
+    end
+    @test n_in + n_corner == length(s.ghost_edges)
+    @test n_in >= length(s.ghost_edges) - 8          # corner cells: no clearly inward neighbour
+    sl, _, _ = _bc_slope(12, 8; ob = :legacy)        # the old choice ran along the boundary
+    @test count(g -> g.interior_nb_idx in Set(h.cell_index for h in sl.ghost_edges), sl.ghost_edges) ==
+          length(sl.ghost_edges)
+end
+
+@testset "T-BC12: rained slope, open outlet: depths as kinematic flow ($ob)" for ob in (:normal, :legacy)
+    # 800 m × 160 m at 0.1%, 50 mm/h for 3 h (about 2.3 equilibrium times);
+    # kinematic steady depth h(x) = (r·x·n/√S)^0.6
+    s, x, dx = _bc_slope(40, 8; ob = ob)
+    BOUNDARY_POSITIVITY[] = true
+    r = 50e-3 / 3600
+    try
+        t = 0.0
+        while t < 10800.0
+            dt = min(_cfl_dt(s, StandardFlow()), 10.0)
+            s.volume .+= r * dt .* s.cell_area; s.water_depth .= s.volume ./ s.cell_area
+            step_standard!(s, dt); t += dt
+        end
+    finally
+        BOUNDARY_POSITIVITY[] = false
+    end
+    col(k) = sum(s.water_depth[i] for i in eachindex(x) if round(Int, x[i] / dx) == k) / 8
+    hk(xm) = (r * xm * 0.03 / sqrt(1e-3))^0.6
+    e_out = col(39) / hk(40dx) - 1                   # outlet column against the kinematic depth
+    e_mid = col(20) / hk(20.5dx) - 1
+    @info "T-BC12 $ob: outlet $(round(100e_out, digits = 1))%, mid-slope $(round(100e_mid, digits = 1))% against kinematic"
+    if ob === :normal
+        @test abs(e_out) < 0.10 && abs(e_mid) < 0.10   # measured −8%, −2%
+    else
+        @test e_mid < -0.25                            # the old outlet drains the slope too fast
+    end
 end
 
 @info "test_open_boundary.jl: all tests complete"
