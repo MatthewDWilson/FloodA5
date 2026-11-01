@@ -588,12 +588,17 @@ positivity at boundaries; all source types; open, closed and critical
 boundaries. Not on a device (refused with an error): `--momentum-model
 cell|blend`, `--cfl-mode legacy` (a sort), `--limiter-stats`.
 
-**Two passes are serial on a device**: point sources and open-boundary
-outflow (Phase D). Phase D on the CPU walks the ghost edges in order and
-reads a neighbour's volume after earlier ghost edges have changed it, so
-the order is part of the result; the device replicates it on one thread.
-It is a small fraction of a step but does not scale; an order-independent
-formulation would change results and needs its own validation.
+**Order-dependent passes.** Point sources are added on one device thread,
+in source order. Open-boundary outflow (Phase D) on the CPU walks the ghost
+edges in order and reads a neighbour's volume after earlier ghost edges have
+changed it, so the order is part of the result. The device runs it in
+dependency levels (`_ghost_schedule`): each edge one level after the latest
+earlier edge that touched its cell or its interior neighbour, the levels in
+order, the edges of a level in parallel, and the outflow volumes summed in
+edge order — which reproduces the CPU loop exactly. With
+`--open-boundary normal` (inward neighbours) there are a handful of levels
+(4 on a 360 × 360 grid); with `legacy` the neighbours run along the boundary
+and the levels approach one per edge.
 
 **Precision and agreement.** Float64 throughout. The device path run on the
 CPU is bit-identical to `CPUThreads` for all three solvers
