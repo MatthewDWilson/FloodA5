@@ -53,13 +53,13 @@ function _wet_state(mesh, method; kw...)
 end
 
 @testset "R1 — restructured steps == frozen reference ($lab)" for (lab, method, kw) in [
-        ("std recommended",    StandardFlow(), scheme_options(:recommended, :standard)),
+        ("std v0.2",    StandardFlow(), scheme_options(:v02, :standard)),
         ("std legacy",         StandardFlow(), scheme_options(:legacy, :standard)),
-        ("std positivity",     StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :positivity))),
-        ("std legacy limiter", StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :legacy))),
-        ("sgs recommended",    SGSFlow(),      scheme_options(:recommended, :sgs)),
-        ("sgs positivity",     SGSFlow(),      merge(scheme_options(:recommended, :sgs), (; limiter = :positivity))),
-        ("sgs consistent QC",  SGSFlow(),      merge(scheme_options(:recommended, :sgs),
+        ("std positivity",     StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :positivity))),
+        ("std legacy limiter", StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :legacy))),
+        ("sgs v0.2",    SGSFlow(),      scheme_options(:v02, :sgs)),
+        ("sgs positivity",     SGSFlow(),      merge(scheme_options(:v02, :sgs), (; limiter = :positivity))),
+        ("sgs consistent QC",  SGSFlow(),      merge(scheme_options(:v02, :sgs),
                                                      (; q_centre_theta = 0.9, q_centre_mode = :consistent))),
     ]
     a = _wet_state(_A5, method; kw...); b = _wet_state(_A5, method; kw...)
@@ -93,10 +93,10 @@ end
     @test [c.id for c in m2.cells] == [c.id for c in _A5.cells][p]
     # initial state from coordinates only (not cell or ghost-edge indices)
     function ordfree(mesh)
-        # recommended options: consistent Q-centring is orientation-independent
+        # v0.2 options: consistent Q-centring is orientation-independent
         # (legacy Q-centring is not, which is why run_flood_model keeps the
         # file order for it)
-        s = _quiet(() -> initialise_flow_model(mesh, StandardFlow(); scheme_options(:recommended, :standard)...))
+        s = _quiet(() -> initialise_flow_model(mesh, StandardFlow(); scheme_options(:v02, :standard)...))
         fill!(s.ghost_cell_bc, ZeroGradient)
         x = [c.center_lon for c in mesh.cells]; y = [c.center_lat for c in mesh.cells]
         s.elevation .= 1e-3 .* 111_000 .* (x .- 172.61) .+ 0.05 .* sin.(7e4 .* y)
@@ -145,11 +145,11 @@ end
 
 @testset "R4 — active-edge list == full pass ($lab, sills $(cs ? "consistent" : "inconsistent"))" for
         (lab, method, kw) in [
-            ("std recommended", StandardFlow(), scheme_options(:recommended, :standard)),
+            ("std v0.2", StandardFlow(), scheme_options(:v02, :standard)),
             ("std legacy",      StandardFlow(), scheme_options(:legacy, :standard)),
-            ("std positivity",  StandardFlow(), merge(scheme_options(:recommended, :standard), (; limiter = :positivity))),
-            ("sgs recommended", SGSFlow(),      scheme_options(:recommended, :sgs)),
-            ("sgs positivity",  SGSFlow(),      merge(scheme_options(:recommended, :sgs), (; limiter = :positivity))),
+            ("std positivity",  StandardFlow(), merge(scheme_options(:v02, :standard), (; limiter = :positivity))),
+            ("sgs v0.2", SGSFlow(),      scheme_options(:v02, :sgs)),
+            ("sgs positivity",  SGSFlow(),      merge(scheme_options(:v02, :sgs), (; limiter = :positivity))),
         ], cs in (true, false)
     # (a test driver may restrict to one configuration)
     isdefined(Main, :ONLY_CFG) && (lab != Main.ONLY_CFG || cs != Main.ONLY_CS) && continue

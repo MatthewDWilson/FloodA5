@@ -40,7 +40,7 @@ function _state(mesh, z; cs = 0.05, kw...)
     m = deepcopy(mesh)
     m.static_vars["elevation"] = z
     s = _quiet(() -> initialise_flow_model(m, StandardFlow();
-                                          merge(scheme_options(:recommended, :standard),
+                                          merge(scheme_options(:v02, :standard),
                                                 (; limiter = :positivity, q_centre_theta = 1.0,
                                                    eta_filter = cs), NamedTuple(kw))...))
     fill!(s.ghost_cell_bc, Closed)

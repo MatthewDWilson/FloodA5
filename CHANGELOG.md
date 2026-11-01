@@ -33,6 +33,45 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-30
+
+⚠ Default results change for `--flow-model standard` (MINOR), and for
+`--flow-model sgs` through its open boundaries. SWE is unchanged.
+
+### Changed
+- ⚠ `--scheme recommended` (the default) for standard flow is now the
+  Δt-consistent scheme: positivity limiter (also at open boundaries), no
+  Q-centring (θ = 1), η filter C_s = 0.05, with the diamond-wetdry face
+  gradient, vector friction and local CFL as before. It is the
+  local-inertial configuration closest to the full shallow-water reference
+  on A5 and Cartesian meshes and converges with resolution; the 0.2.x
+  default stored 60–80% more on the Carlisle test and did not converge
+  (HYDRAULICS.md §15.11).
+- `--boundary-limiter`, `--eta-filter`, `--momentum-damping` and
+  `--momentum-damping-scale` take their defaults from `--scheme`
+  (`scheme_options` gains `eta_filter`, `momentum_damping`,
+  `momentum_damping_scale`; `scheme_boundary_limiter`). Momentum damping is
+  off in every scheme.
+
+### Fixed
+- ⚠ Open (ZeroGradient) boundaries extrapolated the ghost water level from
+  the most *outward* neighbour (a comparison with the wrong sign) — one
+  along the boundary — so outlets held water back and narrow domains leaked
+  through their sides. `--open-boundary normal` (the default for standard
+  and SGS flow under `--scheme recommended`) extrapolates the bed slope
+  from the inward neighbour at the boundary cell's depth: a free outflow at
+  normal depth. `--open-boundary legacy` (and `--scheme v0.2`/`legacy`)
+  keeps the old behaviour. FlowState field 43 `open_boundary`, with a
+  42-argument constructor shim. Tests T-BC11/12.
+
+### Added
+- `--scheme v0.2`: the 0.2.x default, bit-identical to 0.2.5
+  (`scheme_options(:v02, …)`).
+
+### Known trade-off
+- More velocity noise in deep channels than the 0.2.x default (dv_rms
+  0.65 vs 0.24 m/s on A5 Carlisle); `--momentum-damping 0.05` reduces it.
+
 ## [0.2.6] — 2026-10-30
 
 Default results unchanged (PATCH): only the opt-in `--flow-model swe` changes.
