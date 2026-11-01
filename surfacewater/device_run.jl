@@ -23,6 +23,7 @@ struct DeviceRun{K, B<:ComputeBackend, AT, VI, VF}
     src_cell_h :: Vector{Int}             # host staging for the two above
     src_inc_h  :: Vector{Float64}
     removed    :: Base.RefValue{Float64}  # SWE: boundary outflow so far (state.vol_removed)
+    glptr      :: Vector{Int}             # standard/SGS: Phase D level bounds (host)
 end
 
 """
@@ -40,7 +41,10 @@ function DeviceRun(state::FlowState, method::FlowMethod, be::ComputeBackend, sou
     stage(K, a) = DeviceRun{K, typeof(be), typeof(a), typeof(to_device(be, zeros(Int, 0))),
                             typeof(to_device(be, zeros(0)))}(
         be, a, to_device(be, zeros(Int, ns)), to_device(be, zeros(ns)),
-        zeros(Int, ns), zeros(ns), Ref(state.vol_removed))
+        zeros(Int, ns), zeros(ns), Ref(state.vol_removed),
+        method isa SWEFlow ? Int[1] :
+        _ghost_schedule([g.cell_index for g in state.ghost_edges],
+                        [g.interior_nb_idx for g in state.ghost_edges], state.ghost_cell_bc)[2])
     if method isa SWEFlow
         sw = state.swe
         @inbounds for k in eachindex(sw.gbc); sw.gbc[k] = _swe_bc_code(state.ghost_cell_bc[k]); end
@@ -104,8 +108,8 @@ _device_depth!(dev::DeviceRun{:std}) = foreach_index!(dev.be, dev.a.n, _depth_st
 _device_depth!(dev::DeviceRun{:sgs}) = nothing        # step_sgs! keeps the depth in sync itself
 _device_step!(dev::DeviceRun{:swe}, dt::Float64, courant::Float64) =
     _swe_advance!(dev.be, dev.a, dt, courant, dev.removed)
-_device_step!(dev::DeviceRun{:std}, dt::Float64, courant::Float64) = _std_step!(dev.be, dev.a, dt)
-_device_step!(dev::DeviceRun{:sgs}, dt::Float64, courant::Float64) = _sgs_step!(dev.be, dev.a, dt)
+_device_step!(dev::DeviceRun{:std}, dt::Float64, courant::Float64) = _std_step!(dev.be, dev.a, dt, dev.glptr)
+_device_step!(dev::DeviceRun{:sgs}, dt::Float64, courant::Float64) = _sgs_step!(dev.be, dev.a, dt, dev.glptr)
 
 "Copy the state the host reads back (volume, depth, discharges, outflow)."
 function _device_sync!(dev::DeviceRun{:swe}, state::FlowState)

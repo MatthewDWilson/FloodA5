@@ -13,10 +13,13 @@
 # which changes results:
 #   - the device visits every edge (the CPU's active-edge list visits only the
 #     edges that can change, and is bit-identical to the full pass);
-#   - open-boundary outflow (Phase D) runs as one ordered device thread over
-#     struct-of-arrays copies of the ghost edges: the CPU loop reads a
-#     neighbour's volume after earlier ghost edges have changed it, so the
-#     order is part of the result.
+#   - open-boundary outflow (Phase D) runs over struct-of-arrays copies of
+#     the ghost edges in dependency levels (`_ghost_schedule`): the CPU loop
+#     reads a neighbour's volume after earlier ghost edges have changed it,
+#     so the order is part of the result; edges in one level share no cell
+#     with each other's writes, and the levels run in order, which
+#     reproduces the CPU loop exactly. The outflow volumes are summed in
+#     edge order by one thread, as the CPU adds them to state.vol_removed.
 # Supported on a device: the options of `--scheme recommended` and `v0.2`
 # (edge momentum, any Q-centring mode, diamond/diamond-wetdry or two-point
 # face gradient, any limiter, local CFL, η filter, momentum damping).
@@ -244,10 +247,11 @@ end
 
 # ── Device-only bodies ──────────────────────────────────────────────────────
 
-# Phase D, one ordered thread (as _apply_ghost_fluxes_standard!); the outflow
-# total accumulates in removed[1] in the same order as state.vol_removed
+# Phase D for ghost edge k (as _apply_ghost_fluxes_standard!), launched level
+# by level (`_ghost_pass!`); the edge's outflow volume goes to g_dv[k]
 @inline function _ghost_std_k!(k, a, dt)
     @inbounds begin
+        a.g_dv[k] = 0.0
         bc = a.g_bc[k]
         bc === Closed && return nothing
         ci = a.g_cell[k]
@@ -257,6 +261,7 @@ end
         isnan(wse_ci) && return nothing
         nb = a.g_nb[k]
         wse_nb = nb > 0 ? a.elevation[nb] + a.volume[nb] / max(a.cell_area[nb], 1.0) : NaN
+        a.obnormal && nb > 0 && (wse_nb = _open_nb_wse(wse_ci, a.elevation[ci], a.elevation[nb]))
         wse_ghost = _ghost_wse(wse_ci, a.g_sill[k], bc, wse_nb, a.g_nbL[k], a.g_L[k])
         wse_ghost == -Inf && return nothing
         Q_out, q_stored = _bates_ghost_flux(a.g_fprev[k], wse_ci, wse_ghost, a.g_sill[k],
@@ -267,9 +272,59 @@ end
         dV = max(dV, 0.0)
         a.volume[ci]      = max(0.0, a.volume[ci] - dV)
         a.water_depth[ci] = a.volume[ci] / max(a.cell_area[ci], 1.0)
-        a.removed[1]     += dV
+        a.g_dv[k]         = dV
         a.g_fprev[k]      = q_stored
     end
+    return nothing
+end
+
+"""
+    _ghost_schedule(g_cell, g_nb, g_bc) → (order, lptr)
+
+Dependency levels for Phase D on a device. Ghost edge k reads the volumes of
+its cell and its interior neighbour and writes its cell's; it is placed one
+level after the latest earlier edge that touched either cell, so edges in a
+level are independent and running the levels in order reproduces the serial
+CPU loop exactly. Closed faces do nothing and are left out. `order[lptr[l]:
+lptr[l+1]-1]` are the edges of level l (in edge order).
+"""
+function _ghost_schedule(g_cell, g_nb, g_bc)
+    last = Dict{Int,Int}(); lev = zeros(Int, length(g_cell))
+    for k in eachindex(g_cell)
+        g_bc[k] === Closed && continue
+        c = g_cell[k]; nb = g_nb[k]
+        l = get(last, c, 0)
+        nb > 0 && (l = max(l, get(last, nb, 0)))
+        lev[k] = l + 1
+        last[c] = lev[k]
+        nb > 0 && (last[nb] = max(get(last, nb, 0), lev[k]))
+    end
+    nlev = maximum(lev; init = 0)
+    order = [k for l in 1:nlev for k in eachindex(lev) if lev[k] == l]
+    lptr = ones(Int, nlev + 1)
+    for l in 1:nlev; lptr[l + 1] = lptr[l] + count(==(l), lev); end
+    return order, lptr
+end
+
+@inline function _ghost_lvl_k!(j, body::F, a, off, dt) where {F}
+    @inbounds body(a.g_order[off + j], a, dt)
+    return nothing
+end
+@inline function _ghost_sum_k!(_, a)
+    r = a.removed[1]
+    @inbounds for k in eachindex(a.g_dv)
+        r += a.g_dv[k]
+    end
+    a.removed[1] = r
+    return nothing
+end
+
+"Phase D on a device: the levels of `lptr` in order, then the ordered outflow sum."
+function _ghost_pass!(be::ComputeBackend, body::F, a, lptr::Vector{Int}, dt::Float64) where {F}
+    for l in 1:length(lptr) - 1
+        foreach_index!(be, lptr[l + 1] - lptr[l], _ghost_lvl_k!, body, a, lptr[l] - 1, dt)
+    end
+    on_host_order!(be, 1, _ghost_sum_k!, a)
     return nothing
 end
 
@@ -335,7 +390,10 @@ function _std_device_args(state::FlowState)
         g_sill = [g.sill for g in G], g_fprev = [g.flux_prev for g in G],
         g_nb = [g.interior_nb_idx for g in G], g_nbL = [g.interior_nb_L for g in G],
         g_bc = BCType[b for b in state.ghost_cell_bc], removed = [state.vol_removed],
-        bpos = BOUNDARY_POSITIVITY[],
+        g_dv = zeros(length(G)), g_order = _ghost_schedule([g.cell_index for g in G],
+                                                            [g.interior_nb_idx for g in G],
+                                                            state.ghost_cell_bc)[1],
+        obnormal = state.open_boundary === :normal, bpos = BOUNDARY_POSITIVITY[],
         n = length(state.cell_ids), ne = E.n_edges, ng = length(G), nv = nv,
         nvm = length(ws.m_psi),
         opts = StdOpts(state), use_diamond = use_diamond,
@@ -349,12 +407,13 @@ function _std_device_args(state::FlowState)
 end
 
 """
-    _std_step!(be, a, dt)
+    _std_step!(be, a, dt, glptr)
 
 One standard-flow step on the arrays `a` (`_std_device_args`, on any
-backend), in `step_standard!`'s phase order.
+backend), in `step_standard!`'s phase order; `glptr` are the Phase D level
+bounds (`_ghost_schedule`).
 """
-function _std_step!(be::ComputeBackend, a, dt::Float64)
+function _std_step!(be::ComputeBackend, a, dt::Float64, glptr::Vector{Int})
     if a.gc
         foreach_index!(be, a.n, _wse_k!, a)
         foreach_index!(be, a.n, _grad_wse_k!, a)
@@ -370,7 +429,7 @@ function _std_step!(be::ComputeBackend, a, dt::Float64)
         foreach_index!(be, a.ne, _pos_scale_k!, a)
     end
     foreach_index!(be, a.n, _gather_std_k!, a)
-    a.ng > 0 && on_host_order!(be, a.ng, _ghost_std_k!, a, dt)
+    a.ng > 0 && _ghost_pass!(be, _ghost_std_k!, a, glptr, dt)
     if a.eta_cs > 0.0
         foreach_index!(be, a.n, _ef_eta_k!, a)
         foreach_index!(be, a.n, _ef_r_k!, a)

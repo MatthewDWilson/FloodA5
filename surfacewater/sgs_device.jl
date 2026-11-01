@@ -3,8 +3,8 @@
 # WP5 stage 3 (2026-10): the SGS (sub-grid, R–A kernel) step on any compute
 # backend. As std_device.jl for the standard step: kernel bodies shared with
 # the CPU path where the CPU loops are per cell (WSE, gather), the device
-# driver `_sgs_step!` in `step_sgs!`'s phase order, and Phase D as one
-# ordered device thread.
+# driver `_sgs_step!` in `step_sgs!`'s phase order, and Phase D in
+# dependency levels (std_device.jl, `_ghost_schedule`).
 #
 # The per-cell hypsometric tables (`Vector{SGSTable}`, each holding its own
 # arrays) cannot go to a device as they are. `_sgs_flat` packs them into
@@ -65,9 +65,10 @@ end
     return nothing
 end
 
-# Phase D, one ordered thread (as _apply_ghost_fluxes_sgs!)
+# Phase D for ghost edge k (as _apply_ghost_fluxes_sgs!), level by level
 @inline function _ghost_sgs_k!(k, a, dt)
     @inbounds begin
+        a.g_dv[k] = 0.0
         bc = a.g_bc[k]
         bc === Closed && return nothing
         ci = a.g_cell[k]
@@ -77,6 +78,7 @@ end
         isnan(wse_ci) && return nothing
         nb = a.g_nb[k]
         wse_nb = nb > 0 && nb <= a.n ? wse_from_volume(_tab(a.tables, nb), a.volume[nb]) : NaN
+        a.obnormal && nb > 0 && (wse_nb = _open_nb_wse(wse_ci, a.elevation[ci], a.elevation[nb]))
         wse_ghost = _ghost_wse(wse_ci, a.g_sill[k], bc, wse_nb, a.g_nbL[k], a.g_L[k])
         wse_ghost == -Inf && return nothing
         if a.g_isQ[k]
@@ -99,7 +101,7 @@ end
         dV = max(dV, 0.0)
         a.volume[ci] = max(0.0, a.volume[ci] - dV)
         a.water_depth[ci] = max(0.0, wse_from_volume(tbl, a.volume[ci]) - tbl.z_min)
-        a.removed[1] += dV
+        a.g_dv[k] = dV
         a.g_fprev[k] = q_stored
     end
     return nothing
@@ -150,7 +152,10 @@ function _sgs_device_args(state::FlowState)
         g_isQ = [g.is_Q_flux for g in G],
         g_nb = [g.interior_nb_idx for g in G], g_nbL = [g.interior_nb_L for g in G],
         g_bc = BCType[b for b in state.ghost_cell_bc], removed = [state.vol_removed],
-        bpos = BOUNDARY_POSITIVITY[],
+        g_dv = zeros(length(G)), g_order = _ghost_schedule([g.cell_index for g in G],
+                                                            [g.interior_nb_idx for g in G],
+                                                            state.ghost_cell_bc)[1],
+        obnormal = state.open_boundary === :normal, bpos = BOUNDARY_POSITIVITY[],
         n = length(state.cell_ids), ne = E.n_edges, ng = length(G),
         opts = SGSOpts(state), gc = state.gradient_correction,
         positivity = state.limiter !== :legacy,
@@ -158,7 +163,7 @@ function _sgs_device_args(state::FlowState)
 end
 
 "One SGS step on the arrays `a` (any backend), in `step_sgs!`'s phase order."
-function _sgs_step!(be::ComputeBackend, a, dt::Float64)
+function _sgs_step!(be::ComputeBackend, a, dt::Float64, glptr::Vector{Int})
     foreach_index!(be, a.n, _sgs_wse_k!, a)
     a.gc && foreach_index!(be, a.n, _grad_wse_k!, a)
     copyto!(a.flux_Q_prev, a.flux_Q)
@@ -169,7 +174,7 @@ function _sgs_step!(be::ComputeBackend, a, dt::Float64)
         foreach_index!(be, a.ne, _pos_scale_k!, p)
     end
     foreach_index!(be, a.n, _gather_sgs_k!, a)
-    a.ng > 0 && on_host_order!(be, a.ng, _ghost_sgs_k!, a, dt)
+    a.ng > 0 && _ghost_pass!(be, _ghost_sgs_k!, a, glptr, dt)
     a.need_qvec && foreach_index!(be, a.n, _qvec_k!, a, Val(true))
     return nothing
 end
