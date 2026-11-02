@@ -600,13 +600,35 @@ edge order — which reproduces the CPU loop exactly. With
 (4 on a 360 × 360 grid); with `legacy` the neighbours run along the boundary
 and the levels approach one per edge.
 
+**Throughput** (`test/benchmark_backend.jl`: all cells wet, Cartesian n × n,
+million cell-steps per second; Xeon E-2278G, 8 cores / 16 threads, against
+an RTX 4000 SFF Ada, whose FP64 rate is 1/64 of FP32):
+
+| cells | standard CPU | standard GPU | SWE CPU | SWE GPU |
+|---|---|---|---|---|
+| 65 536 | 10.0 | 7.2 | 3.1 | 4.8 |
+| 262 144 | 9.1 | 26.0 | 2.4 | 22.0 |
+| 1 048 576 | 8.4 | 93.2 | 2.7 | 29.4 |
+
+The GPU overtakes the CPU at about 10⁵ cells; below that, launch latency
+(about 20 launches per standard step with the default options) dominates. Dry cells cost nothing
+on the CPU (active-edge set, WP4) but are still visited on the GPU, so a
+mostly dry domain moves the crossover upward.
+
 **Precision and agreement.** Float64 throughout. The device path run on the
 CPU is bit-identical to `CPUThreads` for all three solvers
 (`test/test_backend.jl`, in CI). On the GPU, single steps agree to round-off
 (10⁻¹⁵ relative); over a run the local-inertial solvers amplify round-off
 at wet/dry thresholds (depth rms 10⁻⁸–10⁻⁶ m on a rained plane over 1 h,
 shrinking with time), as they do between thread counts with a different
-cell order (HYDRAULICS.md §15.5). FP64 throughput varies a lot between GPUs
+cell order (HYDRAULICS.md §15.5). Carlisle res 18, 6 h (`--cell-order
+file`): on the Cartesian 20 m mesh the GPU run matches the CPU to 3·10⁻¹¹ m
+in every frame; on A5 (standard and SGS) the two agree to 10⁻⁹ m for 30 min,
+then diverge locally by up to 1–2 m — exactly as a CPU run in Morton cell
+order diverges from one in file order, in the same cells and at the same
+times — while total storage stays within 3·10⁻⁴ (CPU reordering: 5·10⁻⁴).
+At this size (30 000 cells) the GPU is slower than 16 CPU threads for
+standard flow (153 vs 104 s) and faster for SGS (127 vs 281 s). FP64 throughput varies a lot between GPUs
 (1/64 of FP32 on most workstation and consumer cards); a Float32 option is
 future work.
 
