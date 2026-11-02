@@ -33,6 +33,26 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-02
+
+Default results unchanged (PATCH): a benchmark series and documentation only.
+
+### Added
+- `test/channel_bench/`: the straight-channel representation series — a
+  20 m channel at 7 orientations and 2 offsets on A5 (res 17–20) and
+  equal-area Cartesian grids, with SWE and the local-inertial default
+  (mesh and job generation, metrics, figures). `docs/TEST_CASES.md` §7.
+
+### Findings (see `HYDRAULICS.md` §15.12, figures in `docs/figures/`)
+- Both meshes lose conveyance in the same way as the channel narrows
+  below a cell (stage error about 1.1 m at 44 m cells, ≤ 0.15 m at 5.6 m).
+- A5 is not orientation-free. Cartesian is worst at 45°, A5 at 0–15° (at
+  51° N, 0° E). The spread over orientations is as large on A5 or larger,
+  and neither mesh is better overall. Locally, A5 faces lie in six fixed
+  directions.
+- On these in-bank cases the local-inertial default is as close to normal
+  depth as SWE, or closer.
+
 ## [0.3.1] — 2026-11-02
 
 Default results unchanged (PATCH): the CPU path is bit-identical to 0.3.0

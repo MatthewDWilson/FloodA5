@@ -506,6 +506,59 @@ Tier 0 on every family is `test/test_mesh_families.jl` (in CI).
 
 ---
 
+## 7. Straight-Channel Representation Series (0.3.2, 2026-11)
+
+A straight 20 m rectangular channel at 7 orientations and 2 cross-channel
+offsets on A5 meshes (res 17–20, cells 44–5.6 m) and on Cartesian grids of
+the same cell area, run with the full SWE solver and the local-inertial
+default. It measures how much conveyance each mesh loses as the channel
+narrows to one cell or less, and how that depends on orientation. Design,
+results and conclusions are in `HYDRAULICS.md` §15.12.
+
+### Domain
+
+A 2 km square at 51° N, 0° E with an analytic bed:
+- the channel, with 2 m banks;
+- a floodplain rising across the valley at 0.5%;
+- a 0.1% slope along the channel, steepening to 2% near the outflow as a
+  hydraulic control.
+
+Every edge is open. The inflow is 20 m³/s, constant. The in-bank normal depth is 0.97 m.
+
+### Running the series
+
+```bash
+# 1. Meshes (112 GeoParquet files, about 0.5 GB), inflow file, manifest and job list
+FLOODA5_NO_VIS=1 julia --project=. --threads 1 test/channel_bench/make_channel_meshes.jl test/wp1_runs/chan
+
+# 2. Runs: 3 h each, 224 jobs ("chan_<mesh>_r<res>_a<angle>_o<offset>_<swe|li>")
+bash test/run_jobs.sh test/wp1_runs/chan/jobs.txt 3 4 test/wp1_runs/chan
+#    (res 20 is faster on a GPU: run those lines with --backend gpu appended)
+
+# 3. Metrics (metrics.csv) and figures
+FLOODA5_NO_VIS=1 julia --project=. test/channel_bench/analyse_channel.jl test/wp1_runs/chan test/wp1_runs/chan
+julia --project=. test/channel_bench/plot_channel.jl test/wp1_runs/chan
+```
+
+`--res`, `--angles` and `--offsets` on the mesh script select a subset.
+Wall time per run on 16 threads of a Xeon E-2278G:
+- res 19 (33 000 cells): about 35 s local-inertial;
+- res 20 (130 000 cells) on an RTX 4000 Ada: 2–3 min local-inertial, 7–14 min SWE on A5, 3–5 min SWE on Cartesian.
+
+The whole series takes several hours on that machine.
+
+### Expected results
+
+Δη, the mean water-surface error in the channel against normal flow, behaves as follows:
+- It falls from about 1.1 m at 44 m cells to ≤ 0.15 m at 5.6 m on both meshes.
+- Cartesian is worst at 45°. A5 is worst at 0–15° and best at 60–90°.
+- Neither mesh is better overall (HYDRAULICS §15.12).
+
+The series is a benchmark with no pass/fail threshold. Use it to compare
+schemes or meshes against these figures.
+
+---
+
 ## Adding New Test Cases
 
 New test cases should be placed in `test/<domain_name>/` and documented here.
