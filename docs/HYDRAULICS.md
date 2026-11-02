@@ -1497,3 +1497,77 @@ velocity noise in deep channels: dv_rms 0.65 m/s on A5 Carlisle against
 filter, §15.8). Where velocities matter more than conveyance,
 `--momentum-damping 0.05` removes most of the noise (0.30 m/s) for 6–10%
 more storage.
+
+### 15.12 Channel representation: A5 against Cartesian (0.3.2, 2026-11)
+
+*Question.* Does the A5 mesh represent a narrow channel at an arbitrary
+orientation better than a Cartesian grid of the same cell area, which
+staircases a diagonal channel?
+
+*Series* (`test/channel_bench/`, `docs/TEST_CASES.md` §7):
+- **Geometry.** A straight rectangular channel, 20 m wide with 2 m banks, cut into a 2 km
+  valley whose floodplain rises across the valley at 0.5%. The bed slope is 0.1% along the channel, and the
+  bed steepens to 2% at s = 0.3 L (a hydraulic control upstream of the
+  outflow edges). Q = 20 m³/s enters at s = −0.45 L.
+- **Mesh.** The cell-mean bed is sampled
+  analytically by Halton points, as `sample_dem_mean!` does for a raster.
+- **Cases.** 7 orientations (0–90°) × 2 cross-channel offsets (0 and ½ cell) ×
+  A5 res 17–20 (cells 44, 22, 11, 5.6 m) and equal-area Cartesian grids.
+- **Solvers.** Full SWE (`--flow-model swe`) and the 0.3.0 local-inertial
+  default. Each run lasts 3 h; the res-20 runs were on the GPU.
+- **Metric.** Δη is the mean
+  water-surface error over the channel cells of the reach s ∈ [−0.3 L,
+  0.05 L], against the 2-D normal flow (h_n = (Qn/(W√S))^0.6 = 0.97 m);
+  lost conveyance shows as Δη > 0. The runs are steady, or close to it:
+  outflow/inflow is 0.89–1.01 at 44 and 22 m and within 0.5% of 1 from
+  11 m, and the stage changes by less than 4 cm between the last two frames,
+  except up to 0.14 m in some 22 m SWE runs.
+
+*Results* (mean Δη over the two offsets; figures `docs/figures/channel_vs_resolution.png`
+and `channel_vs_angle.png`). Columns 0°–90° are the channel orientation (0° = channel along the x-axis); "spread" is max − min over orientations.
+
+| solver | cell | mesh | 0° | 15° | 30° | 45° | 60° | 75° | 90° | rms | spread |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SWE | 11 m | A5 | 0.71 | 0.71 | 0.57 | 0.49 | 0.25 | 0.07 | 0.13 | 0.49 | 0.64 |
+| SWE | 11 m | Cartesian | 0.18 | 0.30 | 0.43 | 0.53 | 0.43 | 0.28 | 0.17 | 0.35 | 0.36 |
+| SWE | 5.6 m | A5 | 0.29 | 0.17 | 0.17 | 0.15 | 0.00 | −0.05 | −0.01 | 0.15 | 0.34 |
+| SWE | 5.6 m | Cartesian | 0.03 | 0.05 | 0.11 | 0.12 | 0.12 | 0.08 | 0.03 | 0.09 | 0.09 |
+| LI | 11 m | A5 | 0.50 | 0.51 | 0.45 | 0.33 | 0.10 | 0.06 | −0.06 | 0.35 | 0.57 |
+| LI | 11 m | Cartesian | 0.23 | 0.12 | 0.29 | 0.48 | 0.30 | 0.27 | 0.22 | 0.29 | 0.36 |
+| LI | 5.6 m | A5 | −0.08 | −0.04 | −0.02 | 0.11 | 0.00 | −0.01 | −0.06 | 0.06 | 0.19 |
+| LI | 5.6 m | Cartesian | 0.09 | −0.05 | 0.00 | 0.16 | 0.00 | 0.10 | 0.09 | 0.09 | 0.21 |
+
+- *Resolution.* Both meshes converge in the same way: Δη ≈ 1.1 m at 44 m
+  cells (the channel is not resolved) and 0.8–1.0 m at 22 m, falling to
+  0.3–0.5 m at 11 m and ≤ 0.15 m at 5.6 m.
+- *Orientation.*
+  - Cartesian behaves as expected: worst at 45°, best along the axes.
+  - A5 is **not** orientation-free. It is worst at 0–15° and best at 60–90°,
+    with a spread over orientations as large as Cartesian's or larger.
+  - At 45° the two are equal (SWE, 11 m: 0.49 against 0.53 m).
+  - With SWE, A5 has the larger rms error at every resolution from 22 m.
+- *Why A5 has preferred directions.* Over a domain this size, A5 is a
+  periodic tiling: every face normal lies in one of six directions (2°,
+  41°, 103°, 146°, 155°, 173° from east, mod 180°; the same at res 17 and
+  19). The largest gap between them is 62° (41°–103°), against 90° on a
+  Cartesian grid. Face alignment alone does not explain the pattern,
+  though: A5 does worst along 0–15°, where it has faces at 2° and 173°.
+  The mechanism is open.
+- *Local-inertial against SWE.*
+  - On these in-bank cases the 0.3.0 default is
+    as close to the analytic stage as SWE, or closer. At 5.6 m on A5 its rms
+    is 0.06 m against SWE's 0.15 m, which keeps 0.29 m at 0°.
+  - At coarse resolution, local-inertial spills onto the floodplain where the
+    channel is unresolved, much more on Cartesian (up to 62 m of wet
+    floodplain per metre of reach at 44 m) than on A5 (14 m). SWE barely
+    spills (≤ 6 m).
+  - `--momentum-damping 0.05` changes the median Δη by less than 0.05 m,
+    except Cartesian at 11 m (0.29 → 0.14 m).
+
+*Conclusion.* For a straight channel 0.5–4 cells wide, A5 gives no
+systematic advantage over a Cartesian grid of the same cell area. It
+trades Cartesian's 45° weakness for its own preferred directions; any
+benefit of A5 for diagonal flow would have to show elsewhere than in
+channel conveyance at a given resolution. This series uses one location
+(51° N, 0° E); A5's local face directions vary between dodecahedron faces,
+so the orientation pattern will differ elsewhere.
