@@ -229,8 +229,11 @@ function DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, va
     end
     vptr = Vector{Int}(undef, length(vertices) + 1); vptr[1] = 1
     for (v, r) in enumerate(vertices); vptr[v + 1] = vptr[v] + length(r.cell_indices); end
-    vcell = reduce(vcat, (r.cell_indices for r in vertices); init = Int[])
-    vw    = reduce(vcat, (r.weights for r in vertices); init = Float64[])
+    # filled in place: reduce(vcat, generator) folds pairwise and is quadratic
+    vcell = Vector{Int}(undef, vptr[end] - 1); vw = Vector{Float64}(undef, vptr[end] - 1)
+    for (v, r) in enumerate(vertices)
+        copyto!(vcell, vptr[v], r.cell_indices); copyto!(vw, vptr[v], r.weights)
+    end
     vnan  = [isempty(r.cell_indices) || r.fallback === :degenerate for r in vertices]
     return DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, valid,
                             vertices, va_idx, vb_idx, vptr, vcell, vw, vnan)

@@ -48,6 +48,8 @@ _quiet(f) = with_logger(f, SimpleLogger(stderr, Logging.Warn))
     veta = diamond_vertex_eta!(Float64[], T, wse)
     vwet = diamond_vertex_wet!(Bool[], T, depth, HFLOW_THRESHOLD)
     @test length(veta) == length(T.vertices) == length(T.vptr) - 1
+    @test all(T.vcell[T.vptr[v]:T.vptr[v + 1] - 1] == T.vertices[v].cell_indices &&
+              T.vw[T.vptr[v]:T.vptr[v + 1] - 1] == T.vertices[v].weights for v in eachindex(T.vertices))
     nvalid = 0
     for e in 1:E.n_edges
         a = diamond_dWSE_n(T, e, wse[E.cell_i[e]], wse[E.cell_j[e]], wse, E.L[e])
