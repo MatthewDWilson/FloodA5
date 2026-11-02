@@ -271,7 +271,9 @@ records the options that were tried and rejected. The CLI flags are documented i
 [docs/USER_GUIDE.md §4.3a](docs/USER_GUIDE.md), and the physics in
 [docs/METHODS.md](docs/METHODS.md).
 
-**Performance.** Each time step is multi-threaded (`julia --threads auto`).
+**Performance.** Each time step is multi-threaded (`julia --threads auto`), or
+runs on an NVIDIA GPU with `--backend gpu` (every flow model; worthwhile from
+roughly 10⁵ cells — see `docs/ARCHITECTURE.md` §6a).
 Carlisle res-18 (30,000 cells, river inflows plus 10 mm/h rain, 8 threads)
 runs at roughly 500 simulated hours per wall-clock hour with the standard
 solver and 125 with SGS; mostly dry domains run much faster.

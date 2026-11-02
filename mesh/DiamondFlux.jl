@@ -229,8 +229,11 @@ function DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, va
     end
     vptr = Vector{Int}(undef, length(vertices) + 1); vptr[1] = 1
     for (v, r) in enumerate(vertices); vptr[v + 1] = vptr[v] + length(r.cell_indices); end
-    vcell = reduce(vcat, (r.cell_indices for r in vertices); init = Int[])
-    vw    = reduce(vcat, (r.weights for r in vertices); init = Float64[])
+    # filled in place: reduce(vcat, generator) folds pairwise and is quadratic
+    vcell = Vector{Int}(undef, vptr[end] - 1); vw = Vector{Float64}(undef, vptr[end] - 1)
+    for (v, r) in enumerate(vertices)
+        copyto!(vcell, vptr[v], r.cell_indices); copyto!(vw, vptr[v], r.weights)
+    end
     vnan  = [isempty(r.cell_indices) || r.fallback === :degenerate for r in vertices]
     return DiamondFluxTable(vertex_table, va_key, vb_key, c_i, c_va, c_j, c_vb, valid,
                             vertices, va_idx, vb_idx, vptr, vcell, vw, vnan)
@@ -489,7 +492,7 @@ end
 `diamond_dWSE_n` with the vertex values precomputed by `diamond_vertex_eta!`
 (bit-identical: the same `eta_at_vertex` results, the same arithmetic).
 """
-@inline function diamond_dWSE_n_v(table::DiamondFluxTable, e::Int,
+@inline function diamond_dWSE_n_v(table, e::Int,              # DiamondFluxTable or its view
                                   wse_ci::Float64, wse_cj::Float64,
                                   veta::AbstractVector{Float64}, L_e::Float64)::Float64
     @inbounds begin
@@ -508,7 +511,7 @@ end
 
 `diamond_stencil_wet` with the per-vertex flags from `diamond_vertex_wet!`.
 """
-@inline function diamond_stencil_wet_v(table::DiamondFluxTable, e::Int,
+@inline function diamond_stencil_wet_v(table, e::Int,         # DiamondFluxTable or its view
                                        vwet::AbstractVector{Bool})::Bool
     @inbounds table.valid[e] || return false
     @inbounds return vwet[table.va_idx[e]] && vwet[table.vb_idx[e]]

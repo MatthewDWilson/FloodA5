@@ -109,46 +109,16 @@ function _eta_filter!(state::FlowState, ws::StepWorkspace, dt::Float64)
     ci = E.cell_i; cj = E.cell_j; sill = E.sill; wid = E.width
     cptr, cedge = _cell_csr!(state, ws)
 
-    @batch per=core for i in 1:n
-        @inbounds η[i] = z[i] + V[i] / max(A[i], 1.0)
-    end
-    @batch per=core for i in 1:n
-        @inbounds r[i] = _eta_residual(i, η, V, adj, cei, sill, dxm, dym)
-    end
-    @batch per=core for e in 1:ne
-        @inbounds begin
-            i = ci[e]; j = cj[e]
-            hf = min(η[i], η[j]) - sill[e]
-            F[e] = hf > 0.0 && A[i] >= 1.0 && A[j] >= 1.0 ?
-                   Cs * sqrt(_G * hf) * wid[e] * (r[j] - r[i]) * dt : 0.0
-        end
-    end
-    # positivity: all filter outflows of a cell together ≤ its volume
-    @batch per=core for i in 1:n
-        o = 0.0
-        @inbounds for k in cptr[i]:cptr[i + 1] - 1
-            e = cedge[k]; f = F[e]
-            o += ci[e] == i ? max(-f, 0.0) : max(f, 0.0)
-        end
-        @inbounds sc[i] = o > V[i] ? V[i] / o : 1.0
-    end
-    @batch per=core for e in 1:ne
-        @inbounds begin
-            f = F[e]
-            iszero(f) || (F[e] = f * (f > 0.0 ? sc[cj[e]] : sc[ci[e]]))   # f > 0: cj donates
-        end
-    end
-    @batch per=core for i in 1:n
-        s = 0.0
-        @inbounds for k in cptr[i]:cptr[i + 1] - 1
-            e = cedge[k]; f = F[e]
-            iszero(f) && continue
-            s = ci[e] == i ? s + f : s - f
-        end
-        @inbounds if !iszero(s)
-            V[i] = max(0.0, V[i] + s)
-            depth[i] = V[i] / A[i]
-        end
-    end
+    # the passes as kernel bodies, shared with the device path (std_device.jl)
+    a = (elevation = z, volume = V, cell_area = A, water_depth = depth, f_eta = η, f_r = r,
+         f_flux = F, f_out = sc, adj = adj, cei = cei, sill = sill, f_dx = dxm, f_dy = dym,
+         ci = ci, cj = cj, width = wid, cptr = cptr, cedge = cedge)
+    be = CPUThreads()
+    foreach_index!(be, n, _ef_eta_k!, a)
+    foreach_index!(be, n, _ef_r_k!, a)
+    foreach_index!(be, ne, _ef_flux_k!, a, Cs, dt)
+    foreach_index!(be, n, _ef_out_k!, a)          # positivity: a cell's filter outflows ≤ its volume
+    foreach_index!(be, ne, _ef_scale_k!, a)
+    foreach_index!(be, n, _ef_apply_k!, a)
     return nothing
 end

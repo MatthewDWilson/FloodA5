@@ -33,6 +33,40 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-02
+
+Default results unchanged (PATCH): the CPU path is bit-identical to 0.3.0
+(Carlisle 6 h, A5 and Cartesian standard flow and A5 SGS, `--cell-order
+file`, every frame).
+
+### Added
+- `--backend cpu|gpu|ka-cpu` (WP5): every flow model (standard, SGS, SWE)
+  runs its time steps on CPU threads or an NVIDIA GPU from one code base.
+  Each pass is a kernel body launched by `foreach_index!` — Polyester on
+  the CPU, KernelAbstractions on a device; the state stays on the device
+  and is copied back for output and log lines. CUDA.jl loads only for
+  `--backend gpu`; `ka-cpu` runs the device path on the CPU, for testing.
+  The device path needs edge momentum and the local CFL (the defaults).
+  Open-boundary outflow (Phase D) runs in dependency levels that reproduce
+  the serial CPU order. `docs/ARCHITECTURE.md` §6a.
+- GPU throughput against 16 CPU threads (all cells wet, 10⁶ cells): standard
+  flow 93 vs 8.4, SWE 29 vs 2.7 million cell-steps per second; the GPU is
+  faster from about 10⁵ cells (`test/benchmark_backend.jl`; per-phase
+  timing in `test/profile_backend.jl`).
+- `test/test_backend.jl` (K1–K5, in CI): the device path on the CPU is
+  bit-identical to CPU threads for all three solvers; on a GPU
+  (`FLOODA5_TEST_GPU=1`) single steps agree to 10⁻¹⁵. Over a 6 h Carlisle
+  run the GPU matches the CPU to 3·10⁻¹¹ m on Cartesian; on A5 the
+  solvers amplify round-off at wet/dry fronts, and the GPU run departs from
+  the CPU run exactly as much as a CPU run in another cell order does
+  (storage within 3·10⁻⁴).
+- KernelAbstractions and Adapt as dependencies.
+
+### Fixed
+- Start-up time with the diamond face gradient (the default): building its
+  vertex table was quadratic in the number of vertices (51 s for 65 000
+  Cartesian cells, hours for 10⁶); now linear (4 s). Same table.
+
 ## [0.3.0] — 2026-10-30
 
 ⚠ Default results change for `--flow-model standard` (MINOR), and for

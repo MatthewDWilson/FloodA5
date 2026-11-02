@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.3.0"
+const FLOODA5_VERSION = "0.3.1"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -318,6 +318,8 @@ end
 include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 # SWEWork (R1 shallow-water reference solver), for FlowState.swe
 include(joinpath(@__DIR__, "surfacewater", "swe_types.jl"))
+# WP5: compute backends (CPU threads, KernelAbstractions devices)
+include(joinpath(@__DIR__, "surfacewater", "backend.jl"))
 
 """
     StepWorkspace
@@ -944,34 +946,12 @@ function _positivity_scale_gather!(edge_vol::Vector{Float64}, q_store::Vector{Fl
                                    volume::Vector{Float64}, edges::EdgeList,
                                    state::FlowState, ws::StepWorkspace)
     cptr, cedge = _cell_csr!(state, ws)
-    out = ws.out; ci = edges.cell_i; cj = edges.cell_j
-    @batch per=core for i in eachindex(volume)
-        s = 0.0
-        @inbounds for k in cptr[i]:cptr[i + 1] - 1
-            e = cedge[k]; ev = edge_vol[e]
-            if ev > 0.0
-                cj[e] == i && (s += ev)
-            elseif ev < 0.0
-                ci[e] == i && (s -= ev)
-            end
-        end
-        @inbounds out[i] = s
-    end
-    @batch per=core for e in eachindex(edge_vol)
-        @inbounds begin
-            ev = edge_vol[e]
-            iszero(ev) && continue
-            d = ev > 0.0 ? cj[e] : ci[e]
-            o = out[d]
-            V = max(volume[d], 0.0)
-            if o > V
-                sc = V / o
-                edge_vol[e] = ev * sc
-                q_store[e] *= sc
-                LIMITER_STATS[] && (_LSTATS[].flag[e] |= LF_POS)   # D1b
-            end
-        end
-    end
+    # WP5: the kernel bodies are shared with the device path (std_device.jl)
+    a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, flux = q_store, volume = volume,
+         ci = edges.cell_i, cj = edges.cell_j, out = ws.out,
+         stats = LIMITER_STATS[], lflag = _lf_flag())
+    foreach_index!(CPUThreads(), length(volume), _pos_out_k!, a)
+    foreach_index!(CPUThreads(), length(edge_vol), _pos_scale_k!, a)
     return edge_vol
 end
 
@@ -987,6 +967,11 @@ function _gather_apply!(state::FlowState, edge_vol::Vector{Float64},
                         ws::StepWorkspace, sgs::Bool)
     cptr, cedge = _cell_csr!(state, ws)
     ci = state.edges.cell_i
+    # WP5: bodies shared with the device path (std_device.jl, sgs_device.jl)
+    a = (cptr = cptr, cedge = cedge, edge_vol = edge_vol, ci = ci, cell_area = state.cell_area,
+         volume = state.volume, water_depth = state.water_depth, tables = state.sgs_tables)
+    foreach_index!(CPUThreads(), length(state.cell_ids), sgs ? _gather_sgs_k! : _gather_std_k!, a)
+    return nothing
     @batch per=core for i in 1:length(state.cell_ids)
         s = 0.0
         @inbounds for k in cptr[i]:cptr[i + 1] - 1
@@ -1816,52 +1801,17 @@ since the legacy kernels never read it).
   method produced it.
 """
 function _compute_wse_gradients!(state::FlowState, wse::AbstractVector{Float64})
-    n      = length(state.cell_ids)
-    max_nb = size(state.adj_matrix, 1)
-
-    # Threaded (WP4 stage 3): each cell writes only its own column.
-    @batch per=core for i in 1:n
-        # If cell i's own WSE is non-finite (e.g. NaN elevation — Bug
-        # tracked in FloodA5_NonOrthogonal_Correction_Plan.md §10.6.7's
-        # "outstanding risk" note, this being the real-mesh manifestation
-        # of that class of issue: a per-cell invalid value reaching
-        # _compute_wse_gradients! unguarded and propagating outward through
-        # the gradient stencil to cells that never directly touch the bad
-        # cell), there is no meaningful gradient to compute here. Leave it
-        # at the safe (0,0) "no correction" fallback — same convention as
-        # the underdetermined/degenerate stencil case in
-        # _build_wlsq_weights!.
-        if !isfinite(wse[i])
-            state.grad_wse[1, i] = 0.0
-            state.grad_wse[2, i] = 0.0
-            continue
-        end
-
-        gx = 0.0
-        gy = 0.0
-        for s in 1:max_nb
-            j = state.adj_matrix[s, i]
-            j == 0 && continue
-            # Skip a non-finite neighbour WSE (e.g. j has NaN elevation)
-            # rather than letting it poison gx/gy for cell i — without this
-            # guard, a single NaN-elevation cell contaminates the gradient
-            # of every cell adjacent to it, which then poisons every edge
-            # of THOSE cells (not just the edge touching the bad cell),
-            # spreading NaN outward by one mesh-hop per timestep. This is
-            # the bug confirmed against a real mesh with 6 NaN-elevation
-            # boundary cells: NaN_cells grew 194→413→607→794→976→1103
-            # (= n_cells − 6) over successive steps before this guard was
-            # added. Treating a non-finite neighbour as if its slot were
-            # empty (adj_matrix[s,i] == 0) is the same fallback already
-            # used elsewhere for missing/degenerate geometry.
-            isfinite(wse[j]) || continue
-            dWSE = wse[j] - wse[i]
-            gx += state.wlsq_weights[s,          i] * dWSE
-            gy += state.wlsq_weights[max_nb + s, i] * dWSE
-        end
-        state.grad_wse[1, i] = gx
-        state.grad_wse[2, i] = gy
-    end
+    # Threaded (WP4 stage 3): each cell writes only its own column. A
+    # non-finite WSE (e.g. NaN elevation, outside the DEM) gets the (0, 0)
+    # "no correction" gradient, and non-finite neighbours are skipped as if
+    # their slot were empty — otherwise one NaN cell poisons its neighbours'
+    # gradients and spreads NaN outward one mesh hop per step (seen on a real
+    # mesh with six NaN-elevation boundary cells). Body: _grad_wse_k!
+    # (std_device.jl), shared with the device path (WP5).
+    a = (wse = wse, grad_wse = state.grad_wse, adj = state.adj_matrix,
+         W = state.wlsq_weights, nbmax = size(state.adj_matrix, 1))
+    foreach_index!(CPUThreads(), length(state.cell_ids), _grad_wse_k!, a)
+    return nothing
 end
 
 
@@ -2307,7 +2257,7 @@ discharge with their own width and the result scaled by edge e's width.
 `qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
 snapshot (WP0 thread-safety rule).
 """
-@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges::EdgeList,
+@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges,   # EdgeList or _edge_view
                                        qu::AbstractVector{Float64}, qv::AbstractVector{Float64},
                                        theta::Float64; volumetric::Bool = false)::Float64
     w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
@@ -3318,21 +3268,12 @@ Per-cell gather with no shared writes, so it is threaded and deterministic
 (WP1, 2026-10: previously an inline serial loop in step_standard!, :cell only).
 """
 function _reconstruct_qvec!(state::FlowState, use_flux_Q::Bool)
-    edges  = state.edges
-    max_nb = state.max_neighbours
-    @batch per=core for i in 1:length(state.cell_ids)
-        qu = 0.0;  qv = 0.0
-        @inbounds for s in 1:max_nb
-            e = state.cell_edge_index[s, i]
-            e == 0 && continue
-            q_e = use_flux_Q ? edges.flux_Q[e] / max(edges.width[e], 1e-9) : edges.flux[e]
-            obs = -q_e         # observation: qvec_i · n̂_f = −q_e
-            qu += state.mom_weights[s,          i] * obs
-            qv += state.mom_weights[max_nb + s, i] * obs
-        end
-        state.qvec_u[i] = qu
-        state.qvec_v[i] = qv
-    end
+    edges = state.edges
+    a = (cei = state.cell_edge_index, flux = edges.flux, flux_Q = edges.flux_Q, width = edges.width,
+         mom_weights = state.mom_weights, maxnb = state.max_neighbours,
+         qvec_u = state.qvec_u, qvec_v = state.qvec_v)
+    foreach_index!(CPUThreads(), length(state.cell_ids), _qvec_k!, a, Val(use_flux_Q))  # std_device.jl
+    return nothing
 end
 
 """
@@ -3390,9 +3331,9 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     # (WP4: the wetted area computed here was never used — removed.)
     ws  = _edge_slots!(state, _workspace!(state))
     wse = ws.wse
-    @batch per=core for i in 1:n                 # per-cell writes only (WP4)
-        @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
-    end
+    # per-cell writes only (WP4); body shared with the device path (WP5)
+    foreach_index!(CPUThreads(), n, _sgs_wse_k!, (wse = wse, tables = state.sgs_tables,
+                                                  volume = state.volume))
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
     # Unlike step_standard!, `wse` here is already a full per-cell array
@@ -3468,6 +3409,9 @@ include(joinpath(@__DIR__, "surfacewater", "kernels.jl"))
 include(joinpath(@__DIR__, "surfacewater", "eta_filter.jl"))
 include(joinpath(@__DIR__, "surfacewater", "momentum_damping.jl"))
 include(joinpath(@__DIR__, "surfacewater", "swe_reference.jl"))
+include(joinpath(@__DIR__, "surfacewater", "std_device.jl"))
+include(joinpath(@__DIR__, "surfacewater", "sgs_device.jl"))
+include(joinpath(@__DIR__, "surfacewater", "device_run.jl"))
 
 # ---------------------------------------------------------------------------
 # Wetted-area saturation (for visualisation)
@@ -3567,7 +3511,8 @@ function run_simulation!(state            :: FlowState,
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
                          rain_points      :: Vector{RainPoint}      = RainPoint[],
                          sgs_diag                                   = nothing,
-                         timing           :: Union{TimingLog, Nothing} = nothing)
+                         timing           :: Union{TimingLog, Nothing} = nothing,
+                         backend          :: ComputeBackend = CPUThreads())
     t    = 0.0
     step = 0
     use_sgs = method isa SGSFlow
@@ -3576,6 +3521,12 @@ function run_simulation!(state            :: FlowState,
     # Merge legacy injection_points / rain_points into all_sources.
     # Callers that still pass the old keyword args continue to work unchanged.
     merged_sources = AbstractSource[all_sources..., injection_points..., rain_points...]
+
+    # WP5: on a device backend the state lives on the device during the run
+    # (surfacewater/device_run.jl); `state` is brought up to date when read.
+    dev = backend isa CPUThreads ? nothing : DeviceRun(state, method, backend, merged_sources)
+    dev !== nothing && LIMITER_STATS[] &&
+        throw(ArgumentError("--limiter-stats is not available on a device backend"))
 
     # ── Debug: pre-simulation state check ──────────────────────────────────
     n_inflow = count(s -> s isa InflowPoint,      merged_sources)
@@ -3606,25 +3557,31 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Adaptive dt
-        dt = min(_cfl_dt(state, method; courant = courant), dt_max, sim_duration - t)
+        dt = min(dev === nothing ? _cfl_dt(state, method; courant = courant) : _device_cfl(dev, courant),
+                 dt_max, sim_duration - t)
         use_swe || (dt = max(dt, 0.1))      # R1: the reference solver keeps its CFL step
 
         # ── Apply all water sources (before routing) ────────────────────────
-        # Uniform rainfall
-        if rainfall_rate > 0.0
-            for i in eachindex(state.cell_ids)
-                state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+        if dev === nothing
+            # Uniform rainfall
+            if rainfall_rate > 0.0
+                for i in eachindex(state.cell_ids)
+                    state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+                end
             end
-        end
-        # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
-        for src in merged_sources
-            apply_source!(state, src, t, dt)
+            # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
+            for src in merged_sources
+                apply_source!(state, src, t, dt)
+            end
+        else
+            _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
         end
 
         # ── Debug: post-source volume check (first 5 steps + every 500th) ──
         # WP4 (2026-10): was every 10th step, with an O(cells × sources) scan —
         # about as costly as the step itself on a mostly dry domain. The
         # every-50-step mass-balance line below is unchanged.
+        dev !== nothing && (step <= 5 || step % 500 == 0) && _device_sync!(dev, state)
         if step <= 5 || step % 500 == 0
             # Include all point sources (InflowPoint, InjectionPoint, RainPoint)
             # so src_vol is non-empty when only InflowPoints are active.
@@ -3646,7 +3603,9 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Sync water_depth from volume (standard solver only; SGS syncs inside step_sgs!)
-        if !use_sgs
+        if dev !== nothing
+            _device_depth!(dev)
+        elseif !use_sgs
             for i in eachindex(state.cell_ids)
                 state.cell_area[i] >= 1.0 &&
                     (state.water_depth[i] = state.volume[i] / state.cell_area[i])
@@ -3654,7 +3613,9 @@ function run_simulation!(state            :: FlowState,
         end
 
         # Physics step (includes Phase D ghost-edge outflow)
-        if use_sgs
+        if dev !== nothing
+            _device_step!(dev, dt, courant)
+        elseif use_sgs
             step_sgs!(state, dt; velocity = false)
         elseif use_swe
             step_swe!(state, dt; courant = courant)      # sub-steps if the sources need it
@@ -3665,6 +3626,10 @@ function run_simulation!(state            :: FlowState,
         t    += dt
         step += 1
         LIMITER_STATS[] && _lstats_step!(t)                 # D1b (--limiter-stats)
+        # WP5: bring the host state up to date where it is read below
+        dev !== nothing && ((vis !== nothing && step % VIS_INTERVAL == 0) ||
+                            _should_write_frame(output, t) || step % 50 == 0) &&
+            _device_sync!(dev, state)
 
         # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
         ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
@@ -3730,6 +3695,7 @@ function run_simulation!(state            :: FlowState,
             @info "  step=$(lpad(step,5))  t=$(round(t,digits=1))s  dt=$(round(dt,digits=2))s  wet=$n_wet  max_depth=$(round(max_depth,digits=3))m  domain_vol=$(round(domain_vol,digits=1))m³  vol_removed=$(round(state.vol_removed,digits=1))m³  mb_err=$(round(mb_err,digits=1))m³$nan_warn"
         end
     end
+    dev !== nothing && _device_sync!(dev, state)
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
     use_swe && @info "SWE: volume added by clamping negative cells: " *
                      "$(round(sum(state.swe.clamp_vol), sigdigits = 4)) m³"
@@ -3958,6 +3924,7 @@ function run_flood_model(;
     open_boundary     :: Union{Symbol,Nothing} = nothing,  # :normal | :legacy (0.3.0)
     swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
     swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
+    backend           :: Symbol  = :cpu,      # WP5: :cpu | :gpu (CUDA) | :ka_cpu (device path on the CPU)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4425,14 +4392,22 @@ function run_flood_model(;
           "rainfall=$(round(rainfall_rate*3600*1000, digits=2)) mm/hr  " *
           "sources=$(length(all_sources))  open_bc=$(count(bc -> bc !== Closed, flow_state.ghost_cell_bc))"
     t0 = time()
-    run_simulation!(flow_state, mesh, sim_duration, dt_max,
-                    vis, vis_mode, sim_output;
-                    method        = method_obj,
-                    courant       = courant,
-                    rainfall_rate = rainfall_rate,
-                    all_sources   = all_sources,
-                    sgs_diag      = sgs_diag,
-                    timing        = tl)
+    # WP5: a GPU run goes through invokelatest, so that it sees the methods
+    # CUDA.jl defines when _cuda_backend() loads it
+    compute = backend === :cpu    ? CPUThreads() :
+              backend === :gpu    ? _cuda_backend() :
+              backend === :ka_cpu ? KADevice(KernelAbstractions.CPU()) :
+              throw(ArgumentError("backend must be :cpu, :gpu or :ka_cpu (got :$backend)"))
+    backend === :cpu || @info "Compute backend: $(backend) ($(typeof(compute)))"
+    Base.invokelatest(run_simulation!, flow_state, mesh, sim_duration, dt_max,
+                      vis, vis_mode, sim_output;
+                      method        = method_obj,
+                      courant       = courant,
+                      rainfall_rate = rainfall_rate,
+                      all_sources   = all_sources,
+                      sgs_diag      = sgs_diag,
+                      timing        = tl,
+                      backend       = compute)
     tl.simulation = time() - t0
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
@@ -4769,6 +4744,12 @@ Flow model options:
   --swe-viscosity C_E
                      (--flow-model swe) eddy viscosity ν_t = C_E·h·u*, u* from
                      Manning; 0 (default) = off. Typical rivers: 0.1–0.6.
+  --backend cpu|gpu|ka-cpu
+                     (WP5) Where the time steps run. cpu (default): CPU
+                     threads. gpu: an NVIDIA GPU through CUDA.jl (full
+                     project environment; --flow-model swe so far); the state
+                     stays on the GPU and is copied back for output and log
+                     lines. ka-cpu: the GPU code path on the CPU (testing).
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5391,6 +5372,11 @@ function main(args=String[])
     swe_order = swe_order_val === nothing ? 2 : parse(Int, swe_order_val)
     swe_visc_val, args = _pop_flag(args, "--swe-viscosity")
     swe_viscosity = swe_visc_val === nothing ? 0.0 : parse(Float64, swe_visc_val)
+    backend_val, args = _pop_flag(args, "--backend")
+    backend = backend_val === nothing ? :cpu : Symbol(replace(backend_val, "-" => "_"))
+    backend in (:cpu, :gpu, :ka_cpu) ||
+        (println("ERROR: --backend requires 'cpu', 'gpu' or 'ka-cpu' (got '$backend_val')
+"); print_help(1))
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5554,6 +5540,7 @@ function main(args=String[])
         open_boundary   = open_boundary,
         swe_order       = swe_order,
         swe_viscosity   = swe_viscosity,
+        backend         = backend,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,
