@@ -229,6 +229,40 @@ notebooks can load it without `FloodModel.jl`.
   (`_DROP_FLAGS`, `_BOOL_FLAGS`): a new mesh-generation or file-valued flag
   in `main()` needs an entry there.
 
+### `analysis/` — `FloodA5Analysis` (`FA`)
+
+Loading runs and computing metrics, for scripts and notebooks. Pure Julia:
+it does not include `FloodModel.jl` and needs no Python (loads in ~3 s). It
+reads output only through `FO`. Format-2 files carry the mesh geometry; for
+format-1 files, pass the mesh's GeoParquet (`load_run(p; parquet = …)`).
+
+- `runs.jl`: `Run` and `MeshGeom` (cells in the output file's order:
+  ids, centres, elevation, area, polygons, neighbours, scalar statics),
+  `load_run`, `frame_at`, `matched_frames`, `field`/`depth`/`speed`/`wse`
+  (SGS-aware), `storage`, `local_xy`, `source_cell`, `check_frame`,
+  `print_frames`.
+- `parquet_mesh.jl`: `load_mesh_parquet` for format-1 runs, via ArchGDAL's
+  Parquet driver (Parquet2 cannot read the list columns), and
+  `polygon_area_m2`. The result matches what the model uses: row order, closed
+  rings, area `sgs_cell_area` or else polygon area, neighbour slot order,
+  z = 0 without a DEM. GDAL's Arrow reader deadlocks in Julia unless
+  `GDAL_NUM_THREADS=1`, which the loader sets while it reads.
+- `compare.jl`: run vs reference (storage, rms Δh, CSI, bias, deep-water
+  speed) and twin-run divergence with its e-folding time.
+- `shape.jl`: point-spread and planar-slope metrics (harmonics, sector
+  ratios, hull circularity, front radius by bearing, N/S split, deflection,
+  flow direction).
+- `noise.jl`: checkerboard and velocity-noise metrics.
+- `channel.jl`: straight-channel series metrics.
+
+The analysis scripts in `test/` (`wp1_metrics.jl`, `diag_vs_reference.jl`,
+`diag_divergence.jl`, `wp2_checkerboard.jl`, `channel_bench/analyse_channel.jl`,
+`test_point_spread.jl`, `test_octagonal_anisotropy.jl`, `test_planar_slope.jl`,
+`test_planar_symmetry.jl`) are thin command-line wrappers over `FA`. Their
+output is identical to the pre-module versions. Each keeps its own historical
+projection constants (Earth radius, metres per degree, origin snapping),
+passed to `FA` explicitly.
+
 ### `visualisation/`
 
 Four scripts and one static directory:
@@ -685,6 +719,7 @@ Key test files:
 | `test_open_boundary.jl` | Ghost edge geometry, BC types, outflow flux, mass balance |
 | `test_output_format.jl` | HDF5 output format 2: run record, embedded mesh and inputs, geometry, `--rerun` bit-identical (O1–O4), format-1 reader (O5) |
 | `bench_output_format.jl` | Format 1 vs format 2: write time, size, read times on an existing run (not in CI) |
+| `test_analysis.jl` | `analysis/` (FA): one format-2 fixture run, then `test/analysis/test_*.jl` — core loading, parquet mesh = format-2 mesh, compare/divergence, shape, noise, channel metrics on synthetic fields with known answers (`FA_TEST_ONLY=shape,…` runs a subset) |
 | `test_flat_rainpoint.jl` | Flat-terrain point-source integration test |
 | `test_noc_correction.jl` | WLSQ gradient weights and reconstruction correctness (T-NOC1–5) |
 | `test_point_spread.jl` | Point-spread directional-bias benchmark (convex hull, Polsby–Popper circularity) |

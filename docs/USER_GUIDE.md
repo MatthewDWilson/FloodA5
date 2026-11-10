@@ -540,6 +540,20 @@ h_end = FO.read_frame("sim.h5", "water_depth")    # last frame
 FO.run_info("sim.h5")["argv"]                     # the command that produced it
 ```
 
+For analysis, use `analysis/FloodA5Analysis.jl`. It loads a run together with
+its mesh geometry and computes the project's metrics, in pure Julia (no model,
+no Python):
+
+```julia
+include("analysis/FloodA5Analysis.jl"); const FA = FloodA5Analysis
+ref = FA.load_run("swe.h5"); run = FA.load_run("li.h5")
+FA.compare(ref, run)                      # storage ratio, rms Δh, CSI, bias at the last common time
+k = FA.frame_at(run, 3600.0)              # frame nearest t = 1 h
+FA.wse(run, k)                            # water surface (SGS-aware)
+# files from FloodA5 ≤ 0.3.x: pass the mesh for areas, polygons and neighbours
+old = FA.load_run("old.h5"; parquet = "mesh.parquet")
+```
+
 In Python:
 
 ```python

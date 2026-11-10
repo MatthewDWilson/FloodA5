@@ -149,6 +149,8 @@ FloodA5/
 │   └── timeseries_io.jl       # .bdy / CSV hydrograph readers
 ├── io/
 │   └── FloodA5Output.jl       # HDF5 output format: writer, reader, --rerun
+├── analysis/
+│   └── FloodA5Analysis.jl     # loading runs and metrics (pure Julia, no Python)
 ├── visualisation/
 │   ├── MakieVisualiser.jl     # Native desktop viewer (GLMakie)
 │   ├── VisualisationServer.jl # HTTP + WebSocket server for CesiumJS viewer
@@ -321,7 +323,9 @@ julia --project=. FloodModel.jl --rerun sim.h5        # → sim_rerun.h5, bit-id
 
 Read it in Julia with `io/FloodA5Output.jl` (`FO.read_var`, `FO.read_frame`,
 `FO.run_info`, …; it also reads files from earlier versions), or in Python with
-`h5py` / `xarray`.
+`h5py` / `xarray`. For analysis, `analysis/FloodA5Analysis.jl` loads runs with
+their mesh geometry and computes the project's metrics (comparison with a
+reference run, point-spread and planar shape, noise, channel series).
 
 Post-processing tools:
 
@@ -423,8 +427,9 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
   commit, full command line, resolved options, input files and a single copy
   of the mesh, so that a run can be reproduced exactly (`--rerun`) and
   replayed without the original mesh file
-- One analysis module for loading runs and computing metrics, and a registry of
-  named test cases with a single runner
+- ✅ One analysis module (`analysis/`, 0.4.1): loading runs and computing
+  metrics in pure Julia, without the model or Python
+- A registry of named test cases with a single runner
 - Replay of any HDF5 output in the GLMakie viewer, and static plots for
   reports
 - Jupyter notebooks documenting the test cases end to end (planar tests,

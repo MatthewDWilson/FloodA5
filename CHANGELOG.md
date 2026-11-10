@@ -33,6 +33,40 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-11-11
+
+Analysis tooling only (PATCH). Neither the model nor the output format changes.
+
+### Added
+- `analysis/FloodA5Analysis.jl` (module `FloodA5Analysis`, `FA`): one module
+  for loading runs and computing metrics, in pure Julia. It does not include
+  `FloodModel.jl` and needs no Python; it loads in about 3 s.
+  - `Run` / `MeshGeom`: frame times, mesh geometry and run record; fields by
+    frame (`depth`, `wse` SGS-aware, `speed`, …); frames at matched times;
+    storage; local coordinates.
+  - Format-1 (≤ 0.3.x) runs: geometry from the mesh's GeoParquet
+    (`load_run(p; parquet = …)`), read through ArchGDAL's Parquet driver and
+    matching the model's areas, ring convention and neighbour order. Runs on
+    a re-labelled mesh copy are matched by row (`match = :row`).
+  - Metrics: run vs reference (storage ratio, rms Δh, CSI, bias, deep-water
+    speed) and twin-run divergence; point-spread and planar-slope shape and
+    direction; checkerboard and velocity noise; straight-channel series.
+- `test/test_analysis.jl` (in CI) with `test/analysis/test_*.jl`: the
+  metrics checked on synthetic fields with known answers; the GeoParquet
+  mesh checked against a format-2 file's mesh.
+
+### Changed
+- The analysis scripts are now thin command-line wrappers over `FA`, and
+  none of them includes `FloodModel.jl` any more: `wp1_metrics.jl`,
+  `diag_vs_reference.jl`, `diag_divergence.jl`, `wp2_checkerboard.jl`,
+  `channel_bench/analyse_channel.jl`, `test_point_spread.jl`,
+  `test_octagonal_anisotropy.jl`, `test_planar_slope.jl` and
+  `test_planar_symmetry.jl`. Same flags, same printed output and CSVs on
+  existing runs. The channel series' `metrics.csv` is byte-identical over
+  all 336 runs, and the analysis takes 3m41 instead of 5m44. The mesh
+  argument of `diag_vs_reference.jl` and `wp2_checkerboard.jl` is optional
+  for format-2 runs.
+
 ## [0.4.0] — 2026-11-10
 
 Output format change (MINOR). Simulation results are unchanged: every
