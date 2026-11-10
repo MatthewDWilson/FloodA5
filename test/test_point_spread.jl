@@ -59,14 +59,16 @@
 # --frame N is the frame number shown by --list-frames: the 1-based frame
 # index (the same number as the old /frames/NNNNNN group name); output-format
 # 1 and 2 files both work (io/FloodA5Output.jl).
+#
+# The metrics live in analysis/shape.jl (FloodA5Analysis, `FA.point_spread_shape`);
+# this script is a CLI over them. Its conventions, passed explicitly: Earth
+# radius R_EARTH = 6_371_000 m, coordinates about the NOMINAL source point
+# (snap = false), bearing sectors [0°, 45°), [45°, 90°), … (centred = false; see
+# test_octagonal_anisotropy.jl for sectors centred on the compass bearings).
 
-using HDF5
-using Statistics
 using Printf
-isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
-const FO = FloodA5Output
-
-const EARTH_R = 6_371_000.0   # mean Earth radius (m) — matches A5Grid._EARTH_R
+include(joinpath(@__DIR__, "..", "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
 
 # ---------------------------------------------------------------------------
 # CLI parsing (minimal, no external deps)
@@ -83,158 +85,6 @@ const ARGS_V = String.(ARGS)
 const DO_LIST = "--list-frames" in ARGS_V
 
 # ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
-
-"""
-    _project_to_local_xy(lons, lats) → (xs, ys)
-
-Local equirectangular projection (metres) centred on the mean of the
-supplied points. Consistent with the projection used throughout
-A5Grid.jl/FloodModel.jl for local geometry work (_edge_geometry,
-_build_wlsq_weights!).
-"""
-function _project_to_local_xy(lons::Vector{Float64}, lats::Vector{Float64})
-    lat0 = mean(lats)
-    lon0 = mean(lons)
-    cos_lat0 = cosd(lat0)
-    xs = deg2rad.(lons .- lon0) .* EARTH_R .* cos_lat0
-    ys = deg2rad.(lats .- lat0) .* EARTH_R
-    return xs, ys
-end
-
-"""
-    _convex_hull_2d(pts) → Vector{Tuple{Float64,Float64}}
-
-Andrew's monotone chain convex hull. Returns hull vertices in
-counter-clockwise order, open (first point not repeated at the end).
-"""
-function _convex_hull_2d(pts::Vector{Tuple{Float64,Float64}})
-    pts = sort(unique(pts))
-    n = length(pts)
-    n <= 2 && return pts
-
-    cross(o, a, b) = (a[1]-o[1])*(b[2]-o[2]) - (a[2]-o[2])*(b[1]-o[1])
-
-    lower = Tuple{Float64,Float64}[]
-    for p in pts
-        while length(lower) >= 2 && cross(lower[end-1], lower[end], p) <= 0
-            pop!(lower)
-        end
-        push!(lower, p)
-    end
-    upper = Tuple{Float64,Float64}[]
-    for p in reverse(pts)
-        while length(upper) >= 2 && cross(upper[end-1], upper[end], p) <= 0
-            pop!(upper)
-        end
-        push!(upper, p)
-    end
-    return vcat(lower[1:end-1], upper[1:end-1])
-end
-
-"""
-    _polygon_area_perimeter(hull) → (area, perimeter)
-
-Shoelace area + summed edge length on the closed hull polygon.
-"""
-function _polygon_area_perimeter(hull::Vector{Tuple{Float64,Float64}})
-    n = length(hull)
-    n < 3 && return (0.0, 0.0)
-    area = 0.0
-    perim = 0.0
-    for k in 1:n
-        x1, y1 = hull[k]
-        x2, y2 = hull[mod1(k+1, n)]
-        area  += x1 * y2 - x2 * y1
-        perim += sqrt((x2-x1)^2 + (y2-y1)^2)
-    end
-    return (abs(area) / 2.0, perim)
-end
-
-polsby_popper(area::Float64, perimeter::Float64) =
-    perimeter <= 0.0 ? 0.0 : (4 * π * area) / perimeter^2
-
-"""
-    _front_radius_by_direction(wet_xs, wet_ys, source_x, source_y; n_dirs=8)
-        → (bearings_deg, radii_m)
-
-For each of n_dirs equally-spaced bearing sectors (0° = north, clockwise),
-the maximum distance from the source to a wet cell whose bearing falls in
-that sector. Sectors with no wet cells get radius 0.0 (excluded from the
-CV calculation, with a warning, since they are uninformative early in a
-run before the front has reached that direction).
-"""
-function _front_radius_by_direction(wet_xs::Vector{Float64}, wet_ys::Vector{Float64},
-                                     source_x::Float64, source_y::Float64;
-                                     n_dirs::Int=8)
-    radii = zeros(n_dirs)
-    sector_width = 360.0 / n_dirs
-    for (x, y) in zip(wet_xs, wet_ys)
-        dx, dy = x - source_x, y - source_y
-        r = sqrt(dx^2 + dy^2)
-        r < 1e-6 && continue
-        bearing = mod(atand(dx, dy), 360.0)         # 0° = north, clockwise
-        sector  = Int(floor(bearing / sector_width)) + 1
-        sector  = clamp(sector, 1, n_dirs)
-        radii[sector] = max(radii[sector], r)
-    end
-    bearings = [(k - 0.5) * sector_width for k in 1:n_dirs]
-    return bearings, radii
-end
-
-# ---------------------------------------------------------------------------
-# HDF5 access
-# ---------------------------------------------------------------------------
-
-# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
-function _frame_names(f)
-    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
-end
-
-"""
-    _read_wet_cells(h5_path, frame_idx; saturation_threshold=1.0)
-        → (cell_lons, cell_lats, wet_mask, t)
-
-Reads mesh centres and the requested frame's saturation field. `frame_idx`
-is the 1-based frame index (the number --list-frames prints; the same as the
-old /frames/NNNNNN group name, which _write_frame! numbered from 1).
-"""
-function _read_wet_cells(h5_path::String, frame_idx::Int; saturation_threshold::Float64=1.0)
-    h5open(h5_path, "r") do f
-        cell_lons = read(f["mesh/center_lons"])
-        cell_lats = read(f["mesh/center_lats"])
-        names = _frame_names(f)
-        fname = lpad(string(frame_idx), 6, '0')
-        1 <= frame_idx <= length(names) ||
-            error("Frame $fname not found in $h5_path. Available: " *
-                  "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
-                  "Run with --list-frames to inspect.")
-        sat = FO.read_frame(f, "saturation", frame_idx)
-        t   = FO.frame_times(f)[frame_idx]
-        wet = sat .>= saturation_threshold
-        return cell_lons, cell_lats, wet, t
-    end
-end
-
-function _list_frames(h5_path::String)
-    h5open(h5_path, "r") do f
-        names = _frame_names(f)
-        ts = FO.frame_times(f)
-        println("Frames in $h5_path:")
-        @printf("%8s  %10s  %8s  %10s\n", "frame#", "t (s)", "n_wet", "max_depth")
-        for (k, nm) in enumerate(names)
-            t = ts[k]
-            sat = FO.read_frame(f, "saturation", k)
-            n_wet = count(>=(1.0), sat)
-            depth = FO.has_var(f, "water_depth") ? FO.read_frame(f, "water_depth", k) : Float64[]
-            md = isempty(depth) ? NaN : maximum(depth)
-            @printf("%8s  %10.1f  %8d  %10.4f\n", nm, t, n_wet, md)
-        end
-    end
-end
-
-# ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
 
@@ -244,44 +94,23 @@ end
         → NamedTuple
 
 Computes Polsby–Popper circularity and directional front-radius CV for one
-run at one frame.
+run at one frame (`frame_idx` is the 1-based frame index --list-frames prints).
 """
 function analyse_point_spread(h5_path::String, frame_idx::Int;
                                source_lon::Float64, source_lat::Float64,
                                saturation_threshold::Float64=1.0,
                                n_dirs::Int=8)
-    cell_lons, cell_lats, wet, t = _read_wet_cells(h5_path, frame_idx;
-                                                    saturation_threshold=saturation_threshold)
-    n_wet = count(wet)
-    n_wet < 3 && error("Only $n_wet wet cell(s) at frame $frame_idx in $h5_path " *
-                        "— need ≥3 for a convex hull. Pick a later frame.")
-
-    wet_lons, wet_lats = cell_lons[wet], cell_lats[wet]
-    # Project using a fixed origin (the source location) rather than the
-    # wet-cell centroid, so the two runs (baseline/corrected) and all frames
-    # share a common, source-anchored coordinate system — required for the
-    # directional bearing calculation to mean the same thing across runs.
-    lat0 = source_lat
-    cos_lat0 = cosd(lat0)
-    to_xy(lon, lat) = (deg2rad(lon - source_lon) * EARTH_R * cos_lat0,
-                        deg2rad(lat - source_lat) * EARTH_R)
-
-    xs = [to_xy(lo, la)[1] for (lo, la) in zip(wet_lons, wet_lats)]
-    ys = [to_xy(lo, la)[2] for (lo, la) in zip(wet_lons, wet_lats)]
-    src_x, src_y = 0.0, 0.0   # source is the projection origin by construction
-
-    hull = _convex_hull_2d(collect(zip(xs, ys)))
-    area, perim = _polygon_area_perimeter(hull)
-    circularity = polsby_popper(area, perim)
-
-    bearings, radii = _front_radius_by_direction(xs, ys, src_x, src_y; n_dirs=n_dirs)
-    nonzero = radii .> 0.0
-    n_empty_sectors = count(!, nonzero)
-    cv_radius = count(nonzero) >= 2 ? std(radii[nonzero]) / mean(radii[nonzero]) : NaN
-
-    return (t=t, n_wet=n_wet, circularity=circularity, area=area, perimeter=perim,
-            cv_radius=cv_radius, n_empty_sectors=n_empty_sectors,
-            bearings=bearings, radii=radii)
+    r = FA.load_run(h5_path)
+    FA.check_frame(r, frame_idx; hint = " Run with --list-frames to inspect.")
+    # Project about the source location (not the wet-cell centroid), so the
+    # two runs (baseline/corrected) and all frames share a common,
+    # source-anchored coordinate system for the directional bearings.
+    res = FA.point_spread_shape(r, frame_idx; lon0 = source_lon, lat0 = source_lat,
+                                R = FA.R_EARTH, snap = false, centred = false,
+                                saturation_threshold, n_dirs)
+    res.n_wet < 3 && error("Only $(res.n_wet) wet cell(s) at frame $frame_idx in $h5_path " *
+                           "— need ≥3 for a convex hull. Pick a later frame.")
+    return res
 end
 
 function _print_result(label::String, r)
@@ -312,7 +141,7 @@ function main()
     if DO_LIST
         for flag in ("--baseline", "--corrected")
             path = _argval(ARGS_V, flag)
-            path !== nothing && isfile(path) && _list_frames(path)
+            path !== nothing && isfile(path) && FA.print_frames(FA.load_run(path))
         end
         return
     end

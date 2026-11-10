@@ -11,53 +11,48 @@
 #   bias         (wet in run) / (wet in reference) at the threshold
 #   speed ≥ 3 m  mean speed in cells over 3 m deep, run / reference
 #
-#   FLOODA5_NO_VIS=1 julia --project=. test/diag_vs_reference.jl MESH.parquet REF.h5 RUN.h5 ... [--threshold 0.1] [--frame k]
+#   FLOODA5_NO_VIS=1 julia --project=. test/diag_vs_reference.jl [MESH.parquet] REF.h5 RUN.h5 ... [--threshold 0.1] [--frame k]
 #
 # --frame k compares frame k (default: the last common frame); the frame
-# times of each pair must agree within 60 s.
+# times of each pair must agree within 60 s. MESH.parquet gives the cell
+# areas of format-1 runs (FloodA5 ≤ 0.3.x); format-2 runs carry them, so it
+# may be omitted. A thin wrapper over analysis/FloodA5Analysis.jl
+# (`FA.compare_fields`, `FA.compare`).
 
-ENV["FLOODMODEL_INCLUDE_ONLY"] = "1"
-include(joinpath(@__DIR__, "..", "FloodModel.jl"))
-ENV["FLOODMODEL_INCLUDE_ONLY"] = ""
-
-using HDF5, Logging, Printf, Statistics
+include(joinpath(@__DIR__, "..", "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
+using Printf
 
 _arg(name, default) = (i = findfirst(==(name), ARGS); i === nothing ? default : ARGS[i + 1])
 const TH = parse(Float64, _arg("--threshold", "0.1"))
 const FRAME = parse(Int, _arg("--frame", "0"))
 files = filter(a -> endswith(a, ".h5"), ARGS)
-mesh = with_logger(SimpleLogger(stderr, Logging.Error)) do; load_mesh_geoparquet(ARGS[1]); end
-area = [A5Grid._polygon_area_m2(c.boundary) for c in mesh.cells]
+const MESH = (i = findfirst(a -> endswith(a, ".parquet"), ARGS); i === nothing ? nothing : ARGS[i])
 
-function frames(p)
-    h5open(p) do f
-        ts = FO.frame_times(f)
-        [(t = ts[k], h = FO.read_frame(f, "water_depth", k),
-          u = FO.read_frame(f, "vel_u", k), v = FO.read_frame(f, "vel_v", k)) for k in eachindex(ts)]
+# Format-1 runs on a re-labelled copy of the mesh (e.g. pya5 0.x ids in the
+# output, 1.x in the parquet) are matched to the parquet by row, as before.
+function _load(p)
+    MESH === nothing && return FA.load_run(p)
+    try
+        return FA.load_run(p; parquet = MESH)
+    catch e
+        (e isa ErrorException && occursin("re-labelled", e.msg)) || rethrow()
+        @warn "$(basename(p)): cell ids are not those of $(basename(MESH)); matching cells by row"
+        return FA.load_run(p; parquet = MESH, match = :row)
     end
 end
-function compare(R, X)
-    h1 = R.h; h2 = X.h
-    wet = [i for i in eachindex(h1) if isfinite(h1[i]) && isfinite(h2[i]) && (h1[i] > 0.01 || h2[i] > 0.01)]
-    rms = sqrt(mean(abs2, h2[wet] .- h1[wet]))
-    a = h1 .> TH; b = h2 .> TH
-    hits = count(a .& b); miss = count(a .& .!b); fa = count(.!a .& b)
-    deep = [i for i in eachindex(h1) if h1[i] >= 3.0]
-    sp(F) = mean(hypot(F.u[i], F.v[i]) for i in deep)
-    st(F) = sum(F.h[i] * area[i] for i in eachindex(F.h) if isfinite(F.h[i]))
-    return (rms = rms, csi = hits / max(hits + miss + fa, 1), bias = count(b) / max(count(a), 1),
-            stor = st(X) / 1e6, sratio = st(X) / st(R), speed = isempty(deep) ? NaN : sp(X) / sp(R))
-end
 
-ref = frames(files[1])
-kr = FRAME > 0 ? FRAME : length(ref)
+ref = _load(files[1])
+isempty(ref.mesh.area) && error("$(files[1]) is a format-1 file: pass the mesh's parquet first")
+kr = FRAME > 0 ? FRAME : FA.nframes(ref)
 @printf("reference %s: storage %.3f Mm³ at t = %.0f s (frame %d); threshold %.2f m\n", basename(files[1]),
-        sum(ref[kr].h[i] * area[i] for i in eachindex(area) if isfinite(ref[kr].h[i])) / 1e6, ref[kr].t, kr, TH)
+        FA.storage(ref, kr) / 1e6, ref.t[kr], kr, TH)
 @printf("%-34s %9s %8s %9s %7s %7s %10s\n", "run", "storage", "ratio", "rms Δh", "CSI", "bias", "speed≥3m")
 for p in files[2:end]
-    X = frames(p)
-    k = FRAME > 0 ? FRAME : min(length(X), length(ref))
-    abs(X[k].t - ref[k].t) < 60 || @warn "frame times differ: $(X[k].t) vs $(ref[k].t)"
-    c = compare(ref[k], X[k])
-    @printf("%-34s %9.3f %8.3f %8.3fm %7.3f %7.3f %10.3f\n", basename(p), c.stor, c.sratio, c.rms, c.csi, c.bias, c.speed)
+    X = _load(p)
+    k = FRAME > 0 ? FRAME : min(FA.nframes(X), FA.nframes(ref))
+    abs(X.t[k] - ref.t[k]) < 60 || @warn "frame times differ: $(X.t[k]) vs $(ref.t[k])"
+    c = FA.compare(ref, X; k_ref = k, k_run = k, threshold = TH)
+    @printf("%-34s %9.3f %8.3f %8.3fm %7.3f %7.3f %10.3f\n", basename(p), c.storage / 1e6, c.storage_ratio,
+            c.rms, c.csi, c.bias, c.speed_ratio)
 end

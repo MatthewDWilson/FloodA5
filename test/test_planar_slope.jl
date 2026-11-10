@@ -44,12 +44,14 @@
 # to reproduce the paper's reported 30–60° deviation. The corrected run's
 # circular standard deviation should also be markedly lower (tighter
 # clustering around the true downslope direction).
+#
+# The statistics live in analysis/shape.jl (FloodA5Analysis:
+# `FA.flow_direction_metrics`, `FA.circular_mean_std`); this script is a CLI
+# over them.
 
-using HDF5
-using Statistics
 using Printf
-isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
-const FO = FloodA5Output
+include(joinpath(@__DIR__, "..", "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -66,157 +68,35 @@ const ARGS_V = String.(ARGS)
 const DO_LIST = "--list-frames" in ARGS_V
 
 # ---------------------------------------------------------------------------
-# Circular statistics
-# ---------------------------------------------------------------------------
-
-"""
-    _circular_mean_std(angles_deg; weights=nothing) → (mean_deg, std_deg, R)
-
-Standard (Mardia/Jupp) circular mean and standard deviation for a set of
-angles in degrees, optionally weighted (e.g. by speed). Computed via the
-resultant of unit vectors at each angle, NOT a naive arithmetic mean/std —
-naive stats are wrong for directional data because they don't handle
-wraparound (e.g. the arithmetic mean of -179° and +179° is 0°, not ±180°
-as it should be).
-
-Weighting matters for this test: an unweighted average over every "moving"
-cell gives equal say to a cell carrying real, established downslope flux
-and a cell barely creeping at the thin, fast-evolving wet/dry front (whose
-velocity direction reflects the local front-normal, not the regional
-slope, and which therefore contributes mostly noise). Weighting by speed
-lets the cells with real momentum dominate the statistic.
-
-R is the mean resultant length, in [0, 1]: R≈1 means angles are tightly
-clustered; R≈0 means they are spread uniformly around the circle (or
-exactly bimodal/opposite, which also gives a misleadingly small circular
-std — see the bimodal check in the caller).
-
-circular std (degrees) = sqrt(-2 * ln(R)) in radians, converted to degrees.
-Undefined (returns Inf) when R ≈ 0.
-"""
-function _circular_mean_std(angles_deg::Vector{Float64};
-                             weights::Union{Vector{Float64},Nothing}=nothing)
-    isempty(angles_deg) && return (NaN, NaN, NaN)
-    xs = cosd.(angles_deg)
-    ys = sind.(angles_deg)
-    if weights === nothing
-        mx, my = mean(xs), mean(ys)
-    else
-        wsum = sum(weights)
-        wsum < 1e-12 && return (NaN, NaN, NaN)
-        mx = sum(weights .* xs) / wsum
-        my = sum(weights .* ys) / wsum
-    end
-    R = sqrt(mx^2 + my^2)
-    mean_deg = atand(my, mx)
-    std_deg  = R < 1e-9 ? Inf : rad2deg(sqrt(max(0.0, -2.0 * log(R))))
-    return (mean_deg, std_deg, R)
-end
-
-# ---------------------------------------------------------------------------
-# HDF5 access
-# ---------------------------------------------------------------------------
-
-# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
-function _frame_names(f)
-    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
-end
-
-function _list_frames(h5_path::String)
-    h5open(h5_path, "r") do f
-        names = _frame_names(f)
-        ts = FO.frame_times(f)
-        println("Frames in $h5_path:")
-        @printf("%8s  %10s  %8s  %10s\n", "frame#", "t (s)", "n_wet", "max_depth")
-        for (k, nm) in enumerate(names)
-            t = ts[k]
-            sat = FO.read_frame(f, "saturation", k)
-            n_wet = count(>=(1.0), sat)
-            depth = FO.read_frame(f, "water_depth", k)
-            md = isempty(depth) ? NaN : maximum(depth)
-            @printf("%8s  %10.1f  %8d  %10.4f\n", nm, t, n_wet, md)
-        end
-    end
-end
-
-"""
-    _read_frame_velocity(h5_path, frame_idx; depth_threshold, speed_threshold)
-        → (angles_deg, speeds, n_wet, n_moving, t)
-
-Reads vel_u/vel_v/water_depth for the requested frame and returns the
-direction angle (degrees, atand(v,u) convention) and speed (m/s) for every
-cell that is both "wet" (water_depth > depth_threshold) and "moving"
-(speed > speed_threshold). Cells below either threshold are excluded — a
-wet but near-stationary cell (e.g. deep in a backwater, or the very edge
-of the wetting front where the limiter dominates) has a numerically
-ill-defined direction that would just add noise to the circular
-statistics, not signal. `speeds` is returned alongside `angles_deg` (same
-order, same length) so the caller can weight the circular statistics by
-speed — see `_circular_mean_std`'s docstring for why that weighting
-matters for this particular test.
-"""
-function _read_frame_velocity(h5_path::String, frame_idx::Int;
-                               depth_threshold::Float64=1e-3,
-                               speed_threshold::Float64=1e-4)
-    h5open(h5_path, "r") do f
-        names = _frame_names(f)
-        fname = lpad(string(frame_idx), 6, '0')
-        1 <= frame_idx <= length(names) ||
-            error("Frame $fname not found in $h5_path. Available: " *
-                  "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
-                  "Run with --list-frames to inspect.")
-        FO.has_var(f, "vel_u") || error(
-            "Frame $fname in $h5_path has no vel_u/vel_v dataset. This file " *
-            "was written before vel_u/vel_v were added to _write_frame! — " *
-            "re-run the simulation with the updated FloodModel.jl.")
-        u = FO.read_frame(f, "vel_u", frame_idx)
-        v = FO.read_frame(f, "vel_v", frame_idx)
-        depth = FO.read_frame(f, "water_depth", frame_idx)
-        t = FO.frame_times(f)[frame_idx]
-
-        n = length(u)
-        wet = depth .> depth_threshold
-        speed = sqrt.(u.^2 .+ v.^2)
-        moving = wet .& (speed .> speed_threshold)
-
-        angles = [atand(v[i], u[i]) for i in 1:n if moving[i]]
-        speeds = [speed[i]          for i in 1:n if moving[i]]
-        return angles, speeds, count(wet), count(moving), t
-    end
-end
-
-# ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
 
-function analyse_planar_slope(h5_path::String, frame_idx::Int;
+"""
+    analyse_planar_slope(run_or_path, frame_idx; depth_threshold, speed_threshold)
+
+Circular statistics (unweighted and speed-weighted; `FA.direction_stats`) of
+the velocity direction atand(vel_v, vel_u) over the cells that are both wet
+(water_depth > depth_threshold) and moving (speed > speed_threshold) — a wet
+but near-stationary cell has an ill-defined direction that adds noise, not
+signal (`FA.flow_directions`).
+"""
+function analyse_planar_slope(r::FA.Run, frame_idx::Int;
                                depth_threshold::Float64=1e-3,
                                speed_threshold::Float64=1e-4)
-    angles, speeds, n_wet, n_moving, t = _read_frame_velocity(h5_path, frame_idx;
-                                                                depth_threshold=depth_threshold,
-                                                                speed_threshold=speed_threshold)
-    n_moving < 3 && error("Only $n_moving moving cell(s) at frame $frame_idx in " *
-                           "$h5_path — need a meaningful sample. Pick a later frame " *
+    FA.check_frame(r, frame_idx; hint = " Run with --list-frames to inspect.")
+    FA.has_field(r, "vel_u") || error(
+        "Frame $(lpad(string(frame_idx), 6, '0')) in $(r.path) has no vel_u/vel_v dataset. This file " *
+        "was written before vel_u/vel_v were added to _write_frame! — " *
+        "re-run the simulation with the updated FloodModel.jl.")
+    res = FA.flow_direction_metrics(r, frame_idx; depth_threshold, speed_threshold)
+    res.n_moving < 3 && error("Only $(res.n_moving) moving cell(s) at frame $frame_idx in " *
+                           "$(r.path) — need a meaningful sample. Pick a later frame " *
                            "(more time for the front to develop) or lower " *
                            "--speed-threshold.")
-
-    mean_dir, circ_std, R = _circular_mean_std(angles)
-    mean_dir_w, circ_std_w, R_w = _circular_mean_std(angles; weights=speeds)
-    mean_abs_dev = mean(abs.(angles))   # naive, intuitive companion metric
-
-    # Bimodal sanity check: a circular mean near 0° with low R can also arise
-    # from a genuinely bimodal split (e.g. roughly half the cells deviating
-    # +60° and half -60°, which average to ~0° but are NOT actually flowing
-    # east). Flag this rather than silently reporting a misleadingly "good"
-    # mean.
-    frac_within_30 = count(a -> abs(a) <= 30.0, angles) / length(angles)
-
-    return (t=t, n_wet=n_wet, n_moving=n_moving,
-            mean_dir=mean_dir, circ_std=circ_std, R=R,
-            mean_dir_w=mean_dir_w, circ_std_w=circ_std_w, R_w=R_w,
-            mean_abs_dev=mean_abs_dev,
-            frac_within_30=frac_within_30, angles=angles, speeds=speeds)
+    return res
 end
+analyse_planar_slope(h5_path::String, frame_idx::Int; kw...) =
+    analyse_planar_slope(FA.load_run(h5_path), frame_idx; kw...)
 
 function _print_result(label::String, r)
     println(label, ":")
@@ -254,7 +134,7 @@ function main()
     if DO_LIST
         for flag in ("--baseline", "--corrected")
             path = _argval(ARGS_V, flag)
-            path !== nothing && isfile(path) && _list_frames(path)
+            path !== nothing && isfile(path) && FA.print_frames(FA.load_run(path))
         end
         return
     end
@@ -354,9 +234,8 @@ that might happen to fall at a low-R moment.
 """
 function run_sweep(baseline_path::String, corrected_path::String, step::Int;
                     depth_threshold::Float64, speed_threshold::Float64)
-    n_frames = h5open(baseline_path, "r") do f
-        length(_frame_names(f))
-    end
+    rb, rc = FA.load_run(baseline_path), FA.load_run(corrected_path)
+    n_frames = FA.nframes(rb)
     println("Sweep — every $step frames, $n_frames total frames available")
     @printf("%6s  %8s | %8s %8s %7s | %8s %8s %7s | %8s\n",
             "frame", "t(s)", "base θw", "base σw", "base Rw",
@@ -364,9 +243,9 @@ function run_sweep(baseline_path::String, corrected_path::String, step::Int;
     for fidx in 0:step:(n_frames - 1)
         local a, b
         try
-            a = analyse_planar_slope(baseline_path, fidx;
+            a = analyse_planar_slope(rb, fidx;
                                       depth_threshold=depth_threshold, speed_threshold=speed_threshold)
-            b = analyse_planar_slope(corrected_path, fidx;
+            b = analyse_planar_slope(rc, fidx;
                                       depth_threshold=depth_threshold, speed_threshold=speed_threshold)
         catch e
             @printf("%6d  (skipped — %s)\n", fidx, sprint(showerror, e))

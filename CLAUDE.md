@@ -15,7 +15,8 @@ Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026
 (`VERSIONING.md`). Status (2026-11-10): 0.3.2 released (WP0–WP5, the SWE
 reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
 backends, the channel series). Current phase: **consolidation** — reproducible
-self-describing HDF5 output (done: 0.4.0, below), one analysis module, a test-case
+self-describing HDF5 output (done: 0.4.0, below), one analysis module (done:
+0.4.1, `analysis/`), a test-case
 registry and runner, HDF5 replay in the GLMakie viewer, then Jupyter notebooks
 (planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
@@ -92,6 +93,11 @@ without `_orient_collinear!`-style signs.
   `FO._DROP_FLAGS`; a new boolean flag to `FO._BOOL_FLAGS`.
 - Experiment provenance: the command is in the file (`FO.run_info(p)["argv"]`),
   so a run's `.h5` is enough to report it.
+- Analysis goes in `analysis/` (`FloodA5Analysis`, `FA`; tests in
+  `test/analysis/`, run by `test/test_analysis.jl`): pure Julia, never
+  include `FloodModel.jl` there. New metrics belong in the module, as pure
+  functions of arrays plus a `Run`-level wrapper; scripts in `test/` should
+  stay thin CLI wrappers over it.
 
 ## Conventions
 - Physics changes: keep the old behaviour behind a flag until validated; update

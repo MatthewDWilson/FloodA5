@@ -25,14 +25,17 @@
 #   --frame N is the 1-based frame index (the same number as the old
 #   /frames/NNNNNN group name); output-format 1 and 2 files both work
 #   (io/FloodA5Output.jl).
+#
+# The metric lives in analysis/shape.jl (FloodA5Analysis: `FA.ns_split`);
+# this script is a CLI over it. Its convention, passed explicitly: the
+# north/south offset of a cell is Δlat · 111_320 m/° (FA.M_PER_DEG_LAT) from
+# the nominal --source-lat (wp1_metrics.jl planar uses the equirectangular
+# R = 6_371_008.8 m about the source cell's centre instead); non-finite
+# volumes are summed as they are.
 
-using HDF5
-using Statistics
 using Printf
-isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
-const FO = FloodA5Output
-
-const M_PER_DEG_LAT = 111_320.0
+include(joinpath(@__DIR__, "..", "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -49,100 +52,33 @@ const ARGS_V = String.(ARGS)
 const DO_LIST = "--list-frames" in ARGS_V
 
 # ---------------------------------------------------------------------------
-# HDF5 access
-# ---------------------------------------------------------------------------
-
-# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
-function _frame_names(f)
-    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
-end
-
-function _list_frames(h5_path::String)
-    h5open(h5_path, "r") do f
-        names = _frame_names(f)
-        ts = FO.frame_times(f)
-        println("Frames in $h5_path:")
-        @printf("%8s  %10s  %8s  %10s\n",
-                "frame#", "t (s)", "n_wet", "max_depth")
-
-        for (k, nm) in enumerate(names)
-            t = ts[k]
-            sat = FO.read_frame(f, "saturation", k)
-            n_wet = count(>=(1.0), sat)
-            depth = FO.read_frame(f, "water_depth", k)
-            md = isempty(depth) ? NaN : maximum(depth)
-
-            @printf("%8s  %10.1f  %8d  %10.4f\n",
-                    nm, t, n_wet, md)
-        end
-    end
-end
-
-"""
-    _read_frame_volume(h5_path, frame_idx) → (center_lats, volume, t)
-"""
-function _read_frame_volume(h5_path::String, frame_idx::Int)
-    h5open(h5_path, "r") do f
-        center_lats = read(f["mesh/center_lats"])
-        names = _frame_names(f)
-
-        fname = lpad(string(frame_idx), 6, '0')
-
-        1 <= frame_idx <= length(names) ||
-            error("Frame $fname not found in $h5_path. Available: " *
-                  "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
-                  "Run with --list-frames to inspect.")
-
-        volume = FO.read_frame(f, "volume", frame_idx)
-        t = FO.frame_times(f)[frame_idx]
-
-        return center_lats, volume, t
-    end
-end
-
-# ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
 
 function analyse_symmetry(
-    h5_path::String,
+    r::FA.Run,
     frame_idx::Int;
     source_lat::Float64,
     lat_tolerance_m::Float64=50.0
 )
-    center_lats, volume, t = _read_frame_volume(h5_path, frame_idx)
-
-    dlat_m = (center_lats .- source_lat) .* M_PER_DEG_LAT
-
-    north_mask   = dlat_m .>  lat_tolerance_m
-    south_mask   = dlat_m .< -lat_tolerance_m
-    symline_mask = .!north_mask .& .!south_mask
-
-    n_excluded = count(symline_mask)
-
-    V_north   = sum(volume[north_mask])
-    V_south   = sum(volume[south_mask])
-    V_symline = sum(volume[symline_mask])
-
-    V_ns = V_north + V_south
-
-    asymmetry =
-        V_ns > 1e-9 ?
-        (V_north - V_south) / V_ns :
-        0.0
-
+    FA.check_frame(r, frame_idx; hint = " Run with --list-frames to inspect.")
+    _, dlat_m = FA.shape_xy(r.mesh, 0.0, source_lat; snap = false,
+                            m_per_deg = FA.M_PER_DEG_LAT)
+    s = FA.ns_split(FA.volume(r, frame_idx), dlat_m; band = lat_tolerance_m)
     return (
-        t=t,
-        n_north=count(north_mask),
-        n_south=count(south_mask),
-        n_excluded=n_excluded,
-        V_north=V_north,
-        V_south=V_south,
-        V_symline=V_symline,
-        V_ns=V_ns,
-        asymmetry=asymmetry
+        t=r.t[frame_idx],
+        n_north=s.n_north,
+        n_south=s.n_south,
+        n_excluded=s.n_band,
+        V_north=s.V_north,
+        V_south=s.V_south,
+        V_symline=s.V_band,
+        V_ns=s.V_ns,
+        asymmetry=s.asym
     )
 end
+analyse_symmetry(h5_path::String, frame_idx::Int; kw...) =
+    analyse_symmetry(FA.load_run(h5_path), frame_idx; kw...)
 
 # ---------------------------------------------------------------------------
 # Human-readable output
@@ -280,7 +216,7 @@ function main()
     if DO_LIST
         for flag in ("--baseline", "--corrected")
             path = _argval(ARGS_V, flag)
-            path !== nothing && isfile(path) && _list_frames(path)
+            path !== nothing && isfile(path) && FA.print_frames(FA.load_run(path))
         end
         return
     end
@@ -426,9 +362,8 @@ function run_sweep(
     source_lat::Float64,
     lat_tolerance_m::Float64
 )
-    n_frames = h5open(baseline_path, "r") do f
-        length(_frame_names(f))
-    end
+    rb, rc = FA.load_run(baseline_path), FA.load_run(corrected_path)
+    n_frames = FA.nframes(rb)
 
     println("Sweep — every $step frames, $n_frames total frames available")
 
@@ -450,14 +385,14 @@ function run_sweep(
 
         try
             a = analyse_symmetry(
-                baseline_path,
+                rb,
                 fidx;
                 source_lat=source_lat,
                 lat_tolerance_m=lat_tolerance_m
             )
 
             b = analyse_symmetry(
-                corrected_path,
+                rc,
                 fidx;
                 source_lat=source_lat,
                 lat_tolerance_m=lat_tolerance_m

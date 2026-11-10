@@ -57,14 +57,16 @@
 #
 #   N is the 1-based frame index (the same number as the old /frames/NNNNNN
 #   group name); output-format 1 and 2 files both work (io/FloodA5Output.jl).
+#
+# The metrics live in analysis/shape.jl (FloodA5Analysis:
+# `FA.front_radius_by_sector(...; centred = true)`, `FA.sample_at_bearings`);
+# this script is a CLI over them. Coordinates: equirectangular about the
+# NOMINAL source point with R_EARTH = 6_371_000 m (as test_point_spread.jl).
 
-using HDF5
 using Statistics
 using Printf
-isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
-const FO = FloodA5Output
-
-const EARTH_R = 6_371_000.0
+include(joinpath(@__DIR__, "..", "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
 
 function _argval(args::Vector{String}, flag::String, default=nothing)
     idx = findfirst(==(flag), args)
@@ -76,119 +78,6 @@ end
 const ARGS_V = String.(ARGS)
 const DO_LIST = "--list-frames" in ARGS_V
 
-# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
-function _frame_names(f)
-    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
-end
-
-function _list_frames(h5_path::String)
-    h5open(h5_path, "r") do f
-        names = _frame_names(f)
-        ts = FO.frame_times(f)
-        println("Frames in $h5_path:")
-        @printf("%8s  %10s  %8s  %10s\n", "frame#", "t (s)", "n_wet", "max_depth")
-        for (k, nm) in enumerate(names)
-            t = ts[k]
-            sat = FO.read_frame(f, "saturation", k)
-            n_wet = count(>=(1.0), sat)
-            depth = FO.has_var(f, "water_depth") ? FO.read_frame(f, "water_depth", k) : Float64[]
-            md = isempty(depth) ? NaN : maximum(depth)
-            @printf("%8s  %10.1f  %8d  %10.4f\n", nm, t, n_wet, md)
-        end
-    end
-end
-
-"""
-    _read_frame(h5_path, frame_idx) → (cell_lons, cell_lats, sat, depth, t)
-"""
-function _read_frame(h5_path::String, frame_idx::Int)
-    h5open(h5_path, "r") do f
-        cell_lons = read(f["mesh/center_lons"])
-        cell_lats = read(f["mesh/center_lats"])
-        names = _frame_names(f)
-        fname = lpad(string(frame_idx), 6, '0')
-        1 <= frame_idx <= length(names) ||
-            error("Frame $fname not found in $h5_path. Available: " *
-                  "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
-                  "Run with --list-frames to inspect.")
-        sat   = FO.read_frame(f, "saturation", frame_idx)
-        depth = FO.has_var(f, "water_depth") ? FO.read_frame(f, "water_depth", frame_idx) : fill(NaN, length(sat))
-        t     = FO.frame_times(f)[frame_idx]
-        return cell_lons, cell_lats, sat, depth, t
-    end
-end
-
-# ---------------------------------------------------------------------------
-# Metric 1 — sectors centred exactly on the 8 (or 16) compass bearings
-# ---------------------------------------------------------------------------
-
-"""
-    _front_radius_centred(xs, ys, n_dirs) → (bearings, radii, counts)
-
-Like test_point_spread.jl's _front_radius_by_direction, but sectors are
-centred ON each compass bearing (bearing_k ± half-width), not offset by
-half a sector. `counts[k]` is the number of wet cells that fell in sector
-k — print this alongside the radius; a sector controlled by 1-2 cells is
-not a reliable per-direction measurement (see module docstring).
-"""
-function _front_radius_centred(xs::Vector{Float64}, ys::Vector{Float64}; n_dirs::Int=8)
-    radii  = zeros(n_dirs)
-    counts = zeros(Int, n_dirs)
-    sector_width = 360.0 / n_dirs
-    half = sector_width / 2
-    for (x, y) in zip(xs, ys)
-        r = sqrt(x^2 + y^2)
-        r < 1e-6 && continue
-        bearing = mod(atand(x, y), 360.0)               # 0°=N, clockwise
-        shifted = mod(bearing + half, 360.0)
-        sector  = clamp(Int(floor(shifted / sector_width)) + 1, 1, n_dirs)
-        counts[sector] += 1
-        radii[sector] = max(radii[sector], r)
-    end
-    bearings = [(k - 1) * sector_width for k in 1:n_dirs]   # 0, 45, 90, ...
-    return bearings, radii, counts
-end
-
-# ---------------------------------------------------------------------------
-# Metric 2 — fixed-radius, exact-bearing point sample
-# ---------------------------------------------------------------------------
-
-"""
-    _sample_at_bearings(cell_xs, cell_ys, sat, depth, radius_m, n_dirs)
-        → per-bearing (bearing, nearest_dist_to_target, wet, depth)
-
-For each of n_dirs exact compass bearings, computes the target point at
-(radius_m, bearing) from the source (origin, by construction of the
-caller's projection) and finds the NEAREST actual cell centre to that
-point — over ALL cells, not just wet ones, since we need to know whether
-the mesh is wet or dry there. `nearest_dist_to_target` is reported so you
-can sanity-check resolution (should be well under one cell diagonal;
-markedly larger means the target point fell outside the loaded cell set,
-e.g. radius_m too large for this mesh).
-"""
-function _sample_at_bearings(cell_xs::Vector{Float64}, cell_ys::Vector{Float64},
-                              sat::Vector{Float64}, depth::Vector{Float64},
-                              radius_m::Float64, n_dirs::Int)
-    bearings = [(k - 1) * (360.0 / n_dirs) for k in 1:n_dirs]
-    results = NamedTuple[]
-    for b in bearings
-        tx = radius_m * sind(b)
-        ty = radius_m * cosd(b)
-        best_i = 0
-        best_d2 = Inf
-        for i in eachindex(cell_xs)
-            d2 = (cell_xs[i] - tx)^2 + (cell_ys[i] - ty)^2
-            if d2 < best_d2
-                best_d2 = d2
-                best_i = i
-            end
-        end
-        push!(results, (bearing=b, dist_to_target=sqrt(best_d2),
-                         wet=sat[best_i] >= 1.0, depth=depth[best_i]))
-    end
-    return results
-end
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -198,7 +87,7 @@ function main()
     input_path === nothing && error("--input FILE.h5 is required")
 
     if DO_LIST
-        _list_frames(input_path)
+        FA.print_frames(FA.load_run(input_path))
         return
     end
 
@@ -213,16 +102,16 @@ function main()
 
     n_dirs in (8, 16) || error("--n-dirs must be 8 or 16 (got $n_dirs)")
 
-    cell_lons, cell_lats, sat, depth, t = _read_frame(input_path, frame_idx)
+    run = FA.load_run(input_path)
+    FA.check_frame(run, frame_idx; hint = " Run with --list-frames to inspect.")
+    sat   = FA.field(run, "saturation", frame_idx)
+    depth = FA.has_field(run, "water_depth") ? FA.depth(run, frame_idx) : fill(NaN, length(sat))
+    t     = run.t[frame_idx]
     wet = sat .>= sat_thresh
     n_wet = count(wet)
     n_wet < 3 && error("Only $n_wet wet cell(s) at frame $frame_idx — pick a later frame.")
 
-    cos_lat0 = cosd(source_lat)
-    to_xy(lon, lat) = (deg2rad(lon - source_lon) * EARTH_R * cos_lat0,
-                        deg2rad(lat - source_lat) * EARTH_R)
-    all_xy = [to_xy(lo, la) for (lo, la) in zip(cell_lons, cell_lats)]
-    all_xs = first.(all_xy); all_ys = last.(all_xy)
+    all_xs, all_ys = FA.shape_xy(run.mesh, source_lon, source_lat; R = FA.R_EARTH, snap = false)
     wet_xs = all_xs[wet];    wet_ys = all_ys[wet]
 
     println("Input: $input_path   frame=$frame_idx   t=$(round(t,digits=1))s   n_wet=$n_wet")
@@ -232,22 +121,19 @@ function main()
     println("="^70)
     println("Metric 1: front radius, sectors centred on compass bearings")
     println("="^70)
-    bearings, radii, counts = _front_radius_centred(wet_xs, wet_ys; n_dirs=n_dirs)
+    bearings, radii, counts = FA.front_radius_by_sector(wet_xs, wet_ys; n_dirs, centred = true)
 
     labels8  = ["N","NE","E","SE","S","SW","W","NW"]
     labels16 = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
                 "S","SSW","SW","WSW","W","WNW","NW","NNW"]
     labels = n_dirs == 8 ? labels8 : labels16
-
-    is_cardinal = n_dirs == 8 ?
-        [true,false,true,false,true,false,true,false] :        # N,E,S,W
-        [b % 90 == 0 for b in bearings]
     # NOTE: at --n-dirs 16, "cardinal" still means exactly N/E/S/W, but
     # "diagonal" below then also sweeps in the 8 intermediate bearings
     # (NNE, ENE, ...) alongside the 4 true diagonals — the summary ratio at
     # n_dirs=16 is "cardinal vs everything else", not a clean 4-vs-4 split.
     # Use n_dirs=8 for the primary cardinal-vs-diagonal ratio; use n_dirs=16
     # only to eyeball the full per-bearing table for discretisation noise.
+    is_cardinal = FA.cardinal_mask(bearings)
 
     @printf("%6s  %-4s  %10s  %8s\n", "bear°", "dir", "radius(m)", "n_cells")
     for (b, r, c, lab) in zip(bearings, radii, counts, labels)
@@ -255,17 +141,12 @@ function main()
         @printf("%6.1f  %-4s  %10.1f  %8d%s\n", b, lab, r, c, flag)
     end
 
-    cardinal_r = radii[is_cardinal]
-    diagonal_r = radii[.!is_cardinal]
-    cardinal_valid = cardinal_r[cardinal_r .> 0]
-    diagonal_valid = diagonal_r[diagonal_r .> 0]
-
+    cdm = FA.cardinal_diagonal_means(bearings, radii)
     println()
-    if length(cardinal_valid) >= 2 && length(diagonal_valid) >= 2
-        mc, md = mean(cardinal_valid), mean(diagonal_valid)
-        @printf("Mean cardinal radius (N/E/S/W)   : %8.1f m  (n=%d)\n", mc, length(cardinal_valid))
-        @printf("Mean diagonal radius (NE/SE/SW/NW): %8.1f m  (n=%d)\n", md, length(diagonal_valid))
-        @printf("Cardinal / diagonal ratio          : %6.4f\n", mc / md)
+    if cdm.n_cardinal >= 2 && cdm.n_diagonal >= 2
+        @printf("Mean cardinal radius (N/E/S/W)   : %8.1f m  (n=%d)\n", cdm.cardinal, cdm.n_cardinal)
+        @printf("Mean diagonal radius (NE/SE/SW/NW): %8.1f m  (n=%d)\n", cdm.diagonal, cdm.n_diagonal)
+        @printf("Cardinal / diagonal ratio          : %6.4f\n", cdm.ratio)
         println("  (1.0 = no directional preference; >1 favours cardinal, matching " *
                  "the 4-connected zig-zag-path hypothesis)")
     else
@@ -294,7 +175,9 @@ function main()
             radius_str === nothing ? "(auto: 70%% of median sector radius)" : "(user-specified)")
     println()
 
-    samples = _sample_at_bearings(all_xs, all_ys, sat, depth, radius_m, n_dirs)
+    samples = [(bearing = s.bearing, dist_to_target = s.dist,
+                wet = sat[s.cell] >= 1.0, depth = depth[s.cell])
+               for s in FA.sample_at_bearings(all_xs, all_ys, radius_m; n_dirs)]
     @printf("%6s  %-4s  %8s  %10s  %10s\n", "bear°", "dir", "wet?", "depth(m)", "cell-dist(m)")
     for (s, lab) in zip(samples, labels)
         @printf("%6.1f  %-4s  %8s  %10.4f  %10.1f\n",
@@ -302,11 +185,8 @@ function main()
                 s.wet ? s.depth : NaN, s.dist_to_target)
     end
 
-    is_cardinal2 = n_dirs == 8 ?
-        [true,false,true,false,true,false,true,false] :
-        [b % 90 == 0 for b in bearings]
-    card_depths = [s.depth for (s, c) in zip(samples, is_cardinal2) if c && s.wet]
-    diag_depths = [s.depth for (s, c) in zip(samples, is_cardinal2) if !c && s.wet]
+    card_depths = [s.depth for (s, c) in zip(samples, is_cardinal) if c && s.wet]
+    diag_depths = [s.depth for (s, c) in zip(samples, is_cardinal) if !c && s.wet]
     println()
     if length(card_depths) >= 1 && length(diag_depths) >= 1
         @printf("Mean cardinal depth at r=%.0fm: %.4f m (n=%d)\n", radius_m, mean(card_depths), length(card_depths))
