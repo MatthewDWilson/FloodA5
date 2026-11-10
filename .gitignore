@@ -22,3 +22,6 @@ testanimation/
 
 # WP1/WP2 experiment outputs and logs (test/run_wp1_matrix.sh)
 test/wp1_runs/
+
+# Test-case registry outputs (cases/run.jl)
+test/case_runs/

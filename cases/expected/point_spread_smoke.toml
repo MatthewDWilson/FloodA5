@@ -1,0 +1,19 @@
+# Expected metrics for case "point_spread_smoke" — written by `julia --project=. cases/run.jl baseline point_spread_smoke`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[cart_dx50]
+A4 = 0.20153846243191606
+A6 = -4.8107260364350076e-12
+circularity = 0.9270668157773633
+cv_radius = 0.0715892658442988
+mass_balance_rel = 0.0
+n_wet = 57.0
+ratio_1cm = 1.0606601717798212
+storage_m3 = 2400.0
+t = 1200.0
+
+[meta]
+flooda5_version = "0.4.1"
+git_commit = "f2d276598392a173056593006c850772e8149fd6"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-10T21:17:13Z"
