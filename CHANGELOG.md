@@ -74,10 +74,13 @@ contents change.
   (`read_frame`, `read_var`, `read_series`, `frame_times`, `cell_polygons`,
   `run_info`, …) and reproduction (`extract_mesh`, `rerun_argv`), without
   depending on `FloodModel.jl`. All scripts that read output now use it.
-- `test/test_output_format.jl` (O1–O5, in CI): run record and geometry,
+- `run_simulation!` called directly (not through `run_flood_model`) creates
+  its output file, with the mesh but no run record, replacing any file at
+  that path. Format 1 needed the file to exist already and appended to it.
+- `test/test_output_format.jl` (O1–O6, in CI): run record and geometry,
   `--rerun` bit-identical with the original mesh and inputs moved away (also
   for a mesh generated in the run, and with `--embed-mesh geometry`), the
-  format-1 reader.
+  format-1 reader, and a direct `run_simulation!` call.
 - `SHA` (standard library) as a dependency.
 
 ## [0.3.3] — 2026-11-10
