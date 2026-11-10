@@ -1330,6 +1330,10 @@ function _si_fmt(v::Float64, unit::String)::String
     return              "$(round(v/1e9, digits=2)) G$unit"
 end
 
+"A format-2 output file with no frames yet (just created by `_write_mesh_metadata!`)."
+_fresh_output(path::AbstractString) = isfile(path) &&
+    (try FO.format_version(path) >= 2 && FO.n_frames(path) == 0 catch; false end)
+
 """
     _write_mesh_metadata!(output, mesh; state, run, inputs, mesh_source)
 
@@ -1365,7 +1369,7 @@ function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh;
     cells = (ids         = [c.id         for c in mesh.cells],
              center_lons = [c.center_lon for c in mesh.cells],
              center_lats = [c.center_lat for c in mesh.cells],
-             elevations  = get(mesh.static_vars, "elevation", fill(NaN, n)),
+             elevations  = get(mesh.static_vars, "elevation", zeros(n)),   # no DEM: the model runs at z = 0
              static_vars = mesh.static_vars,
              # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
              id_scheme   = mesh.id_scheme,
@@ -3540,6 +3544,14 @@ function run_simulation!(state            :: FlowState,
     # Merge legacy injection_points / rain_points into all_sources.
     # Callers that still pass the old keyword args continue to work unchanged.
     merged_sources = AbstractSource[all_sources..., injection_points..., rain_points...]
+
+    # run_flood_model creates the output file (with the run record) before
+    # calling here; a direct caller gets a fresh format-2 file with the mesh
+    # only, rather than frames appended to whatever is at that path.
+    if output.enabled && output.frame_count == 0 && !_fresh_output(output.path)
+        mkpath(dirname(abspath(output.path)))
+        _write_mesh_metadata!(output, mesh; state)
+    end
 
     # WP5: on a device backend the state lives on the device during the run
     # (surfacewater/device_run.jl); `state` is brought up to date when read.

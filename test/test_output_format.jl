@@ -49,6 +49,7 @@ const ARGS1 = ["--meshgen-cartesian", AOI, "--dx", "25", "--meshout", MESH,
     @test issubset(["water_depth", "volume", "saturation", "velocity", "vel_u", "vel_v"],
                    FO.frame_vars(O1))
     ct = FO.cell_table(O1); n = length(ct.ids)
+    @test ct.elevation == zeros(n)                     # no DEM: recorded as the z = 0 the model used
     @test size(FO.read_var(O1, "volume")) == (n, nf)
     @test FO.read_frame(O1, "volume") == FO.read_var(O1, "volume")[:, end]
     @test FO.read_series(O1, "volume", 3) == FO.read_var(O1, "volume")[3, :]
@@ -142,6 +143,30 @@ end
     @test FO.cell_table(p).elevation == [1.0, 2.0, 3.0]
     @test_throws ErrorException FO.cell_polygons(p)
     @test FO.run_info(p)["format_version"] == 1
+end
+
+@testset "O6 — run_simulation! called directly creates its own output file" begin
+    d = mktempdir()
+    FO.extract_mesh(O1, d)
+    m = with_logger(() -> A5Grid.load_mesh_geoparquet(joinpath(d, "mesh.parquet")), NullLogger())
+    p = joinpath(DIR, "o9.h5")
+    cp(joinpath(DIR, "v1.h5"), p)        # a stale format-1 file at the path is replaced …
+    nf = Int[]
+    for pass in 1:2                      # … and so is an earlier run's format-2 file
+        s = with_logger(() -> initialise_flow_model(m, StandardFlow()), NullLogger())
+        out = SimOutput(p, 60.0, -Inf, 0, true)
+        _run_direct() = run_simulation!(s, m, 180.0, 10.0, nothing, :none, out;
+                                        method = StandardFlow(), rainfall_rate = 40e-3 / 3600)
+        with_logger(NullLogger()) do
+            redirect_stdout(_run_direct, devnull)
+        end
+        @test FO.format_version(p) == 2
+        @test FO.frame_times(p)[end] == 180.0 && issorted(FO.frame_times(p))
+        @test length(FO.cell_table(p).ids) == length(m.cells)
+        @test length(FO.cell_area(p)) == length(m.cells)
+        push!(nf, FO.n_frames(p))
+    end
+    @test nf[1] == nf[2] >= 3
 end
 
 println("\nOutput-format tests complete.")

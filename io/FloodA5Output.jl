@@ -456,6 +456,7 @@ function extract_mesh(f::HDF5.File, dir::AbstractString)
         error("the mesh was not embedded (--embed-mesh geometry) and $p has changed since the run")
     return p
 end
+extract_mesh(path::AbstractString, dir::AbstractString) = _reader(f -> extract_mesh(f, dir), path)
 
 # CLI flags (FloodModel.jl main) that rerun_argv must know about.
 const _BOOL_FLAGS = Set(["--closed-boundaries", "--dem-strict", "--limiter-stats", "--mesh-only"])
