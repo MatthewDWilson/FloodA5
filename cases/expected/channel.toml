@@ -1,0 +1,155 @@
+# Expected metrics for case "channel" — written by `julia --project=. cases/run.jl baseline channel`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[chan_a5_r18_a00_o00_li]
+deta = 1.0597671994510371
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9995656120331943
+spill = 0.0
+unsteady = 3.668328107053753e-5
+
+[chan_a5_r18_a00_o00_swe]
+deta = 1.0496015964076029
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9942582067045603
+spill = 0.0
+unsteady = 0.0015403747239911558
+
+[chan_a5_r18_a45_o00_li]
+deta = 0.9966510019084937
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9985590277777782
+spill = 0.0
+unsteady = 0.00045737354428965205
+
+[chan_a5_r18_a45_o00_swe]
+deta = 1.0156437598555679
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 1.0002648244099024
+spill = 0.0
+unsteady = 0.001104156652296684
+
+[chan_a5_r19_a00_o00_li]
+deta = 0.49558904672725224
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 1.0000675447483953
+spill = 0.0
+unsteady = 0.0015405117904072063
+
+[chan_a5_r19_a00_o00_swe]
+deta = 0.7073588583897169
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9949265459514854
+spill = 0.0
+unsteady = 0.0044931997171532845
+
+[chan_a5_r19_a45_o00_li]
+deta = 0.33467527286446797
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.999513747148519
+spill = 0.0
+unsteady = 0.0017920039601093327
+
+[chan_a5_r19_a45_o00_swe]
+deta = 0.5011159594560683
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9999884964914301
+spill = 0.0
+unsteady = 0.00013864187943424255
+
+[chan_cart_r18_a00_o00_li]
+deta = 0.7382864677676757
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 1.0000334336342342
+spill = 0.0
+unsteady = 1.2260370496619544e-10
+
+[chan_cart_r18_a00_o00_swe]
+deta = 0.6947652068129095
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.999936962750716
+spill = 0.0
+unsteady = 5.935440527959912e-9
+
+[chan_cart_r18_a45_o00_li]
+deta = 1.2929034304729903
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9925568181818185
+spill = 32.40079453354787
+unsteady = 0.00036812212164660796
+
+[chan_cart_r18_a45_o00_swe]
+deta = 1.0186942882781647
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.8853650330828768
+spill = 0.0
+unsteady = 0.14195306191612053
+
+[chan_cart_r19_a00_o00_li]
+deta = 0.1202422892585928
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9999999999999991
+spill = 0.0
+unsteady = 2.6151431020693394e-7
+
+[chan_cart_r19_a00_o00_swe]
+deta = 0.07241583527909772
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 1.000022609088855
+spill = 0.0
+unsteady = 4.07465672314089e-9
+
+[chan_cart_r19_a45_o00_li]
+deta = 0.4951573897793638
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9999449271814976
+spill = 0.0
+unsteady = 3.416884242213314e-8
+
+[chan_cart_r19_a45_o00_swe]
+deta = 0.5079540666594358
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.9999829680935638
+spill = 0.0
+unsteady = 1.460983646062175e-6
+
+[meta]
+flooda5_version = "0.4.1"
+git_commit = "3197283c4b1b1204c769bd82c624ef5d2781ed86"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-10T22:05:49Z"
+
+[series]
+jobs_match_generator = 1.0
+li_a5_r18_rms = 1.0286932819449874
+li_a5_r18_spread = 0.0631161975425435
+li_a5_r19_rms = 0.42285697434412306
+li_a5_r19_spread = 0.16091377386278427
+li_cart_r18_rms = 1.0527739997306396
+li_cart_r18_spread = 0.5546169627053146
+li_cart_r19_rms = 0.36030476598239713
+li_cart_r19_spread = 0.374915100520771
+swe_a5_r18_rms = 1.0327622567936299
+swe_a5_r18_spread = 0.03395783655203499
+swe_a5_r19_rms = 0.6129738001595091
+swe_a5_r19_spread = 0.20624289893364856
+swe_cart_r18_rms = 0.8719050250940011
+swe_cart_r18_spread = 0.3239290814652551
+swe_cart_r19_rms = 0.36280944518784786
+swe_cart_r19_spread = 0.43553823138033804

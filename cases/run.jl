@@ -2,6 +2,7 @@
 #
 #   julia --project=. cases/run.jl list [--tier smoke|standard|full]
 #   julia --project=. cases/run.jl show CASE
+#   julia --project=. cases/run.jl prep CASE… [--force] [--dry-run]   # inputs only
 #   julia --project=. cases/run.jl run CASE… [--jobs a,b] [-P N] [-T N] [--fresh] [--dry-run]
 #   julia --project=. cases/run.jl check CASE…        # analyse existing runs, check
 #   julia --project=. cases/run.jl baseline CASE…     # record current metrics as expected
@@ -66,6 +67,13 @@ function main(argv)
                               fresh, dry_run = dry)
         end
         return ok ? 0 : 1
+    elseif cmd == "prep"
+        force = _flag(args, "--force"); dry = _flag(args, "--dry-run")
+        for c in _cases(args)
+            println("== $(c.name)")
+            FC.prepare(c; force, dry_run = dry)
+        end
+        return 0
     elseif cmd == "check"
         ok = true
         for c in _cases(args)
@@ -80,7 +88,7 @@ function main(argv)
         end
         return 0
     end
-    error("unknown command \"$cmd\" (list, show, run, check, baseline)")
+    error("unknown command \"$cmd\" (list, show, prep, run, check, baseline)")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

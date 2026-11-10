@@ -1,0 +1,169 @@
+# cases/registry/carlisle.jl — Carlisle 2005, first 6 h, the 0.3.0 local-inertial
+# default against the full shallow-water reference on the same mesh
+# (docs/TEST_CASES.md §3; HYDRAULICS.md §15.10–15.11).
+
+const _CARL = "{repo}/test/carlisle"
+const _CARL_RUN = ["--inflow-bci", "$_CARL/carlisle_wgs84.bci", "--rainfall", "10",
+                   "--sim-duration", "21600", "--dt-max", "10", "--output-interval", "900"]
+
+"""
+Time (s) at which the volume leaving the domain first reaches `vol` (m³),
+interpolated linearly between the step lines of a run log (NaN if never).
+"""
+function _carl_arrival(logpath, vol)
+    e = isfile(logpath) ? FA.parse_log_volumes(logpath) : []
+    for i in eachindex(e)
+        e[i].vol_removed >= vol || continue
+        i == 1 && return e[i].t
+        a, b = e[i-1], e[i]
+        return a.t + (vol - a.vol_removed) / (b.vol_removed - a.vol_removed) * (b.t - a.t)
+    end
+    return NaN
+end
+
+"""
+    _case_log_mass_balance(logpath) -> (added, removed, domain, error, rel)
+
+The mass balance at a run log's last step line (`domain_vol`, `vol_removed`,
+`mb_err`; added = domain + removed + error). FloodModel's end-of-run summary
+does not fill its volumes (0.4.1: always 0), so the cases take them from the log.
+"""
+function _case_log_mass_balance(logpath)
+    last = nothing
+    if isfile(logpath)
+        for l in eachline(logpath)
+            m = match(r"domain_vol=([-0-9.e+]+)m³\s+vol_removed=([-0-9.e+]+)m³\s+mb_err=([-0-9.e+]+)m³", l)
+            m === nothing || (last = m)
+        end
+    end
+    last === nothing && return (added = NaN, removed = NaN, domain = NaN, error = NaN, rel = NaN)
+    d, r, e = (parse(Float64, x) for x in last.captures)
+    a = d + r + e
+    return (added = a, removed = r, domain = d, error = e, rel = abs(e) / max(a, eps()))
+end
+
+"Storage, outflow and arrival of every run; each local-inertial run against the SWE run on its mesh."
+function _carl_metrics(ctx)
+    out = Dict{String,Dict{String,Float64}}()
+    for (name, r) in ctx.runs
+        k = FA.nframes(r)
+        log = replace(r.path, ".h5" => ".log")
+        mb = _case_log_mass_balance(log)
+        # Σ volume: equal to Σ h·A except with SGS, whose depth is above the cell's lowest point
+        out[name] = Dict("t" => r.t[k], "storage_m3" => FA.stored_volume(r, k),
+                         "vol_added_m3" => mb.added, "vol_removed_m3" => mb.removed,
+                         "mass_balance_log_rel" => mb.rel, "arrival_s" => _carl_arrival(log, 50_000.0))
+    end
+    for (name, j) in ctx.jobs
+        ref = get(j.tags, :reference, nothing)
+        ref === nothing && continue
+        c = FA.compare(ctx.runs[ref], ctx.runs[name])
+        c.t == c.t_ref || error("$name vs $ref: frames at different times ($(c.t), $(c.t_ref))")
+        merge!(out[name], Dict("storage_ratio" => c.storage_ratio, "rms_dh" => c.rms,
+                               "csi" => c.csi, "bias" => c.bias, "speed_ratio_deep" => c.speed_ratio))
+    end
+    return out
+end
+
+_carl_fmt(x) = string(round(x; sigdigits = 4))
+_carl_list(m, key, jobs) = join(("$j $(_carl_fmt(m[j][key]))" for j in jobs), ", ")
+
+# Recorded 6 h values (HYDRAULICS §15.10–15.11; runs test/wp1_runs/r1b, bcnb, 0.2.6/0.3.0)
+const _CARL_SWE_STORAGE = Dict("a5_swe" => 2.690e6, "cart_swe" => 2.331e6)
+const _CARL_LI_RATIO = Dict("a5_li" => 1.25, "cart_li" => 0.99)
+
+const _CARL_CHECKS = [
+    # Of ~5.9 Mm³ added, SWE loses ~20 m³ (3e-6) and the local-inertial default ~150 m³
+    # (2.5e-5, as in the recorded 0.3.0 runs)
+    Check("mass conserved (|error| < 1e-4 of the volume added, from the log)",
+          m -> all(m[j]["mass_balance_log_rel"] < 1e-4 for j in keys(m));
+          detail = m -> _carl_list(m, "mass_balance_log_rel", sort(collect(keys(m))))),
+    # The reference is converged in its own parameters (Courant 0.7 vs 0.35, eddy
+    # viscosity: storage equal to 3 digits; twin rms 0.3 mm): 1% allows for
+    # round-off-level changes of the bed (mesh regeneration) and the code since 0.2.6.
+    Check("SWE 6 h storage = recorded (A5 2.690, Cartesian 2.331 Mm³) ± 1%",
+          m -> all(abs(m[j]["storage_m3"] / v - 1) <= 0.01 for (j, v) in _CARL_SWE_STORAGE);
+          detail = m -> _carl_list(m, "storage_m3", ("a5_swe", "cart_swe"))),
+    # Halving the Courant number changes the local-inertial 6 h storage by 0.2%
+    # (A5) and 4% (Cartesian) (§15.11): ±0.05 on the ratio covers that.
+    Check("local-inertial / SWE storage = recorded (A5 1.25, Cartesian 0.99) ± 0.05",
+          m -> all(abs(m[j]["storage_ratio"] - v) <= 0.05 for (j, v) in _CARL_LI_RATIO);
+          detail = m -> _carl_list(m, "storage_ratio", ("a5_li", "cart_li"))),
+    # §15.10: the A5 excess is the step-bed representation of sub-cell channels,
+    # not the dissipation; it should stay well above the Cartesian ratio.
+    Check("local-inertial excess larger on A5 than on Cartesian (ratio difference > 0.15)",
+          m -> m["a5_li"]["storage_ratio"] - m["cart_li"]["storage_ratio"] > 0.15;
+          detail = m -> _carl_list(m, "storage_ratio", ("a5_li", "cart_li"))),
+    # Recorded: CSI 0.62 / 0.69, rms Δh 0.29 / 0.13 m (A5 / Cartesian, FA.compare
+    # on the recorded runs).
+    Check("extent vs SWE at 0.1 m: CSI ≥ 0.55; rms Δh ≤ 0.35 m",
+          m -> all(m[j]["csi"] >= 0.55 && m[j]["rms_dh"] <= 0.35 for j in ("a5_li", "cart_li"));
+          detail = m -> _carl_list(m, "csi", ("a5_li", "cart_li")) * "; rms " * _carl_list(m, "rms_dh", ("a5_li", "cart_li"))),
+    # Recorded SWE arrival (50 000 m³ out): 6 688 s (A5), 5 736 s (Cartesian).
+    Check("SWE arrival (50 000 m³ out) = recorded (A5 6 688, Cartesian 5 736 s) ± 2%",
+          m -> abs(m["a5_swe"]["arrival_s"] / 6688 - 1) <= 0.02 && abs(m["cart_swe"]["arrival_s"] / 5736 - 1) <= 0.02;
+          detail = m -> _carl_list(m, "arrival_s", ("a5_swe", "cart_swe"))),
+    # SGS has no reference: the recorded 0.3.0 run (§15.11, 4.299 Mm³; Σ volume
+    # at 21 600 s 4.300). ±2%, as the local-inertial time-step sensitivity.
+    Check("SGS 6 h storage = recorded 4.30 Mm³ ± 2%",
+          m -> abs(m["a5_sgs"]["storage_m3"] / 4.30e6 - 1) <= 0.02;
+          detail = m -> _carl_list(m, "storage_m3", ("a5_sgs",))),
+]
+
+let
+    a5mesh = "{case}/carlisle_a5_res18.parquet"
+    cart = "{case}/carlisle_cart20.parquet"
+    sgsmesh = "{case}/carlisle_a5_res18_sgs.parquet"
+    register!(Case(
+        name = "carlisle", tier = :full,
+        title = "Carlisle 6 h: local-inertial default vs SWE reference (A5 res 18, Cartesian 20 m)",
+        doc = "docs/TEST_CASES.md §3; HYDRAULICS.md §15.10–15.11",
+        description = """
+        The first 6 h of the Carlisle 2005 event (the three inflow hydrographs,
+        10 mm/h rain, open boundaries) on A5 res 18 (~22 m cells) and on a 20 m
+        Cartesian grid aligned with the 5 m LiDAR averaged to 20 m, each with
+        the 0.3.0 local-inertial default and with the full SWE reference
+        (`--flow-model swe`, order 2), and SGS on A5 res 18 (no reference;
+        storage only). Metrics at 6 h: storage (Σ volume), and from the log the
+        volume added and removed, the mass-balance error and the arrival time
+        (50 000 m³ out); each local-inertial run against the SWE run on its
+        mesh (storage ratio, rms Δh over wet cells, CSI and bias of the extent
+        at 0.1 m, mean speed ratio where the reference is ≥ 3 m deep). The
+        checks are the §15.10–15.11 record: SWE 2.690 / 2.331 Mm³ and arrival
+        6 688 / 5 736 s; local-inertial 1.25× SWE on A5, 0.99× on Cartesian;
+        SGS 4.30 Mm³. CPU, one 4-thread run at a time: about 50 min (SWE 21
+        and 17 min, the others 1.5–2.5 min), plus 7 min of mesh generation.
+        A5 results are sensitive to round-off in the bed: a regenerated A5 mesh
+        that differed from the recorded one by ≤ 3e-9 m in elevation moved the
+        local-inertial storage by 2e-4 (rms Δh 1.5 cm). The expected values
+        hold for the mesh they were recorded with; re-record after
+        regenerating it on another machine.""",
+        prep = [Prep("a5_res18", :floodmodel,
+                     ["--meshgen", "$_CARL/Carlisle_domain.geojson", "--meshres", "18",
+                      "--dem", "$_CARL/Carlisle_LiDAR_5m_mean.tif", "--meshout", a5mesh,
+                      "--flow-model", "standard", "--mesh-only"]; outputs = [a5mesh]),
+                Prep("dem20", :julia,
+                     ["{repo}/cases/scripts/average_dem.jl", "$_CARL/Carlisle_LiDAR_5m_mean.tif",
+                      "{case}/carlisle_dem20.tif", "20"]; outputs = ["{case}/carlisle_dem20.tif"]),
+                Prep("cart20", :floodmodel,
+                     ["--meshgen-cartesian", "{case}/carlisle_dem20.tif", "--meshout", cart, "--mesh-only"];
+                     outputs = [cart]),
+                Prep("a5_res18_sgs", :floodmodel,
+                     ["--meshgen", "$_CARL/Carlisle_domain.geojson", "--meshres", "18",
+                      "--dem", "$_CARL/Carlisle_LiDAR_5m_mean.tif", "--meshout", sgsmesh,
+                      "--flow-model", "sgs", "--mesh-only"]; outputs = [sgsmesh])],
+        jobs = [Job("a5_swe", vcat(["--meshload", a5mesh, "--flow-model", "swe"], _CARL_RUN);
+                    mesh = "a5", solver = "swe"),
+                Job("a5_li", vcat(["--meshload", a5mesh, "--flow-model", "standard"], _CARL_RUN);
+                    mesh = "a5", solver = "li", reference = "a5_swe"),
+                Job("cart_swe", vcat(["--meshload", cart, "--flow-model", "swe"], _CARL_RUN);
+                    mesh = "cartesian", solver = "swe"),
+                Job("cart_li", vcat(["--meshload", cart, "--flow-model", "standard"], _CARL_RUN);
+                    mesh = "cartesian", solver = "li", reference = "cart_swe"),
+                Job("a5_sgs", vcat(["--meshload", sgsmesh, "--flow-model", "sgs"], _CARL_RUN);
+                    mesh = "a5", solver = "sgs")],
+        analyse = _carl_metrics,
+        checks = _CARL_CHECKS,
+        rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
+    ))
+end

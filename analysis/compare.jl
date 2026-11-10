@@ -62,6 +62,9 @@ the other run's frame nearest its time. The result adds `k_ref`, `k_run`,
 `t_ref` and `t` — check them: explicitly given frames need not match in time.
 `area` defaults to the reference's cell areas (the run's if the reference
 has none). The runs must be on the same mesh in the same cell order.
+If either run is SGS, storage comes from `storage` (Σ volume); its depths
+are measured from each cell's lowest point, so rms/CSI/bias against a
+non-SGS run compare different quantities.
 """
 function compare(ref::Run, run::Run; k_ref = nothing, k_run = nothing,
                  threshold::Real = 0.1, area = nothing)
@@ -79,6 +82,10 @@ function compare(ref::Run, run::Run; k_ref = nothing, k_run = nothing,
     isempty(A) && error("compare: no cell areas (format 1: load the runs with parquet = MESH)")
     c = compare_fields(depth(ref, k_ref), depth(run, k_run), A;
                        s_ref = speed(ref, k_ref), s = speed(run, k_run), threshold)
+    if ref.flow_model == "sgs" || run.flow_model == "sgs"
+        st_ref, st_run = storage(ref, k_ref), storage(run, k_run)
+        c = merge(c, (storage_ref = st_ref, storage = st_run, storage_ratio = st_run / st_ref))
+    end
     return merge((k_ref = k_ref, k_run = k_run, t_ref = ref.t[k_ref], t = run.t[k_run]), c)
 end
 

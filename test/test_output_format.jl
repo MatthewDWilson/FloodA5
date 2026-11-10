@@ -61,6 +61,14 @@ const ARGS1 = ["--meshgen-cartesian", AOI, "--dx", "25", "--meshout", MESH,
     @test ri["flow_model"] == "standard" && ri["threads"] == Threads.nthreads()
     @test !isempty(ri["git_commit"]) && !isempty(ri["project"])
     @test ri["summary"]["completed"] == true && ri["summary"]["n_frames"] == nf
+    s = ri["summary"]                                  # the run's mass balance is recorded
+    @test s["vol_added_m3"] > 0 && s["vol_domain_m3"] > 0
+    @test s["vol_domain_m3"] ≈ sum(filter(isfinite, FO.read_frame(O1, "volume"))) rtol = 1e-12
+    # conservation: what the stepping added is stored or left. mass_balance_error
+    # also contains the sources' first-order time integration (vol_applied −
+    # vol_added: Q(t)·dt against the hydrograph's exact integral)
+    @test abs(s["conservation_error_m3"]) < 1e-9 * s["vol_applied_m3"] + 1e-9
+    @test s["mass_balance_error_m3"] ≈ s["conservation_error_m3"] + s["vol_added_m3"] - s["vol_applied_m3"] atol = 1e-6
     ms = ri["mesh_source"]
     @test ms["embedded"] == "full" && ms["kind"] == "file" && ms["sha256"] == FO.sha256_file(MESH)
     @test length(ri["inputs"]) == 1 && ri["inputs"][1]["embedded"] == true &&

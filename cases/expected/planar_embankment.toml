@@ -1,0 +1,73 @@
+# Expected metrics for case "planar_embankment" — written by `julia --project=. cases/run.jl baseline planar_embankment`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[meta]
+flooda5_version = "0.4.1"
+git_commit = "3197283c4b1b1204c769bd82c624ef5d2781ed86"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-10T21:50:39Z"
+
+[sgs]
+crest_z = 7.0
+inj_point_mismatch_deg = 0.0
+mass_balance_rel = 0.0
+n_down = 1059.0
+n_up_adjacent = 24.0
+sill_z = 5.0
+stored_m3 = 212989.99999999985
+t_end = 21600.0
+t_first_down = 1082.0
+v_down_1h = 702.3427963093551
+v_down_2h = 4328.506677777868
+v_down_3h = 10436.31108907264
+v_down_4h = 18486.318526739014
+v_down_5h = 28082.5598524315
+v_down_6h = 38952.339368944566
+v_down_end = 38952.339368944566
+wse_up_1h = 5.419744798361782
+wse_up_2h = 5.670140556753877
+wse_up_3h = 5.870599460301649
+wse_up_4h = 6.0186314144493105
+wse_up_5h = 6.132650961497286
+wse_up_6h = 6.2237449625204055
+wse_up_at_first_down = 5.228252933380207
+wse_up_before_first_down = 5.225609251228261
+wse_up_max = 6.2237449625204055
+z_bneck_mean = 6.718815757090072
+z_bneck_zmin = 5.106396922548715
+z_foot = 5.1
+
+[sgs_vs_standard]
+frac_sgs_more_down = 1.0
+n_frames_compared = 126.0
+v_down_sgs_before_std_overtops = 22789.95346431251
+v_down_std_before_std_overtops = 0.24337285070811843
+
+[standard]
+crest_z = 7.0
+inj_point_mismatch_deg = 0.0
+mass_balance_rel = 0.0
+n_down = 1059.0
+n_up_adjacent = 24.0
+sill_z = 5.0
+stored_m3 = 212989.99999999994
+t_end = 21600.0
+t_first_down = 16202.0
+v_down_1h = 0.0
+v_down_2h = 0.0
+v_down_3h = 0.0
+v_down_4h = 0.0
+v_down_5h = 903.3614459641441
+v_down_6h = 12601.159784722804
+v_down_end = 12601.159784722804
+wse_up_1h = 5.661404802072194
+wse_up_2h = 6.120813968804741
+wse_up_3h = 6.419530951083473
+wse_up_4h = 6.661204449247874
+wse_up_5h = 6.860474600663887
+wse_up_6h = 6.985039753573881
+wse_up_at_first_down = 6.766498781587348
+wse_up_before_first_down = 6.75936986741716
+wse_up_max = 6.985039753573881
+z_bneck_mean = 6.718815757090072
+z_foot = 5.1

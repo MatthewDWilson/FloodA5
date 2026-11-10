@@ -222,8 +222,16 @@ function wse(r::Run, k::Integer = nframes(r); sgs::Bool = r.flow_model == "sgs")
     return r.mesh.elevation .+ h
 end
 
-"Σ depth·area over cells with a finite depth (m³). Needs cell areas."
+"""
+    storage(r, k) -> m³
+
+Water stored in the domain. Standard and SWE runs: Σ depth·area over cells
+with a finite depth (needs cell areas). SGS runs: Σ `volume` — SGS depth is
+measured from the cell's lowest DEM point, so depth·area overstates the
+store (planar embankment: 263 800 vs 212 990 m³).
+"""
 function storage(r::Run, k::Integer = nframes(r))
+    r.flow_model == "sgs" && return stored_volume(r, k)
     isempty(r.mesh.area) && error("$(r.label): no cell areas (format 1: pass the mesh's parquet)")
     h = depth(r, k)
     return sum(h[i] * r.mesh.area[i] for i in eachindex(h) if isfinite(h[i]); init = 0.0)

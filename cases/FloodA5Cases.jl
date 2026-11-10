@@ -16,7 +16,15 @@
 # Runs are separate `julia FloodModel.jl …` processes, `--output
 # {runs}/<job>.h5` appended, log in `{runs}/<job>.log`. A run is reused if
 # its output records the same command line and completed (format 2's run
-# record); otherwise it is run again.
+# record); otherwise it is run again (`--fresh` forces it, e.g. after a code
+# change). Preparation steps of one checkout must not run concurrently with
+# mesh generation elsewhere in the same checkout before 0.4.2 (fixed temp
+# files in mesh/A5Grid.jl).
+#
+# Registry files (`cases/registry/*.jl`, included in name order) share this
+# module's namespace: prefix every helper with the case's abbreviation
+# (`_pt_` point spread, `_ps_` planar slope, `_pe_` planar embankment,
+# `_ch_` channel, `_carl_` Carlisle); `_planar_common.jl` holds shared ones.
 
 module FloodA5Cases
 
@@ -191,8 +199,12 @@ function _show_prep(c::Case, p::Prep)
     a = join(_q.(_subst(p.args, c)), " ")
     p.kind === :floodmodel && return "julia --project=. --threads $(p.threads) FloodModel.jl $a"
     p.kind === :julia && return "julia --project=. --threads $(p.threads) $a"
-    p.kind === :write && return "write $(_subst(p.args[1], c)) ($(length(p.args[2])) bytes)"
-    return "python $a"
+    p.kind === :write && return "write $(_subst(p.args[1], c)):\n        " *
+                                replace(rstrip(p.args[2]), "\n" => "\n        ")
+    # FloodA5's Python is PyCall's (Julia's Conda env), with conda's Library/bin on PATH
+    return "julia --project=. -e 'using PyCall; d = dirname(PyCall.python); " *
+           "withenv(\"PATH\" => join([d, joinpath(d, \"Library\", \"bin\"), ENV[\"PATH\"]], Sys.iswindows() ? \";\" : \":\")) do; " *
+           "run(`\$(PyCall.python) $a`); end'"
 end
 _show_job(c::Case, j::Job, threads = j.threads) =
     "julia --project=. --threads $threads FloodModel.jl " * join(_q.(job_argv(c, j)), " ")
@@ -318,8 +330,11 @@ const Metrics = Dict{String,Dict{String,Float64}}
     analyse(c; io = stdout) -> Metrics
 
 Load the case's completed runs and compute its metrics; also writes
-`{case}/metrics.toml`. Every job also gets `mass_balance_rel` (the run's
-mass-balance error relative to the volume added) from its summary.
+`{case}/metrics.toml`. Every job also gets, from its summary:
+- `mass_balance_rel`: |volume added by the stepping − stored − removed| /
+  volume added — conservation alone (0.4.2+ summaries; NaN before)
+- `input_error_rel`: (volume added by the stepping − exact time integral of
+  the inputs) / exact — the sources' first-order time integration
 """
 function analyse(c::Case; io::IO = stdout)
     runs = Dict{String,Any}()
@@ -331,9 +346,10 @@ function analyse(c::Case; io::IO = stdout)
     m = Metrics()
     for j in c.jobs
         s = get(runs[j.name].info, "summary", Dict())
-        added = Float64(get(s, "vol_added_m3", NaN))
-        m[j.name] = Dict("mass_balance_rel" => abs(Float64(get(s, "mass_balance_error_m3", NaN))) /
-                                               max(added, eps()))
+        num(k) = Float64(get(s, k, NaN))
+        applied, added = num("vol_applied_m3"), num("vol_added_m3")
+        m[j.name] = Dict("mass_balance_rel" => abs(num("conservation_error_m3")) / max(applied, eps()),
+                         "input_error_rel" => (applied - added) / max(added, eps()))
     end
     for (job, d) in c.analyse(ctx)
         merge!(get!(m, String(job), Dict{String,Float64}()), Dict(String(k) => Float64(v) for (k, v) in d))

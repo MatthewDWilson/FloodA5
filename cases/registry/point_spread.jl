@@ -19,8 +19,8 @@ function _point_spread_metrics(ctx)
     return out
 end
 
-_all(f, m) = all(f(d) for d in values(m))
-_worst(m, key) = join(("$j $(round(d[key]; sigdigits = 3))" for (j, d) in sort(collect(m); by = first)), ", ")
+_pt_all(f, m) = all(f(d) for d in values(m))
+_pt_worst(m, key) = join(("$j $(round(d[key]; sigdigits = 3))" for (j, d) in sort(collect(m); by = first)), ", ")
 
 register!(Case(
     name = "point_spread_smoke", tier = :smoke,
@@ -40,9 +40,9 @@ register!(Case(
                 threads = 1, mesh = "cartesian", dx = 50)],
     analyse = _point_spread_metrics,
     checks = [Check("mass conserved (|error| < 1e-9 of the volume added)",
-                    m -> _all(d -> d["mass_balance_rel"] < 1e-9, m); detail = m -> _worst(m, "mass_balance_rel")),
+                    m -> _pt_all(d -> d["mass_balance_rel"] < 1e-9, m); detail = m -> _pt_worst(m, "mass_balance_rel")),
               Check("stored volume = 2 m³/s × 1200 s (±0.1%)",
-                    m -> _all(d -> abs(d["storage_m3"] / 2400 - 1) < 1e-3, m); detail = m -> _worst(m, "storage_m3"))],
+                    m -> _pt_all(d -> abs(d["storage_m3"] / 2400 - 1) < 1e-3, m); detail = m -> _pt_worst(m, "storage_m3"))],
     # CI runs on Linux; the expected values are recorded on Windows
     rtol = Dict("*" => 1e-4), atol = Dict("*" => 1e-9),
 ))
@@ -83,11 +83,11 @@ let jobs = Job[]
         jobs = jobs,
         analyse = _point_spread_metrics,
         checks = [Check("mass conserved (|error| < 1e-9 of the volume added)",
-                        m -> _all(d -> d["mass_balance_rel"] < 1e-9, m); detail = m -> _worst(m, "mass_balance_rel")),
+                        m -> _pt_all(d -> d["mass_balance_rel"] < 1e-9, m); detail = m -> _pt_worst(m, "mass_balance_rel")),
                   Check("near-circular spread (hull circularity > 0.9)",
-                        m -> _all(d -> d["circularity"] > 0.9, m); detail = m -> _worst(m, "circularity")),
+                        m -> _pt_all(d -> d["circularity"] > 0.9, m); detail = m -> _pt_worst(m, "circularity")),
                   Check("weak four-fold bias (|A4| < 0.1)",
-                        m -> _all(d -> abs(d["A4"]) < 0.1, m); detail = m -> _worst(m, "A4"))],
+                        m -> _pt_all(d -> abs(d["A4"]) < 0.1, m); detail = m -> _pt_worst(m, "A4"))],
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end

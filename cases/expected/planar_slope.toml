@@ -1,0 +1,71 @@
+# Expected metrics for case "planar_slope" — written by `julia --project=. cases/run.jl baseline planar_slope`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5_res16]
+A2_10h = 0.06735271410318754
+A2_15h = 0.06073987393244617
+A2_20h = 0.05504540390640995
+A2_5h = 0.07838049323860576
+asym_10h = 0.05667471368838801
+asym_15h = 0.07855732731682996
+asym_20h = 0.0887508534949543
+asym_5h = 0.03296085372360544
+deflection_10h = 2.3430005422886833
+deflection_15h = 2.062459464496425
+deflection_20h = 1.8645359774628036
+deflection_5h = 2.9174467064119014
+dir_frac30 = 1.0
+dir_mean_w = -3.355540249792129
+dir_std_w = 13.807531537210288
+inj_point_mismatch_deg = 0.0
+mass_balance_rel = 0.0
+storage_m3 = 7200.000000000097
+t_end = 72000.0
+
+[a5_res18]
+A2_10h = 0.022080483347057287
+A2_15h = 0.0284114011759301
+A2_20h = 0.031281134739734574
+A2_5h = 0.0007015905745822822
+asym_10h = 0.005008011014970219
+asym_15h = 0.05347208075768718
+asym_20h = 0.088095587019018
+asym_5h = -0.08326503199629032
+deflection_10h = 0.37453811416596433
+deflection_15h = 0.6715197508842227
+deflection_20h = 0.8104457984697065
+deflection_5h = -0.6060980535189198
+dir_frac30 = 0.9591836734693877
+dir_mean_w = 2.380448154719565
+dir_std_w = 13.524004744224532
+inj_point_mismatch_deg = 0.0
+mass_balance_rel = 0.0
+storage_m3 = 7199.999999999968
+t_end = 72000.0
+
+[cart_dx25]
+A2_10h = 3.73785630127736e-6
+A2_15h = 3.34521026636337e-6
+A2_20h = 3.099667738868699e-6
+A2_5h = 4.310274734223707e-6
+asym_10h = -9.386316461495173e-6
+asym_15h = -1.043499054454127e-5
+asym_20h = -1.1238578162000492e-5
+asym_5h = -7.921973615013883e-6
+deflection_10h = -6.437669374560119e-5
+deflection_15h = -5.698635565229431e-5
+deflection_20h = -5.340141029666887e-5
+deflection_5h = -7.630519217349692e-5
+dir_frac30 = 0.9574468085106383
+dir_mean_w = -2.956768681664079e-6
+dir_std_w = 13.257975746123115
+inj_point_mismatch_deg = 0.0
+mass_balance_rel = 0.0
+storage_m3 = 7199.999999999984
+t_end = 72000.0
+
+[meta]
+flooda5_version = "0.4.1"
+git_commit = "3197283c4b1b1204c769bd82c624ef5d2781ed86"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-10T21:50:45Z"

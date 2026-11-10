@@ -1236,9 +1236,12 @@ mutable struct TimingLog
     vol_removed  :: Float64    # cumulative outflow through ghost edges (m³)
     vol_domain   :: Float64    # volume remaining in domain at end (m³)
     mb_err       :: Float64    # vol_added - vol_domain - vol_removed (m³)
+    vol_applied  :: Float64    # volume the time stepping actually added (Σ source·dt, m³).
+                               # vol_added is the exact time integral of the inputs, so
+                               # vol_applied - vol_added is the sources' time-integration error
 end
 TimingLog() = TimingLog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                        0, 0.0, 0.0, 0.0, 0.0)
+                        0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 function _fmt_elapsed(s::Float64)::String
     s < 0.0005 && return "< 1 ms"
@@ -3558,6 +3561,8 @@ function run_simulation!(state            :: FlowState,
     dev = backend isa CPUThreads ? nothing : DeviceRun(state, method, backend, merged_sources)
     dev !== nothing && LIMITER_STATS[] &&
         throw(ArgumentError("--limiter-stats is not available on a device backend"))
+    vol_applied = 0.0                                  # accounting: Σ source volumes added
+    area_total  = sum(state.cell_area)
 
     # ── Debug: pre-simulation state check ──────────────────────────────────
     n_inflow = count(s -> s isa InflowPoint,      merged_sources)
@@ -3606,6 +3611,12 @@ function run_simulation!(state            :: FlowState,
             end
         else
             _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
+        end
+        # accounting only: the volume the sources just added (as applied above)
+        vol_applied += rainfall_rate * dt * area_total
+        for src in merged_sources
+            v = _src_volume(src, t, dt)
+            v === nothing || (vol_applied += v)
         end
 
         # ── Debug: post-source volume check (first 5 steps + every 500th) ──
@@ -3728,6 +3739,13 @@ function run_simulation!(state            :: FlowState,
     end
     dev !== nothing && _device_sync!(dev, state)
     @info "Simulation finished at t=$(round(t,digits=1))s  ($(step) steps)"
+    if timing !== nothing     # end-of-run mass balance: timing report and the output's /summary
+        timing.vol_added   = total_cumulative_input(merged_sources, rainfall_rate, state.cell_area, t)
+        timing.vol_domain  = sum(v for v in state.volume if isfinite(v); init = 0.0)
+        timing.vol_removed = state.vol_removed
+        timing.mb_err      = timing.vol_added - timing.vol_domain - timing.vol_removed
+        timing.vol_applied = vol_applied
+    end
     use_swe && @info "SWE: volume added by clamping negative cells: " *
                      "$(round(sum(state.swe.clamp_vol), sigdigits = 4)) m³"
     LIMITER_STATS[] && _lstats_report()
@@ -4552,7 +4570,10 @@ function run_flood_model(;
         "completed" => true, "n_frames" => sim_output.frame_count, "n_steps" => tl.n_steps,
         "wall_simulation_s" => tl.simulation, "wall_since_start_s" => time() - t_total,
         "vol_added_m3" => tl.vol_added, "vol_removed_m3" => tl.vol_removed,
-        "vol_domain_m3" => tl.vol_domain, "mass_balance_error_m3" => tl.mb_err))
+        "vol_domain_m3" => tl.vol_domain, "mass_balance_error_m3" => tl.mb_err,
+        # conservation alone: what the stepping added vs what is stored and left
+        "vol_applied_m3" => tl.vol_applied,
+        "conservation_error_m3" => tl.vol_applied - tl.vol_domain - tl.vol_removed))
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
