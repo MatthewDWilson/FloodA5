@@ -33,6 +33,17 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-11-10
+
+Documentation and housekeeping only (PATCH); no code changes.
+
+### Changed
+- README "Development Roadmap": what was done in 0.2.1–0.3.2, and the next
+  phase (consolidation: self-describing HDF5 output, an analysis module, a
+  test-case registry, HDF5 replay in the GLMakie viewer, notebooks).
+- `CLAUDE.md` status updated; `projectinstructions` (supplementary repo)
+  updated to its 2026-11-10 `PROJECT_STATE.md` revision.
+
 ## [0.3.2] — 2026-11-02
 
 Default results unchanged (PATCH): a benchmark series and documentation only.

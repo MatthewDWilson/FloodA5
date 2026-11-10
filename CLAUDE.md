@@ -9,16 +9,18 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 `FloodModel.jl` (not a package/module), which `include`s `mesh/`,
 `surfacewater/`, `boundaryinputs/` and `visualisation/`.
 
-Current plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
-(work packages WP0–WP7). Branch per work package (`wp0-correctness`, `wp1-…`;
-CI runs on `main`, `wp*` and `maint-*` pushes). Status (2026-10-21): WP0, WP-M1,
-WP1, WP2 and WP3 part 1 are on `main`; WP3 part 2 (SGS on any valence, SGS
-slot-order fix), WP2b (recommended scheme as default, `--scheme legacy` for the
-old one) and WP2c (Q-centring orientation defect; consistent Q-centring) are on
-`main` (PR #3), WP4 stages 1–2 too (PRs #4, #6); WP4 stage 3 (active-edge
-set) is on `wp4c-active`. Next: release 0.2.0, then the deep-channel damping
-(`projectinstructions/FloodA5_DeepChannelDamping_Issue_2026-10.md`). Physics results so far: `docs/HYDRAULICS.md` §15 (§15.3 defaults, §15.4
-Q-centring). SGS meshes built before 2026-10-21 are refused until rebuilt or
+Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
+(work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
+`maint-*` pushes); every merged PR bumps the version and is tagged
+(`VERSIONING.md`). Status (2026-11-10): 0.3.2 released (WP0–WP5, the SWE
+reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
+backends, the channel series). Current phase: **consolidation** — reproducible
+self-describing HDF5 output (incl. the mesh), one analysis module, a test-case
+registry and runner, HDF5 replay in the GLMakie viewer, then Jupyter notebooks
+(planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
+"Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
+(§15.11 the 0.3.0 defaults, §15.12 channel series). SGS meshes built before
+2026-10-21 are refused until rebuilt or
 repaired (`mesh/repair_sgs_slot_order.py`). Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
 without `_orient_collinear!`-style signs.
