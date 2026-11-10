@@ -33,6 +33,64 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-11-11
+
+Test-case registry (PATCH). Simulation results do not change. The output's
+`/summary` gains two attributes, and its volumes are now filled in.
+
+### Added
+- **Test-case registry** (`cases/`, module `FloodA5Cases`; `docs/TEST_CASES.md`):
+  - `julia --project=. cases/run.jl list | show | prep | run | check |
+    baseline CASE`.
+  - Each case generates its own inputs (DEM, meshes, hydrographs) in
+    `test/case_runs/<case>/`, runs `FloodModel.jl` with explicit flags, and
+    computes its metrics with `analysis/`.
+  - It then checks physical expectations and compares with the expected
+    values in `cases/expected/<case>.toml`, recorded with the version and
+    commit that produced them.
+  - A run is reused when its output records the same command line.
+  - Cases:
+    - `point_spread_smoke` (CI)
+    - `point_spread`: A5 res 16/18, Cartesian 25/12.5 m
+    - `planar_slope`: N/S symmetry on a 0.1% plane
+    - `planar_embankment`: SGS passes water through a sub-cell notch near
+      its sill, 1.8 m below the crest; standard flow only at its cell-mean
+      crest
+    - `channel`: 16 runs of the channel series
+    - `channel_series`: the full 224 runs; its jobs and meshes reproduce
+      the recorded series bit for bit
+    - `carlisle`: 6 h, local-inertial / SWE storage 1.25 on A5 and 0.99 on
+      Cartesian, as recorded in HYDRAULICS §15.11
+  - `test/test_cases.jl` (in CI) runs the smoke tier end to end.
+- `/summary` attributes `vol_applied_m3` (what the time stepping added) and
+  `conservation_error_m3` (= applied − stored − removed).
+  `mass_balance_error_m3` (= exact input − stored − removed, as the run log
+  reports it) also contains the sources' first-order time integration: rates
+  are evaluated at the start of each step. That is 4.7% on a 600 s triangular
+  hydrograph at default Δt, and zero for constant rates.
+
+### Fixed
+- ⚠ The end-of-run mass balance was never computed. `/summary`'s
+  `vol_added_m3`, `vol_removed_m3`, `vol_domain_m3` and
+  `mass_balance_error_m3` were 0 in every 0.4.0/0.4.1 output, and the timing
+  report's mass-balance table was never printed.
+- `FA.storage` and `FA.compare` reported depth·area as storage for SGS runs.
+  SGS depth is measured from the cell's lowest point, so the store was
+  overstated (+24% on the embankment case); they now use the stored volume.
+- Mesh generation used fixed temporary file names in `mesh/`, so two mesh
+  generations in one checkout could corrupt each other. The names are now
+  unique per process.
+
+### Changed
+- `test/planar_embankment/test_planar_embankment.jl` is removed, replaced by
+  the `planar_embankment` case. It was broken by design: its DEM had been
+  regenerated without the embankment for the planar-slope tests; it measured
+  the upstream water level over dry cells too; and its source was too small
+  for its depth check.
+- Twelve superseded run scripts moved to `test/archive/` (with a README).
+  They rely on the pre-0.3.0 defaults and no longer reproduce their recorded
+  numbers; the README maps each to its registry case.
+
 ## [0.4.1] — 2026-11-11
 
 Analysis tooling only (PATCH). Neither the model nor the output format changes.

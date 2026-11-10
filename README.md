@@ -151,6 +151,10 @@ FloodA5/
 │   └── FloodA5Output.jl       # HDF5 output format: writer, reader, --rerun
 ├── analysis/
 │   └── FloodA5Analysis.jl     # loading runs and metrics (pure Julia, no Python)
+├── cases/
+│   ├── run.jl                 # test-case runner: list | show | run | check | baseline
+│   ├── registry/              # the named cases (point spread, planar, channel, Carlisle)
+│   └── expected/              # recorded metrics per case
 ├── visualisation/
 │   ├── MakieVisualiser.jl     # Native desktop viewer (GLMakie)
 │   ├── VisualisationServer.jl # HTTP + WebSocket server for CesiumJS viewer
@@ -429,7 +433,9 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
   replayed without the original mesh file
 - ✅ One analysis module (`analysis/`, 0.4.1): loading runs and computing
   metrics in pure Julia, without the model or Python
-- A registry of named test cases with a single runner
+- ✅ A registry of named test cases with a single runner (`cases/`, 0.4.2):
+  each case generates its inputs, runs, and checks its metrics against
+  physical expectations and recorded values (`docs/TEST_CASES.md`)
 - Replay of any HDF5 output in the GLMakie viewer, and static plots for
   reports
 - Jupyter notebooks documenting the test cases end to end (planar tests,

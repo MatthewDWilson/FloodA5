@@ -4,6 +4,42 @@ This document describes the test cases included in the repository. Each case
 serves a specific purpose in the validation and benchmarking of FloodA5.
 New cases will be added as the model is applied to additional domains.
 
+## The test-case registry (`cases/`)
+
+The canonical cases are registered in `cases/registry/*.jl` and run with one
+command. Each case generates its own inputs (DEM, mesh, hydrograph), runs
+`FloodModel.jl` with explicit flags, computes its metrics with the analysis
+module (`analysis/`), and checks them: physical checks (mass conservation,
+the behaviour the case exists to show), then regression against the expected
+values in `cases/expected/<case>.toml`, which record the version and commit
+that produced them.
+
+```bash
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl list              # cases, tiers, runs done
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl show CASE         # description and every command, to copy
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run CASE -P 2 -T 4
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl check CASE        # analyse existing runs, check
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl baseline CASE     # record new expected values (after a deliberate change)
+```
+
+Outputs go to `test/case_runs/<case>/` (git-ignored). A run is reused when its
+output records the same command line and completed; `--fresh` runs it again
+(e.g. after a code change). `run smoke` / `run standard` run a whole tier.
+
+| Case | Tier | § | What it shows | Cost (16 cores) |
+|---|---|---|---|---|
+| `point_spread_smoke` | smoke (CI) | 1 | the runner end to end, 900 Cartesian cells | ~2 min |
+| `point_spread` | standard | 1, 5b | flat point source: A4/A6, sector ratio, circularity on A5 res 16/18 and Cartesian 25/12.5 m | ~8 min |
+| `planar_slope` | standard | 2b | N/S volume symmetry on a 0.1% plane, A5 res 16/18 and Cartesian 25 m | ~10 min |
+| `planar_embankment` | standard | 2a | SGS passes water through a sub-cell notch near its sill; standard only at the crest | ~6 min |
+| `channel` | standard | 7 | straight channel, 22/11 m cells, 0°/45°, A5/Cartesian, SWE/LI (16 runs) | ~15 min |
+| `channel_series` | full | 7 | the full 224-run channel series | hours |
+| `carlisle` | full | 3 | 6 h, local-inertial vs SWE on A5 res 18 and Cartesian 20 m, plus SGS | ~45 min |
+
+The older run scripts that these cases replace are in `test/archive/` (see
+its README): they rely on the pre-0.3.0 defaults and no longer reproduce the
+numbers recorded with them.
+
 ---
 
 ## 1. Square Domain (Directional-Bias Benchmarks)
@@ -16,9 +52,14 @@ directional-bias correction benchmark described in `docs/HYDRAULICS.md` §7–§
 
 ### Domain
 
-A 1.35° × 1.35° square polygon centred at 0°N, 0°E (`test/square/square_domain.geojson`).
-The domain straddles the null meridian and equator for a clean, unbiased test geometry.
+A 0.01349° × 0.01349° square (about 1.5 × 1.5 km) centred at 0°N, 0°E
+(`test/square/square_domain.geojson`; its "3x3 km" label is wrong). The domain
+straddles the null meridian and equator for a clean, unbiased test geometry.
 No DEM is used — all cells have zero elevation.
+
+**Registry cases:** `point_spread` (A5 res 16/18, Cartesian 25/12.5 m; 10 m³/s
+for 1 h, closed, current default scheme) and `point_spread_smoke` (CI). The
+benchmark below documents the earlier correction study, under older schemes.
 
 Also present: `test/square/square.bci` and `test/square/lisflood_square.par`, a
 LISFLOOD-FP-format configuration of the same domain for an external
@@ -624,12 +665,27 @@ of them (above).
 
 ## Adding New Test Cases
 
-New test cases should be placed in `test/<domain_name>/` and documented here.
-Aim to include:
+Add a case to the registry: a file `cases/registry/<name>.jl` that calls
+`register!(Case(...))` (see `cases/registry/point_spread.jl`, and the
+`Case`, `Prep`, `Job`, `Check` docstrings in `cases/FloodA5Cases.jl`).
 
-1. A GeoJSON AOI file and any associated DEM or boundary condition files.
-2. A clear description of the domain, its purpose, and what behaviour is expected.
-3. Command-line examples to reproduce the simulation from scratch.
-4. Pass/fail criteria or comparison data where available.
-5. A brief note on expected run time and hardware requirements.
+1. **Inputs**: tracked source files (AOI, DEM, boundary conditions) go in
+   `test/<domain>/`; everything derived (resampled DEMs, meshes, hydrographs)
+   is a `Prep` step writing into `{case}`, never shared with another case.
+2. **Runs**: one `Job` per run, with every flag that matters explicit,
+   including `--flow-model` (the default is SGS) and any scheme choice, so
+   that a change of defaults cannot silently change the case.
+3. **Metrics**: computed with the analysis module (`FA`); add new metrics to
+   `analysis/` as pure functions, not to the case file.
+4. **Checks**: the behaviour the case exists to show, as physical checks
+   with stated reasons; mass conservation (`mass_balance_rel`, from the
+   run's summary).
+5. **Expected values**: `cases/run.jl baseline <name>` once the checks pass
+   on runs you trust; commit the TOML.
+6. **Documentation**: a section here (purpose, domain, what to expect,
+   cost), and the `title`/`description`/`doc` fields of the case.
+
+Helpers in a registry file share one module: prefix them with the case's
+abbreviation. A `smoke` case runs in CI (`test/test_cases.jl`), so it must
+take seconds and need no Python.
 

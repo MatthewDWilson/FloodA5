@@ -47,7 +47,7 @@ FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run planar_slope -P 3 -T 2
 - `planar_embankment_params.json`, `planar_embankment_aoi.geojson` (and the
   git-ignored `planar_embankment_dem.tif`): the legacy fixture, generated with
   `--emb-height 0` (a 20 m flat strip at x = 2 km), still used by older run
-  scripts (`test/run_wp1_matrix.sh`, `test/run_FOSS4G2026_simulations.ps1`, …).
+  scripts (`test/archive/run_wp1_matrix.sh`, `test/archive/run_FOSS4G2026_simulations.ps1`, …).
   The cases do not use it.
 - `planar_embankment_dem_OLDwithWALL.tif`: an earlier DEM with the embankment.
 - `planar_slope_tests/`: results and animations of the earlier symmetry experiments.
