@@ -33,6 +33,8 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-11-11
+
 Analysis tooling only (PATCH). Neither the model nor the output format changes.
 
 ### Added

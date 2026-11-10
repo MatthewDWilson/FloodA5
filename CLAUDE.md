@@ -12,11 +12,11 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-10): 0.3.2 released (WP0–WP5, the SWE
+(`VERSIONING.md`). Status (2026-11-11): 0.4.0 released (WP0–WP5, the SWE
 reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
-backends, the channel series). Current phase: **consolidation** — reproducible
-self-describing HDF5 output (done: 0.4.0, below), one analysis module (done:
-0.4.1, `analysis/`), a test-case
+backends, the channel series, output format 2). Current phase:
+**consolidation** — reproducible self-describing HDF5 output (done: 0.4.0,
+below), one analysis module (done: 0.4.1, `analysis/`), a test-case
 registry and runner, HDF5 replay in the GLMakie viewer, then Jupyter notebooks
 (planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
