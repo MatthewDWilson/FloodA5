@@ -395,14 +395,37 @@ the directional bias explained and corrected (diamond face gradient + vector
 friction), and made the default; a consistent, mesh-general Q-centring; SGS on
 meshes with any number of neighbours; generic polygon mesh families; and a first
 round of CPU performance work (3–4× faster on Carlisle, 10× for the SGS
-point-source benchmark).
+point-source benchmark), including an active-edge set and spatially ordered
+cells.
+
+**Done in 0.2.1–0.3.2** (October–November 2026): a full shallow-water (HLLC)
+reference solver on the same meshes (`--flow-model swe`); a Δt-consistent
+default scheme for the standard solver, chosen against that reference, with a
+free-surface filter in place of Q-centring (Courant sensitivity of Carlisle
+storage down from 10–16% to 0.2–4%); normal-depth open boundaries; every
+solver on CPU threads or an NVIDIA GPU (`--backend gpu`); a circular dam
+break and a straight-channel representation series comparing A5 and
+Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
+
+**Next: consolidation**
+- Self-describing output: each HDF5 file records the version, commit, full
+  command line, resolved options and a single copy of the mesh, so that a run
+  can be reproduced exactly and replayed without the original mesh file
+- One analysis module for loading runs and computing metrics, and a registry of
+  named test cases with a single runner
+- Replay of any HDF5 output in the GLMakie viewer, and static plots for
+  reports
+- Jupyter notebooks documenting the test cases end to end (planar tests,
+  channel series, Carlisle), from mesh generation to comparison
 
 **Physics and correctness**
-- Damping of grid-scale water-surface noise in deep channels that does not
-  cost conveyance (the remaining weakness of the standard solver's defaults),
-  or a symmetric form of the diamond face gradient
-- A study of the timestep (Courant number) sensitivity seen on the Carlisle
-  test, on both A5 and Cartesian meshes
+- Grid-scale velocity noise in deep channels under the 0.3.0 default (the
+  water surface is smooth; `--momentum-damping` reduces the velocity noise at
+  some cost in conveyance)
+- The A5 local-inertial excess storage against the reference on Carlisle,
+  which points to the stepped (cell-mean) bed representation
+- The preferred directions A5 shows in the channel series, and how they vary
+  with location on the DGGS
 - Validating the gradient correction for the SGS solver (vector friction and the
   local CFL already apply to it)
 - Making the open-boundary (ghost-edge) flux consistent with the interior
@@ -410,26 +433,20 @@ point-source benchmark).
 - Additional SGS methodology development, including further validation of
   the hydraulic-radius (R-A) flux kernel and extending sub-grid sampling to
   more general channel/culvert geometries
-- An independent, minimal Riemann-solver (e.g. HLL) reference implementation
-  on the same mesh, to benchmark the reduced-complexity Bates/Manning
-  formulation against full shallow-water physics where the two should agree
 - A like-for-like benchmark against LISFLOOD-FP on a matched Cartesian mesh
-  (raster-aligned grids are available with `--meshgen-cartesian dem.tif`)
+  (raster-aligned grids are available with `--meshgen-cartesian dem.tif`),
+  and a D-Flow FM cross-check
 - Further mesh families: hexagonal DGGS (H3, IGEO7) and HEALPix
-- Analytical benchmarks: Thacker (1981) planar-surface oscillation and a
-  circular dam break (also the key demonstration of A5's rotational symmetry)
+- Analytical benchmark: Thacker (1981) planar-surface oscillation
 
 **Performance**
 - Restructuring as a Julia package with precompilation (start-up and
-  first-step compilation now dominate short runs), flat SGS tables, and
-  non-allocating threading
-- An active-cell list so that dry parts of the domain cost nothing, and
-  spatially ordered cells for memory locality
-- A GPU backend for the time-step kernels, from the same code
+  first-step compilation now dominate short runs)
+- A Float32 option and profiling of the GPU path
 
 **Visualisation**
-- Continued development of the CesiumJS (or a similar) web-based viewer —
-  current known issues include a frame-update flash and inconsistent
+- The GLMakie viewer is the primary viewer. The CesiumJS web viewer is low
+  priority; its known issues include a frame-update flash and inconsistent
   `simcomplete` signalling for live updates (see
   [docs/METHODS.md](docs/METHODS.md))
 
