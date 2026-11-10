@@ -49,6 +49,7 @@ const ARGS1 = ["--meshgen-cartesian", AOI, "--dx", "25", "--meshout", MESH,
     @test issubset(["water_depth", "volume", "saturation", "velocity", "vel_u", "vel_v"],
                    FO.frame_vars(O1))
     ct = FO.cell_table(O1); n = length(ct.ids)
+    @test ct.elevation == zeros(n)                     # no DEM: recorded as the z = 0 the model used
     @test size(FO.read_var(O1, "volume")) == (n, nf)
     @test FO.read_frame(O1, "volume") == FO.read_var(O1, "volume")[:, end]
     @test FO.read_series(O1, "volume", 3) == FO.read_var(O1, "volume")[3, :]

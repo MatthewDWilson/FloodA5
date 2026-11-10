@@ -1369,7 +1369,7 @@ function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh;
     cells = (ids         = [c.id         for c in mesh.cells],
              center_lons = [c.center_lon for c in mesh.cells],
              center_lats = [c.center_lat for c in mesh.cells],
-             elevations  = get(mesh.static_vars, "elevation", fill(NaN, n)),
+             elevations  = get(mesh.static_vars, "elevation", zeros(n)),   # no DEM: the model runs at z = 0
              static_vars = mesh.static_vars,
              # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
              id_scheme   = mesh.id_scheme,
