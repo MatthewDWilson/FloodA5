@@ -31,9 +31,9 @@ area = [A5Grid._polygon_area_m2(c.boundary) for c in mesh.cells]
 
 function frames(p)
     h5open(p) do f
-        ks = sort(collect(keys(f["frames"])))
-        [(t = read(f["frames"][k]["t"]), h = read(f["frames"][k]["water_depth"]),
-          u = read(f["frames"][k]["vel_u"]), v = read(f["frames"][k]["vel_v"])) for k in ks]
+        ts = FO.frame_times(f)
+        [(t = ts[k], h = FO.read_frame(f, "water_depth", k),
+          u = FO.read_frame(f, "vel_u", k), v = FO.read_frame(f, "vel_v", k)) for k in eachindex(ts)]
     end
 end
 function compare(R, X)

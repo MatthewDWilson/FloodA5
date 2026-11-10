@@ -207,6 +207,28 @@ struct, `_build_ghost_edges(mesh, edges, ...)`, `_ghost_wse`, `_bates_ghost_flux
 **`timeseries_io.jl`** — `AbstractTimeSeriesReader`, `LisfloodBDYReader`,
 `TwoColumnCSVReader`, `read_timeseries` dispatch, `parse_bci_file`.
 
+### `io/FloodA5Output.jl`
+
+Module `FloodA5Output` (aliased `FO` in `FloodModel.jl`): the HDF5 output
+format, writer and reader in one place (0.4.0; layout in `DATA_FORMATS.md`
+§2). It depends only on HDF5, JSON3, SHA and Dates, so analysis scripts and
+notebooks can load it without `FloodModel.jl`.
+
+- **Writer** — `create_output` (run record, mesh, empty `/results`),
+  `append_frame!`, `write_summary!`, `provenance` (git, environment).
+  `FloodModel.jl` calls them from `_write_mesh_metadata!` / `_write_frame!`,
+  with arrays already in the mesh file's cell order; `_run_mesh_source` and
+  `_run_inputs` decide which mesh file and input files a run records.
+- **Reader** — `n_frames`, `frame_times`, `frame_at`, `frame_vars`,
+  `read_frame`, `read_var`, `read_series`, `cell_table`, `cell_area`,
+  `cell_polygons`, `cell_neighbours`, `run_info`; each takes a path or an
+  open `HDF5.File` and reads format 2 and format 1 (≤ 0.3.x) files. Scripts
+  should read output through these, not by dataset path.
+- **Reproduction** — `extract_mesh`, `rerun_argv` (used by `--rerun`). The
+  CLI flags `rerun_argv` must drop or rewrite are listed in the module
+  (`_DROP_FLAGS`, `_BOOL_FLAGS`): a new mesh-generation or file-valued flag
+  in `main()` needs an entry there.
+
 ### `visualisation/`
 
 Four scripts and one static directory:
@@ -661,6 +683,8 @@ Key test files:
 | `test_sgs_edge_ra_tables.jl` | SGS edge flow area / wetted perimeter curves |
 | `test_inflow_point.jl` | `InflowPoint`, `_interp_hydrograph`, `.bdy` reader, `.bci` parser |
 | `test_open_boundary.jl` | Ghost edge geometry, BC types, outflow flux, mass balance |
+| `test_output_format.jl` | HDF5 output format 2: run record, embedded mesh and inputs, geometry, `--rerun` bit-identical (O1–O4), format-1 reader (O5) |
+| `bench_output_format.jl` | Format 1 vs format 2: write time, size, read times on an existing run (not in CI) |
 | `test_flat_rainpoint.jl` | Flat-terrain point-source integration test |
 | `test_noc_correction.jl` | WLSQ gradient weights and reconstruction correctness (T-NOC1–5) |
 | `test_point_spread.jl` | Point-spread directional-bias benchmark (convex hull, Polsby–Popper circularity) |

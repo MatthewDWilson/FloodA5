@@ -33,6 +33,7 @@ TESTS=(
   test/test_cell_momentum.jl
   test/test_gradient_direction.jl
   test/test_open_boundary.jl
+  test/test_output_format.jl
 )
 
 failed=()

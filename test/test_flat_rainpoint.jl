@@ -37,6 +37,8 @@ const DO_ANAL  = "--analyse" in ARGS
 if DO_ANAL
     using HDF5
     using Statistics
+    isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+    const FO = FloodA5Output
 end
 
 using Printf
@@ -96,8 +98,8 @@ function validate_output(h5_path::String)
         lons     = read(f["mesh/center_lons"])
         lats     = read(f["mesh/center_lats"])
         n_cells  = length(cell_ids)
-        frames   = sort(keys(f["frames"]))
-        n_frames = length(frames)
+        n_frames = FO.n_frames(f)
+        frames   = [lpad(string(k), 6, '0') for k in 1:n_frames]   # labels only
 
         println("Mesh   : $n_cells cells")
         println("Frames : $n_frames  ($(frames[1]) -> $(frames[end]))\n")
@@ -110,14 +112,13 @@ function validate_output(h5_path::String)
                 "(lon=$(round(lons[src_idx],digits=4)), " *
                 "lat=$(round(lats[src_idx],digits=4)))\n")
 
-        vol_frames = [sum(read(f["frames/$fr/volume"])) for fr in frames]
-        t_frames   = [read(f["frames/$fr/t"])           for fr in frames]
-        wet_counts = [count(>(1e-4), read(f["frames/$fr/volume"])) for fr in frames]
+        vol_frames = [sum(FO.read_frame(f, "volume", k)) for k in 1:n_frames]
+        t_frames   = FO.frame_times(f)
+        wet_counts = [count(>(1e-4), FO.read_frame(f, "volume", k)) for k in 1:n_frames]
 
-        final = frames[end]
-        vol_f = read(f["frames/$final/volume"])
-        dep_f = read(f["frames/$final/water_depth"])
-        vel_f = read(f["frames/$final/velocity"])
+        vol_f = FO.read_frame(f, "volume")          # final frame
+        dep_f = FO.read_frame(f, "water_depth")
+        vel_f = FO.read_frame(f, "velocity")
 
         # Check 1: No NaN / negative volumes
         has_nan = any(isnan, vol_f) || any(isnan, dep_f)
@@ -200,8 +201,8 @@ function validate_output(h5_path::String)
         @printf("%-8s  %-12s  %-10s  %-13s  %-13s\n",
                 "t (s)", "vol_tot(m3)", "wet cells", "max_depth(m)", "src_depth(m)")
         println(repeat('-', 64))
-        for (i, fr) in enumerate(frames)
-            dep = read(f["frames/$fr/water_depth"])
+        for i in 1:n_frames
+            dep = FO.read_frame(f, "water_depth", i)
             @printf("%-8.0f  %-12.2f  %-10d  %-13.4f  %-13.4f\n",
                     t_frames[i], vol_frames[i], wet_counts[i],
                     maximum(dep), dep[src_idx])

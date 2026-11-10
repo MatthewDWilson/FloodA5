@@ -511,17 +511,15 @@ end
 
         if isfile(h5_path)
             HDF5.h5open(h5_path, "r") do f
-                frames   = sort(keys(f["frames"]))
-                n_frames = length(frames)
+                n_frames = FO.n_frames(f)
                 @test n_frames >= 10
 
-                last_key = frames[end]
-                depth    = read(f["frames/$last_key/water_depth"])
+                depth    = FO.read_frame(f, "water_depth")     # last frame
                 max_d    = maximum(depth; init=0.0)
                 @test max_d > 0.1
 
                 # Mass balance from HDF5 data
-                last_vol = sum(read(f["frames/$last_key/volume"]))
+                last_vol = sum(FO.read_frame(f, "volume"))
                 @info "  T5 [$solver_sym] HDF5: $n_frames frames, " *
                       "max_depth=$(round(max_d,digits=3)) m, " *
                       "final_vol=$(round(last_vol/1e3,digits=1)) km³... wait, " *

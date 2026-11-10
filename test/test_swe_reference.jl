@@ -232,13 +232,12 @@ end
     _quiet(() -> run_simulation!(s, m, 100.0, 10.0, nothing, :none, out; method = SWEFlow()))
     _swe_velocity!(s)
     h5open(p) do f
-        ks = sort(collect(keys(f["frames"])))
-        @test length(ks) >= 2
-        last = f["frames"][ks[end]]
-        @test read(last["t"]) == 100.0                       # written after the loop
-        @test maximum(abs, read(last["vel_u"])) > 1e-3
-        @test read(last["vel_u"]) == s.vel_u && read(last["vel_v"]) == s.vel_v
-        @test maximum(abs, read(f["frames"][ks[end - 1]]["vel_u"])) > 1e-3
+        nf = FO.n_frames(f)
+        @test nf >= 2
+        @test FO.frame_times(f)[end] == 100.0                # written after the loop
+        @test maximum(abs, FO.read_frame(f, "vel_u", nf)) > 1e-3
+        @test FO.read_frame(f, "vel_u", nf) == s.vel_u && FO.read_frame(f, "vel_v", nf) == s.vel_v
+        @test maximum(abs, FO.read_frame(f, "vel_u", nf - 1)) > 1e-3
     end
 end
 

@@ -31,9 +31,9 @@ xy(lon, lat) = (deg2rad(lon - LON0) * R * cosd(LAT0), deg2rad(lat - LAT0) * R)
 
 function lastframes(p)
     h5open(p) do f
-        ks = sort(collect(keys(f["frames"])), by = x -> parse(Int, x))
-        g(k) = (t = read(f["frames"][k]["t"]), h = read(f["frames"][k]["water_depth"]))
-        g(ks[end - 1]), g(ks[end])
+        n = FO.n_frames(f); ts = FO.frame_times(f)
+        g(k) = (t = ts[k], h = FO.read_frame(f, "water_depth", k))
+        g(n - 1), g(n)
     end
 end
 "(time, cumulative outflow) of the run log's step line nearest to time t."
@@ -77,7 +77,7 @@ for r in rows
     for solver in ("swe", "li", "limd")     # limd: li + --momentum-damping 0.05, if run
         p = joinpath(RUNDIR, "$(TAG)_$(case)_$(solver).h5")
         isfile(p) || (solver == "limd" || @warn "missing $p"; continue)
-        nfr = h5open(f -> haskey(f, "frames") ? length(keys(f["frames"])) : 0, p)
+        nfr = h5open(f -> (haskey(f, "frames") || haskey(f, "results")) ? FO.n_frames(f) : 0, p)
         nfr >= 2 || (@warn "no output frames in $p (failed run?)"; continue)
         F0, F1 = lastframes(p)
         wetc = [i for i in findall(chan) if F1.h[i] > 0.01]

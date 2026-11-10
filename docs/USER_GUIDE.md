@@ -328,8 +328,10 @@ the same cell are summed before flux routing.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--output FILE` | off | Write HDF5 simulation output (`.h5` / `.hdf5`). |
+| `--output FILE` | off | Write HDF5 simulation output (`.h5` / `.hdf5`). Since 0.4.0 (format 2) the file also records the version, git commit, command line, resolved options, input files and the mesh, so the run can be reproduced with `--rerun` and replayed or analysed without the mesh file ([DATA_FORMATS.md](DATA_FORMATS.md) §2). |
 | `--output-interval S` | 60 | Seconds of simulation time between output snapshots. |
+| `--embed-mesh full\|geometry` | `full` | `full`: store a copy of the mesh file (GeoParquet) in the output. `geometry`: store only the cell polygons, neighbours and the mesh file's checksum — for sweeps on one large SGS mesh, whose tables would otherwise dominate every output (Carlisle res-18 SGS: 179 MB). `--rerun` then needs the original mesh file, unchanged. |
+| `--rerun FILE.h5` | — | Run again exactly the simulation recorded in `FILE.h5`, from its embedded mesh and input files (output `FILE_rerun.h5` unless `--output` is given). Any other flag given with it replaces the recorded one, e.g. `--rerun a.h5 --backend gpu`. With the same code and backend the frames are bit-identical; a warning is printed if the code differs from the recorded commit. |
 
 ### 4.7 Visualisation options
 
@@ -525,7 +527,20 @@ julia --project=. visualisation/visualise_mesh.jl \
 
 ---
 
-## 7. Reading Output in Python
+## 7. Reading Output
+
+In Julia, read output through `io/FloodA5Output.jl` (it reads both the
+current format and files from FloodA5 ≤ 0.3.x):
+
+```julia
+include("io/FloodA5Output.jl"); const FO = FloodA5Output
+t     = FO.frame_times("sim.h5")
+h     = FO.read_var("sim.h5", "water_depth")      # n_cells × n_frames
+h_end = FO.read_frame("sim.h5", "water_depth")    # last frame
+FO.run_info("sim.h5")["argv"]                     # the command that produced it
+```
+
+In Python:
 
 ```python
 import h5py
@@ -533,28 +548,22 @@ import numpy as np
 import xarray as xr
 
 with h5py.File("sim.h5") as f:
-    # Static mesh
     cell_ids = f["mesh/cell_ids"][:].astype(str)
     lons     = f["mesh/center_lons"][:]
     lats     = f["mesh/center_lats"][:]
+    times    = f["results/t"][:]
+    depths   = f["results/water_depth"][:]        # (n_frames, n_cells)
 
-    # All frames
-    frames = sorted(f["frames"].keys())
-    times  = np.array([f[f"frames/{fr}/t"][()] for fr in frames])
-    depths = np.stack([f[f"frames/{fr}/water_depth"][:] for fr in frames])
-
-# As xarray Dataset
 ds = xr.Dataset(
     {"water_depth": (["time", "cell"], depths)},
     coords={"time": times, "lon": ("cell", lons), "lat": ("cell", lats)}
 )
-
-# Maximum depth in the final frame
-print(depths[-1].max())
+print(depths[-1].max())   # maximum depth in the final frame
 ```
 
-See [DATA_FORMATS.md](DATA_FORMATS.md) for the complete HDF5 schema and GeoParquet
-column definitions.
+See [DATA_FORMATS.md](DATA_FORMATS.md) §2 for the complete HDF5 schema (run
+record, cell polygons, embedded mesh, format 1) and §1 for the GeoParquet
+columns.
 
 ---
 

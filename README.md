@@ -147,6 +147,8 @@ FloodA5/
 │   ├── sources.jl             # Water source types (rainfall, injection, hydrograph)
 │   ├── boundary_conditions.jl # Ghost-edge BC types and ghost edge geometry
 │   └── timeseries_io.jl       # .bdy / CSV hydrograph readers
+├── io/
+│   └── FloodA5Output.jl       # HDF5 output format: writer, reader, --rerun
 ├── visualisation/
 │   ├── MakieVisualiser.jl     # Native desktop viewer (GLMakie)
 │   ├── VisualisationServer.jl # HTTP + WebSocket server for CesiumJS viewer
@@ -308,9 +310,18 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for full details and
 
 ## Output
 
-Simulation output is written to HDF5 (`.h5`), with per-frame datasets for water
-depth, stored volume, saturation fraction, and velocity. Read with Python (`h5py`,
-`xarray`) or Julia (`HDF5.jl`).
+Simulation output is written to HDF5 (`.h5`): time series of water depth,
+stored volume, saturation fraction and velocity, plus — since 0.4.0 — a record
+of the run (version, git commit, command line, resolved options, input files)
+and the mesh itself, so that any output can be reproduced exactly:
+
+```bash
+julia --project=. FloodModel.jl --rerun sim.h5        # → sim_rerun.h5, bit-identical
+```
+
+Read it in Julia with `io/FloodA5Output.jl` (`FO.read_var`, `FO.read_frame`,
+`FO.run_info`, …; it also reads files from earlier versions), or in Python with
+`h5py` / `xarray`.
 
 Post-processing tools:
 
@@ -408,9 +419,10 @@ break and a straight-channel representation series comparing A5 and
 Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
 
 **Next: consolidation**
-- Self-describing output: each HDF5 file records the version, commit, full
-  command line, resolved options and a single copy of the mesh, so that a run
-  can be reproduced exactly and replayed without the original mesh file
+- ✅ Self-describing output (0.4.0): each HDF5 file records the version,
+  commit, full command line, resolved options, input files and a single copy
+  of the mesh, so that a run can be reproduced exactly (`--rerun`) and
+  replayed without the original mesh file
 - One analysis module for loading runs and computing metrics, and a registry of
   named test cases with a single runner
 - Replay of any HDF5 output in the GLMakie viewer, and static plots for

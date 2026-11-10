@@ -23,14 +23,16 @@
 # printed: compare runs at matched simulation times (review §3.3).
 
 using HDF5, Printf, Statistics
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 const _R_EARTH = 6_371_008.8
 
 _arg(name, default) = (i = findfirst(==(name), ARGS); i === nothing ? default : ARGS[i + 1])
 
 function _frames(f)
-    ks = sort(collect(keys(f["frames"])))
-    ts = [read(f["frames"][k]["t"]) for k in ks]
+    ts = FO.frame_times(f)             # frame k = 1-based index
+    ks = collect(eachindex(ts))
     return ks, ts
 end
 
@@ -69,11 +71,11 @@ function spread(paths; t_target, lon0, lat0)
         h5open(p) do f
             ks, ts = _frames(f)
             k = ks[argmin(abs.(ts .- t_target))]
-            h = read(f["frames"][k]["water_depth"]); h[.!isfinite.(h)] .= 0.0
+            h = FO.read_frame(f, "water_depth", k); h[.!isfinite.(h)] .= 0.0
             x, y = _xy(f, lon0, lat0)
             r = hypot.(x, y); φ = atan.(y, x)
             @printf("%-48s %8.0f %7d %8.4f %8.4f %9.4f %9.4f %9.4f\n", basename(p),
-                    read(f["frames"][k]["t"]), count(>(1e-4), h),
+                    ts[k], count(>(1e-4), h),
                     _harmonic(h, r, φ, 4), _harmonic(h, r, φ, 6),
                     _sector_ratio(h, r, φ, 1e-4), _sector_ratio(h, r, φ, 1e-2),
                     _sector_ratio(h, r, φ, 5e-2))
@@ -82,9 +84,9 @@ function spread(paths; t_target, lon0, lat0)
 end
 
 function _asym(f, k, y, x)
-    v = read(f["frames"][k]["volume"]); v[.!isfinite.(v)] .= 0.0
+    v = FO.read_frame(f, "volume", k); v[.!isfinite.(v)] .= 0.0
     VN = sum(v[y .> 50.0]); VS = sum(v[y .< -50.0])
-    h = read(f["frames"][k]["water_depth"]); h[.!isfinite.(h)] .= 0.0
+    h = FO.read_frame(f, "water_depth", k); h[.!isfinite.(h)] .= 0.0
     r = hypot.(x, y); φ = atan.(y, x)
     # Plume deflection: bearing of the volume centroid from the source,
     # degrees north of the downslope (+x, east) axis. Less sensitive than
@@ -121,7 +123,7 @@ function planar(paths; t_target, lon0, lat0, t_sweep = nothing)
             a, A2, d = _asym(f, k, y, x)
             imax = argmax(abs.(series))
             @printf("%-52s %8.0f %+8.4f %+8.4f %+8.2f   %9.4f %8.0f\n", basename(p),
-                    read(f["frames"][k]["t"]), a, A2, d, abs(series[imax]), ts[late[imax]])
+                    ts[k], a, A2, d, abs(series[imax]), ts[late[imax]])
         end
     end
 end
