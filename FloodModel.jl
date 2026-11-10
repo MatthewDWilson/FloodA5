@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.3.3"
+const FLOODA5_VERSION = "0.4.0"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -108,6 +108,11 @@ using Dates
 using Statistics: mean, quantile
 using LinearAlgebra: Diagonal
 using HDF5
+# HDF5 output format (0.4.0, format 2): writer and reader, io/FloodA5Output.jl
+if !isdefined(Main, :FloodA5Output)
+    include(joinpath(@__DIR__, "io", "FloodA5Output.jl"))
+end
+const FO = FloodA5Output
 using Polyester: @batch   # WP4 stage 2: non-allocating threaded loops; always
                          # `per=core` — the default spins on every logical core and
                          # starves the serial parts of a step under --threads auto
@@ -1180,10 +1185,15 @@ mutable struct SimOutput
     # internal cell k is file cell perm[k]. Empty = identity. Per-cell frame
     # datasets are written back in file order; see _write_frame!.
     perm             :: Vector{Int}
+    # 0.4.0: true once an edge variable (flux_Q) has been written; it is then
+    # written at every later frame.
+    edge_series      :: Bool
 end
 
 SimOutput(; path="", interval=60.0, enabled=false, perm=Int[]) =
-    SimOutput(path, interval, -Inf, 0, enabled, perm)
+    SimOutput(path, interval, -Inf, 0, enabled, perm, false)
+SimOutput(path, interval, last_t, count, enabled, perm = Int[]) =
+    SimOutput(path, interval, last_t, count, enabled, perm, false)
 
 # Per-cell array in file order (identity when output.perm is empty).
 function _to_file_order(output::SimOutput, x::AbstractVector)
@@ -1321,38 +1331,60 @@ function _si_fmt(v::Float64, unit::String)::String
 end
 
 """
-    _write_mesh_metadata!(output, mesh)
+    _write_mesh_metadata!(output, mesh; state, run, inputs, mesh_source)
 
-Write the static mesh metadata to the HDF5 file's /mesh/ group.
-Called once when the output file is first opened.
+Create the HDF5 output file (format 2, `io/FloodA5Output.jl`) with its
+static parts: run record, mesh (cells, polygons, neighbours, areas, and the
+mesh file itself) and an empty `/results` group. `mesh` is in the mesh
+file's cell order; `state` (optional) is in the simulation's order and
+supplies cell areas and neighbour lists. Called once, before the first frame.
 """
-function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh)
+function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh;
+                               state = nothing,
+                               run::AbstractDict = Dict{String,Any}(),
+                               inputs = NamedTuple[],
+                               mesh_source = nothing)
     output.enabled || return
-    HDF5.h5open(output.path, "w") do fid
-        g = HDF5.create_group(fid, "mesh")
-        g["cell_ids"]    = [c.id         for c in mesh.cells]
-        # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
-        HDF5.attributes(g)["id_scheme"] = mesh.id_scheme
-        g["center_lons"] = [c.center_lon for c in mesh.cells]
-        g["center_lats"] = [c.center_lat for c in mesh.cells]
-        g["elevations"]  = get(mesh.static_vars, "elevation",
-                               fill(NaN, length(mesh.cells)))
-        for (varname, vals) in mesh.static_vars
-            varname == "elevation" && continue
-            g[varname] = vals
+    n = length(mesh.cells)
+    perm = output.perm
+    cell_area = nothing
+    nbrs = nothing
+    if state !== nothing
+        cell_area = _to_file_order(output, state.cell_area)
+        A = state.adj_matrix
+        nbrs = zeros(Int, size(A, 1), n)
+        for k in 1:n
+            fk = isempty(perm) ? k : perm[k]
+            for s in axes(A, 1)
+                j = A[s, k]
+                j == 0 && continue
+                nbrs[s, fk] = isempty(perm) ? j : perm[j]
+            end
         end
-        HDF5.create_group(fid, "frames")
     end
+    cells = (ids         = [c.id         for c in mesh.cells],
+             center_lons = [c.center_lon for c in mesh.cells],
+             center_lats = [c.center_lat for c in mesh.cells],
+             elevations  = get(mesh.static_vars, "elevation", fill(NaN, n)),
+             static_vars = mesh.static_vars,
+             # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
+             id_scheme   = mesh.id_scheme,
+             cell_area   = cell_area,
+             polygons    = [c.boundary for c in mesh.cells],
+             neighbours  = nbrs)
+    FO.create_output(output.path; flooda5_version = FLOODA5_VERSION, cells = cells,
+                     run = run, inputs = inputs, mesh_source = mesh_source)
     @info "HDF5 output file created: $(output.path)"
 end
 
 """
     _write_frame!(output, state, t)
 
-Append a simulation snapshot to /frames/ in the HDF5 file.
-Frame group names are zero-padded to 6 digits for lexicographic ordering.
+Append a simulation snapshot to the HDF5 file: one more column of each
+`/results/<var>` dataset (format 2; `io/FloodA5Output.jl`), in the mesh
+file's cell order.
 
-Datasets per frame:
+Variables per frame:
   t            — simulation time (s)
   water_depth  — depth above cell minimum (m), diagnostic
   volume       — stored volume per cell (m³), primary state variable
@@ -1364,41 +1396,28 @@ Datasets per frame:
 function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
     output.enabled || return
     output.frame_count += 1
-    frame_name = lpad(string(output.frame_count), 6, '0')
-    sat   = saturation_fraction(state)
-    n     = length(state.cell_ids)
-    chunk = (min(n, 4096),)   # chunk size: one contiguous read ≤ 4096 cells
-    HDF5.h5open(output.path, "r+") do fid
-        g = HDF5.create_group(fid["frames"], frame_name)
-        # Scalar — no chunking needed
-        g["t"] = t
-        # Per-cell arrays — chunked + deflate (gzip level 4)
-        for (name, data) in (("water_depth", state.water_depth),
-                              ("volume",      state.volume),
-                              ("saturation",  sat),
-                              ("velocity",    state.velocity),
-                              ("vel_u",       state.vel_u),
-                              ("vel_v",       state.vel_v))
-            ds = HDF5.create_dataset(g, name, eltype(data), (n,);
-                                     chunk=chunk, deflate=4)
-            write(ds, _to_file_order(output, data))
+    sat = saturation_fraction(state)
+    vars = ("water_depth" => _to_file_order(output, state.water_depth),
+            "volume"      => _to_file_order(output, state.volume),
+            "saturation"  => _to_file_order(output, sat),
+            "velocity"    => _to_file_order(output, state.velocity),
+            "vel_u"       => _to_file_order(output, state.vel_u),
+            "vel_v"       => _to_file_order(output, state.vel_v))
+    # flux_Q (m³/s, per edge; SGS R-A only): from its first non-zero frame on.
+    # Edges follow the simulation's cell order, so each edge's two cells are
+    # recorded (once) as file-order indices to keep flux_Q interpretable.
+    ne = state.edges.n_edges
+    output.edge_series |= ne > 0 && any(!=(0.0), view(state.edges.flux_Q, 1:ne))
+    if output.edge_series
+        ci = state.edges.cell_i[1:ne]; cj = state.edges.cell_j[1:ne]
+        if !isempty(output.perm)
+            ci = output.perm[ci]; cj = output.perm[cj]
         end
-        # Write flux_Q (m³/s, SGS R-A only) when non-zero.
-        # Written per-edge rather than per-cell; only present in SGS R-A runs.
-        ne = state.edges.n_edges
-        if ne > 0 && any(!=(0.0), state.edges.flux_Q)
-            eq_chunk = (min(ne, 4096),)
-            ds = HDF5.create_dataset(g, "flux_Q", Float64, (ne,);
-                                     chunk=eq_chunk, deflate=4)
-            write(ds, state.edges.flux_Q)
-            # Edges follow the simulation's cell order: record each edge's two
-            # cells as file-order indices so flux_Q stays interpretable.
-            if !isempty(output.perm) && !haskey(fid["mesh"], "edge_cells")
-                fid["mesh"]["edge_cells"] = permutedims(hcat(
-                    output.perm[state.edges.cell_i[1:ne]],
-                    output.perm[state.edges.cell_j[1:ne]]))
-            end
-        end
+        FO.append_frame!(output.path, t, vars;
+                         edge_vars  = ("flux_Q" => state.edges.flux_Q[1:ne],),
+                         edge_cells = hcat(ci, cj))
+    else
+        FO.append_frame!(output.path, t, vars)
     end
     output.last_write_t = t
 end
@@ -3749,6 +3768,66 @@ Main application entry point.
 """
 
 """
+    _run_mesh_source(mesh_source, mesh_file, mesh_modified, embed_mesh) → NamedTuple
+
+The mesh file to record in the output: the GeoParquet file that holds
+exactly the mesh the simulation used (cell file order, after DEM sampling
+and SGS tables). A loaded, unchanged mesh is its own file; a mesh the run
+changed or generated is the `--meshout` file (re-saved after every change,
+or the loaded file re-saved in place). Otherwise — generated and not saved
+as GeoParquet — a copy is saved to a temporary file to embed.
+"""
+function _run_mesh_source(mesh_source::Tuple, mesh_file, mesh_modified::Bool,
+                          embed_mesh::Symbol)
+    p = (mesh_source[1] === :load && !mesh_modified) ? mesh_source[2] :
+        _mesh_save_path(mesh_source)
+    if p !== nothing && endswith(lowercase(p), ".parquet") && isfile(p)
+        return (embed = embed_mesh, path = p, original_path = p, kind = "file")
+    end
+    embed_mesh === :full ||
+        return (embed = embed_mesh, path = nothing, original_path = nothing, kind = "unsaved")
+    tmp = joinpath(mktempdir(), "mesh.parquet")
+    @info "Saving a copy of the mesh to embed in the output..."
+    save_mesh_geoparquet(mesh_file, tmp)
+    return (embed = :full, path = tmp, original_path = nothing, kind = "resaved")
+end
+
+"""
+    _run_inputs(friction, inflow_specs, bci, bdy, bc_file) → Vector{NamedTuple}
+
+The input files a run read (other than the mesh and DEM, which the embedded
+mesh supersedes), with the argument value each was given as, for the
+output's run record and `--rerun`. A .bdy found next to the .bci file
+(no `--inflow-bdy`) has an empty argument value.
+"""
+function _run_inputs(friction_source, inflow_specs, inflow_bci_path, inflow_bdy_path,
+                     bc_file_path)
+    inputs = NamedTuple[]
+    add(role, flag, v, p) = any(i -> i.path == p && i.flag == flag, inputs) ||
+                            push!(inputs, (role = role, flag = flag, argv_value = v, path = p))
+    friction_source isa AbstractString &&
+        add("friction raster", "--friction", friction_source, friction_source)
+    for s in inflow_specs
+        add("inflow hydrograph", "--inflow-point", string(s[3]), string(s[3]))
+    end
+    if inflow_bci_path !== nothing
+        add("BCI boundary file", "--inflow-bci", inflow_bci_path, inflow_bci_path)
+        if inflow_bdy_path !== nothing
+            add("BDY time series", "--inflow-bdy", inflow_bdy_path, inflow_bdy_path)
+        else
+            for ext in (".bdy", ".BDY")     # as parse_bci_file finds it
+                auto = replace(inflow_bci_path, r"\.[bB][cC][iI]$" => ext)
+                if auto != inflow_bci_path && isfile(auto)
+                    add("BDY time series (next to the BCI file)", "--inflow-bdy", "", auto)
+                    break
+                end
+            end
+        end
+    end
+    bc_file_path !== nothing && add("boundary-condition file", "--bc-file", bc_file_path, bc_file_path)
+    return inputs
+end
+"""
     _mesh_save_path(mesh_source) -> Union{String,Nothing}
 
 Where (if anywhere) the current run should re-save the mesh after DEM
@@ -3756,6 +3835,7 @@ sampling or SGS table building — one small helper shared by both call
 sites in `run_flood_model`, rather than duplicating the 3-way
 `:generate`/`:generate_cartesian`/`:load` branch inline twice.
 """
+
 function _mesh_save_path(mesh_source::Tuple)::Union{String,Nothing}
     tag = mesh_source[1]
     if tag === :generate
@@ -3937,8 +4017,13 @@ function run_flood_model(;
     bc_epsg           :: Union{Int,Nothing} = nothing,
     # ── Legacy output params ─────────────────────────────────────────────
     output_path       :: Union{String,Nothing} = nothing,
-    output_interval   :: Float64 = 60.0)
+    output_interval   :: Float64 = 60.0,
+    # ── Run record in the output (0.4.0) ─────────────────────────────────
+    run_argv          :: Vector{String} = String[],  # the command line, for --rerun
+    embed_mesh        :: Symbol = :full)              # :full | :geometry
 
+    embed_mesh in (:full, :geometry) ||
+        throw(ArgumentError("embed_mesh must be :full or :geometry (got :$embed_mesh)"))
     so = scheme_options(scheme, flow_method)
     gradient_correction = something(gradient_correction, so.gradient_correction)
     momentum_model      = something(momentum_model,      so.momentum_model)
@@ -4046,6 +4131,7 @@ function run_flood_model(;
     end
 
     # 3. DEM sampling (if requested)
+    mesh_modified = false     # the run changed the mesh it acquired (DEM, SGS tables)
     if dem_source !== nothing
         if mesh_source[1] === :load && haskey(mesh.static_vars, "elevation")
             n_valid = count(isfinite, mesh.static_vars["elevation"])
@@ -4078,6 +4164,7 @@ function run_flood_model(;
         end
         tl.dem_sample = time() - t0
         @info "DEM sampled in $(_fmt_elapsed(tl.dem_sample))"
+        mesh_modified = true
 
         mesh_save_path = _mesh_save_path(mesh_source)
         if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
@@ -4132,6 +4219,7 @@ function run_flood_model(;
                               halton_seed=halton_seed)
             tl.sgs_tables = time() - t0
             @info "SGS tables built in $(_fmt_elapsed(tl.sgs_tables))"
+            mesh_modified = true
 
             mesh_save_path = _mesh_save_path(mesh_source)
             if mesh_save_path !== nothing && endswith(mesh_save_path, ".parquet")
@@ -4379,7 +4467,46 @@ function run_flood_model(;
         enabled  = output_path !== nothing,
         perm     = cell_perm,
     )
-    sim_output.enabled && _write_mesh_metadata!(sim_output, mesh_file)
+    if sim_output.enabled
+        # 0.4.0: everything needed to reproduce the run goes into the file
+        options = Dict{String,Any}(
+            "flow_model" => flow_method, "scheme" => scheme,
+            "gradient_correction" => gradient_correction,
+            "gradient_correction_alpha" => gradient_correction_alpha,
+            "momentum_model" => momentum_model, "face_flux_method" => face_flux_method,
+            "friction_model" => friction_model, "limiter" => limiter, "cfl_mode" => cfl_mode,
+            "q_centre_mode" => q_centre_mode, "q_centre_theta" => q_centre_theta,
+            "eta_filter" => eta_filter, "momentum_damping" => momentum_damping,
+            "momentum_damping_scale" => momentum_damping_scale,
+            "open_boundary" => open_boundary, "boundary_limiter" => boundary_limiter,
+            "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
+            "manning_n" => manning_n, "friction" => friction_source,
+            "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
+            "cell_order" => cell_order, "backend" => backend, "limiter_stats" => limiter_stats,
+            "rainfall_rate_m_per_s" => rainfall_rate,
+            "injection_points" => injection_specs, "rainpoints" => rainpoint_specs,
+            "inflow_points" => [string.(collect(s)) for s in inflow_specs],
+            "inflow_bci" => inflow_bci_path, "inflow_bdy" => inflow_bdy_path,
+            "bc_file" => bc_file_path, "closed_boundaries" => closed_boundaries,
+            "bc_epsg" => bc_epsg, "output_interval" => output_interval,
+            "mesh_source" => string.(collect(mesh_source)),
+            "dem" => dem_source === nothing ? nothing : dem_source.path,
+            "dem_method" => dem_method, "dem_samples" => dem_samples,
+            "halton_seed" => halton_seed, "sgs_bins" => sgs_bins, "sgs_samples" => sgs_samples,
+            "embed_mesh" => embed_mesh)
+        run = FO.provenance(@__DIR__)
+        merge!(run, Dict{String,Any}(
+            "argv" => run_argv, "options" => options, "cwd" => pwd(),
+            "backend" => string(backend), "threads" => Threads.nthreads(),
+            "cell_order" => string(cell_order), "flow_model" => string(flow_method),
+            "started_utc" => FO._nowutc()))
+        _write_mesh_metadata!(sim_output, mesh_file;
+            state       = flow_state,
+            run         = run,
+            inputs      = _run_inputs(friction_source, inflow_specs, inflow_bci_path,
+                                      inflow_bdy_path, bc_file_path),
+            mesh_source = _run_mesh_source(mesh_source, mesh_file, mesh_modified, embed_mesh))
+    end
 
     # 9. Simulation loop
     LIMITER_STATS[] = limiter_stats
@@ -4409,6 +4536,11 @@ function run_flood_model(;
                       timing        = tl,
                       backend       = compute)
     tl.simulation = time() - t0
+    sim_output.enabled && FO.write_summary!(sim_output.path, Dict{String,Any}(
+        "completed" => true, "n_frames" => sim_output.frame_count, "n_steps" => tl.n_steps,
+        "wall_simulation_s" => tl.simulation, "wall_since_start_s" => time() - t_total,
+        "vol_added_m3" => tl.vol_added, "vol_removed_m3" => tl.vol_removed,
+        "vol_domain_m3" => tl.vol_domain, "mass_balance_error_m3" => tl.mb_err))
 
     # 10. Notify visualiser that the simulation is done, then keep alive for replay
     if vis !== nothing && vis_mode === :cesium
@@ -4813,9 +4945,22 @@ Visualisation options:
   --vis-port PORT    Port for the Cesium HTTP server (default: 8080).
 
 Output options:
-  --output FILE      Write HDF5 simulation output (default: off).
+  --output FILE      Write HDF5 simulation output (default: off). The file
+                     (format 2, since 0.4.0; docs/DATA_FORMATS.md) records the
+                     version, git commit, command line, resolved options,
+                     input files and the mesh, so the run can be reproduced
+                     with --rerun.
   --output-interval  Seconds of simulation time between output snapshots
                      (default: 60.0).
+  --embed-mesh full|geometry
+                     full (default): store a copy of the mesh file in the
+                     output. geometry: store only the cell polygons and the
+                     mesh file's checksum (for sweeps on a large SGS mesh);
+                     --rerun then needs the original mesh file, unchanged.
+  --rerun FILE.h5    Run again exactly the simulation recorded in FILE.h5,
+                     from its embedded mesh and input files. Output goes to
+                     FILE_rerun.h5 unless --output is given; any other flag
+                     given with --rerun replaces the recorded one.
 
 Examples:
   # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation
@@ -5084,6 +5229,28 @@ function main(args=String[])
         println("FloodA5 v$FLOODA5_VERSION")
         exit(0)
     end
+
+    # --rerun FILE.h5 [overrides…] (0.4.0): the run recorded in an output file
+    rr = findfirst(==("--rerun"), args)
+    if rr !== nothing
+        h5 = get(args, rr + 1, nothing)
+        h5 === nothing && (println("ERROR: --rerun needs an output file\n"); print_help(1))
+        overrides = String.(deleteat!(copy(args), [rr, rr + 1]))
+        out_val, _ = _pop_flag(copy(overrides), "--output")
+        out = something(out_val, splitext(h5)[1] * "_rerun.h5")
+        ri = FO.run_info(h5)
+        here = FO.provenance(@__DIR__)
+        if get(ri, "git_commit", "") != here["git_commit"] || get(ri, "git_dirty", false) || here["git_dirty"]
+            @warn "Re-running with different code: results may not be bit-identical" recorded_version =
+                get(ri, "flooda5_version", "?") recorded_commit = get(ri, "git_commit", "?") recorded_dirty =
+                get(ri, "git_dirty", false) current_version = FLOODA5_VERSION current_commit =
+                here["git_commit"] current_dirty = here["git_dirty"]
+        end
+        new_args = FO.rerun_argv(h5; output = out, workdir = mktempdir(), overrides = overrides)
+        @info "Re-running $h5 → $out" new_args
+        return main(new_args)
+    end
+    run_argv = String.(copy(args))   # recorded in the output (before flags are consumed)
 
     # --vis [mode]
     vis_mode = :none
@@ -5468,6 +5635,12 @@ function main(args=String[])
     bc_epsg_val, args = _pop_flag(args, "--bc-epsg")
     bc_epsg = bc_epsg_val !== nothing ? parse(Int, bc_epsg_val) : nothing
 
+    # --embed-mesh full|geometry (0.4.0)
+    embed_val, args = _pop_flag(args, "--embed-mesh")
+    embed_mesh = embed_val === nothing ? :full : Symbol(embed_val)
+    embed_mesh in (:full, :geometry) ||
+        (println("ERROR: --embed-mesh must be full or geometry\n"); print_help(1))
+
     # --closed-boundaries  (treat all boundary cells as closed walls)
     closed_boundaries, args = _pop_bool(args, "--closed-boundaries")
 
@@ -5552,6 +5725,8 @@ function main(args=String[])
         bc_epsg          = bc_epsg,
         output_path      = output_val,
         output_interval  = output_interval,
+        run_argv         = run_argv,
+        embed_mesh       = embed_mesh,
     )
 end
 

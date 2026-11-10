@@ -63,15 +63,15 @@ if h5_ids != state.cell_ids
           "this .h5 output.")
 end
 
-frame_names = sort(collect(keys(fid["frames"])))
-frame_name  = frame_arg == "last" ? frame_names[end] : lpad(frame_arg, 6, '0')
-if !(frame_name in frame_names)
-    error("frame '$frame_name' not found. Available: $(frame_names[1]) .. " *
-          "$(frame_names[end]).")
+n_fr       = FO.n_frames(fid)                       # frame = 1-based frame index
+frame_k    = frame_arg == "last" ? n_fr : parse(Int, frame_arg)
+frame_name = lpad(string(frame_k), 6, '0')
+if !(1 <= frame_k <= n_fr)
+    error("frame $frame_k not found. Available: 1 .. $n_fr.")
 end
 
-t     = read(fid["frames/$frame_name/t"])
-depth = read(fid["frames/$frame_name/water_depth"])
+t     = FO.frame_times(fid)[frame_k]
+depth = FO.read_frame(fid, "water_depth", frame_k)
 close(fid)
 
 println("Using frame $frame_name, t = $(round(t, digits=1))s, " *

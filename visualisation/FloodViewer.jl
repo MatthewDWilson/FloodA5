@@ -29,6 +29,8 @@ include(joinpath(dirname(@__DIR__), "mesh", "A5Grid.jl"))
 using .A5Grid
 using GLMakie
 using HDF5
+isdefined(Main, :FloodA5Output) || include(joinpath(dirname(@__DIR__), "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 using Printf
 using Dates
 using Statistics: quantile
@@ -107,30 +109,17 @@ function load_sim_data(h5_path::String)::SimData
     isfile(h5_path) || error("HDF5 file not found: $h5_path")
 
     HDF5.h5open(h5_path, "r") do fid
-        frames_group = fid["frames"]
-        frame_names  = sort(keys(frames_group))
-        n_frames     = length(frame_names)
+        # Output format 1 or 2 (io/FloodA5Output.jl)
+        n_frames = FO.n_frames(fid)
         n_frames > 0 || error("No frames found in $h5_path")
 
-        # Determine n_cells from first frame
-        n_cells = length(read(frames_group[frame_names[1]]["water_depth"]))
-
-        t           = Vector{Float64}(undef, n_frames)
-        water_depth = Matrix{Float64}(undef, n_cells, n_frames)
-        volume      = Matrix{Float64}(undef, n_cells, n_frames)
-        saturation  = Matrix{Float64}(undef, n_cells, n_frames)
-        velocity    = Matrix{Float64}(undef, n_cells, n_frames)
-
-        for (k, fname) in enumerate(frame_names)
-            fg = frames_group[fname]
-            t[k]                  = read(fg["t"])
-            water_depth[:, k]     = read(fg["water_depth"])
-            volume[:, k]          = read(fg["volume"])
-            saturation[:, k]      = haskey(fg, "saturation") ?
-                                    read(fg["saturation"]) :
-                                    Float64.(read(fg["water_depth"]) .> 1e-4)
-            velocity[:, k]        = read(fg["velocity"])
-        end
+        t           = FO.frame_times(fid)
+        water_depth = FO.read_var(fid, "water_depth")
+        n_cells     = size(water_depth, 1)
+        volume      = FO.read_var(fid, "volume")
+        saturation  = FO.has_var(fid, "saturation") ?
+                      FO.read_var(fid, "saturation") : Float64.(water_depth .> 1e-4)
+        velocity    = FO.read_var(fid, "velocity")
 
         @info "  $n_frames frames × $n_cells cells  " *
               "(t = $(round(t[1],digits=0))s … $(round(t[end],digits=0))s)"

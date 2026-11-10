@@ -17,12 +17,14 @@
 # ============================================================================
 
 using HDF5
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 length(ARGS) >= 1 || error("Usage: julia test/count_h5_frames.jl <file.h5>")
 h5_path = ARGS[1]
 
 n = h5open(h5_path, "r") do f
-    length(keys(f["frames"]))
+    FO.n_frames(f)
 end
 
 println(n)

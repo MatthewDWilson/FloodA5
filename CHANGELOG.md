@@ -33,6 +33,53 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-10
+
+Output format change (MINOR). Simulation results are unchanged: every
+time step is computed as in 0.3.3; only the HDF5 file layout and its
+contents change.
+
+### Changed
+- ⚠ **HDF5 output format 2** (`docs/DATA_FORMATS.md` §2). Time series are
+  one dataset per variable, `/results/<var>` (n_frames × n_cells in C
+  order), instead of one `/frames/NNNNNN` group per output time. Against
+  format 1 on existing runs (`test/bench_output_format.jl`):
+  - time series of cells read 2.4–28× faster
+  - whole variables read 3.0–5.8× faster
+  - file size within +2.5% on 25-frame runs; 4.6× smaller with 241 frames
+  - writing 4–11% slower, tens of ms per frame
+
+  Scripts that read `/frames` directly no longer work on new files; read
+  through `io/FloodA5Output.jl`, which reads both formats. Re-run earlier
+  runs to get format-2 files.
+
+### Added
+- The output records how to reproduce its run:
+  - `/run`: version, git commit (and the patch if the tree was dirty), the
+    command line, every option after the `--scheme` defaults, backend,
+    threads, cell order, and the environment's `Project.toml` and
+    `Manifest.toml`
+  - the input files (hydrographs, `.bci`/`.bdy`, `--bc-file`, friction
+    raster; files over 64 MB by checksum only)
+  - the mesh: its GeoParquet file (`/mesh/source`), cell polygons, neighbour
+    lists and cell areas
+  - `/summary` at the end: completed, steps, mass balance, wall time
+- `--rerun FILE.h5 [flags…]`: runs the recorded simulation again from the
+  embedded mesh and inputs. Flags given with it replace the recorded ones.
+  Same code and backend: bit-identical frames.
+- `--embed-mesh full|geometry` (default `full`): `geometry` stores the
+  polygons and the mesh file's checksum but not the file, for sweeps on a
+  large SGS mesh (Carlisle res-18 SGS: 179 MB).
+- `io/FloodA5Output.jl` (module `FloodA5Output`, `FO`): writer, reader
+  (`read_frame`, `read_var`, `read_series`, `frame_times`, `cell_polygons`,
+  `run_info`, …) and reproduction (`extract_mesh`, `rerun_argv`), without
+  depending on `FloodModel.jl`. All scripts that read output now use it.
+- `test/test_output_format.jl` (O1–O5, in CI): run record and geometry,
+  `--rerun` bit-identical with the original mesh and inputs moved away (also
+  for a mesh generated in the run, and with `--embed-mesh geometry`), the
+  format-1 reader.
+- `SHA` (standard library) as a dependency.
+
 ## [0.3.3] — 2026-11-10
 
 Documentation and housekeeping only (PATCH); no code changes.

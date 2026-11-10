@@ -139,6 +139,10 @@
 
 using HDF5
 
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+
+const FO = FloodA5Output
+
 using GLMakie
 
 import CairoMakie
@@ -667,9 +671,9 @@ function load_h5(h5file::String)
 
         elevs    = Float64.(read(f["mesh/elevations"]))
 
-        frames   = sort(keys(f["frames"]))
+        # Output format 1 or 2 (io/FloodA5Output.jl); arrays here are n_frames × n_cells
 
-        n_frames = length(frames)
+        n_frames = FO.n_frames(f)
 
         n_cells  = length(cell_ids)
 
@@ -677,31 +681,15 @@ function load_h5(h5file::String)
 
         println("  Frames  : $n_frames")
 
-        times    = Vector{Float64}(undef, n_frames)
+        times    = Float64.(FO.frame_times(f))
 
-        depth_ts = Matrix{Float64}(undef, n_frames, n_cells)
+        depth_ts = permutedims(FO.read_var(f, "water_depth"))
 
-        vol_ts   = Matrix{Float64}(undef, n_frames, n_cells)
+        vol_ts   = permutedims(FO.read_var(f, "volume"))
 
-        sat_ts   = Matrix{Float64}(undef, n_frames, n_cells)
+        sat_ts   = permutedims(FO.read_var(f, "saturation"))
 
-        vel_ts   = Matrix{Float64}(undef, n_frames, n_cells)
-
-        for (fi, fr) in enumerate(frames)
-
-            g = f["frames/$fr"]
-
-            times[fi]       = Float64(read(g["t"]))
-
-            depth_ts[fi, :] = read(g["water_depth"])
-
-            vol_ts[fi, :]   = read(g["volume"])
-
-            sat_ts[fi, :]   = read(g["saturation"])
-
-            vel_ts[fi, :]   = read(g["velocity"])
-
-        end
+        vel_ts   = permutedims(FO.read_var(f, "velocity"))
 
         t_hr = times ./ 3600.0
 

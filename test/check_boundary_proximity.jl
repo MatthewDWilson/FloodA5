@@ -19,9 +19,13 @@
 #     (prints the wet-region extent at every 10th frame, so you can see
 #      whether/when it starts approaching a boundary over the course of
 #      the run, without needing to guess a single frame up front)
+#   N is the 1-based frame index (the same number as the old /frames/NNNNNN
+#   group name); output-format 1 and 2 files both work (io/FloodA5Output.jl).
 
 using HDF5
 using Printf
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 function _argval(args::Vector{String}, flag::String, default=nothing)
     idx = findfirst(==(flag), args)
@@ -32,11 +36,11 @@ end
 
 const ARGS_V = String.(ARGS)
 
-function _report_frame(f, fname::String, cell_lons, cell_lats,
+function _report_frame(f, k::Int, cell_lons, cell_lats,
                         lon_min, lon_max, lat_min, lat_max)
-    grp = f["frames/$fname"]
-    sat = read(grp["saturation"])
-    t   = haskey(grp, "t") ? read(grp["t"]) : NaN
+    fname = lpad(string(k), 6, '0')
+    sat = FO.read_frame(f, "saturation", k)
+    t   = FO.frame_times(f)[k]
     wet = sat .>= 1.0
     n_wet = count(wet)
     if n_wet == 0
@@ -91,20 +95,19 @@ function main()
         println(" true domain edge is up to half a cell-width further out than this)")
         println()
 
-        names = sort(collect(keys(f["frames"])))
+        nf = FO.n_frames(f)
 
         sweep_str = _argval(ARGS_V, "--sweep")
         if sweep_str !== nothing
             stride = parse(Int, sweep_str)
-            for (i, nm) in enumerate(names)
+            for i in 1:nf
                 (i - 1) % stride == 0 &&
-                    _report_frame(f, nm, cell_lons, cell_lats, lon_min, lon_max, lat_min, lat_max)
+                    _report_frame(f, i, cell_lons, cell_lats, lon_min, lon_max, lat_min, lat_max)
             end
         else
             frame_str = _argval(ARGS_V, "--frame")
             frame_str === nothing && error("Provide --frame N or --sweep STRIDE")
-            fname = lpad(frame_str, 6, '0')
-            _report_frame(f, fname, cell_lons, cell_lats, lon_min, lon_max, lat_min, lat_max)
+            _report_frame(f, parse(Int, frame_str), cell_lons, cell_lats, lon_min, lon_max, lat_min, lat_max)
         end
     end
 end

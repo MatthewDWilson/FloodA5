@@ -111,81 +111,157 @@ mesh = A5Grid.load_mesh_geoparquet("mesh.parquet")
 
 ## 2. HDF5 Simulation Output
 
-Written by `--output`. Extension: `.h5` or `.hdf5`.
-
-### `/mesh` group — static data (written once at simulation start)
-
-| Dataset | Shape | dtype | Description |
-|---|---|---|---|
-| `/mesh/cell_ids` | (n_cells,) | string | 16-char zero-padded hex cell IDs. The group attribute `id_scheme` (`a5-v0`, `a5-v1` or `cartesian`; since WP-M1) says which ID scheme they use |
-| `/mesh/elevations` | (n_cells,) | float64 | Bed elevation (m). `NaN` if not sampled. |
-| `/mesh/center_lons` | (n_cells,) | float64 | Cell centre longitude (degrees) |
-| `/mesh/center_lats` | (n_cells,) | float64 | Cell centre latitude (degrees) |
-
-### `/frames` group — time series
-
-Each snapshot is a numbered subgroup:
+Written by `--output`. Extension: `.h5` or `.hdf5`. Since 0.4.0 the file is
+**format 2**: it records everything needed to reproduce the run
+(`--rerun FILE.h5`) and to replay or analyse it without the original mesh
+file. The writer and the reader live in one module, `io/FloodA5Output.jl`;
+read files through it (`FO.read_frame`, `FO.read_var`, …, below) rather than
+by dataset path, so scripts keep working across format versions. Files from
+FloodA5 ≤ 0.3.x (format 1, `/frames/NNNNNN` groups, no run record or
+geometry) are still readable through the same functions.
 
 ```
-/frames/000001/   t=60.0 s
-/frames/000002/   t=120.0 s
-...
+/                 attrs: format = "FloodA5 output", format_version = 2,
+                         flooda5_version, created_utc
+/run              the run record
+/mesh             static mesh data, including the mesh file itself
+/results          the time series: one dataset per variable
+/summary          attrs written when the run ends (absent if it did not finish)
 ```
 
-| Dataset | Shape | dtype | Description |
-|---|---|---|---|
-| `t` | scalar | float64 | Simulation time (seconds) |
-| `water_depth` | (n_cells,) | float64 | Depth above local bed (m) |
-| `volume` | (n_cells,) | float64 | Stored water volume (m³) — primary state variable |
-| `saturation` | (n_cells,) | float64 | Wetted fraction 0–1 (SGS: meaningful; standard: binary) |
-| `velocity` | (n_cells,) | float64 | Scalar velocity magnitude (m/s). Since WP0 (2026-10): depth-averaged velocity from the WLSQ cell-vector reconstruction of face discharges, divided by depth. Earlier files used a flux-weighted direction scatter in degree space whose magnitude was not in m/s — do not compare magnitudes across that change. |
-| `vel_u` | (n_cells,) | float64 | Eastward velocity component (m/s) |
-| `vel_v` | (n_cells,) | float64 | Northward velocity component (m/s) |
-| `flux_Q` | (n_edges,) | float64 | Volumetric flux per edge (m³/s). Only present in the frame group when at least one edge is non-zero — i.e. only for SGS runs using the R-A flux kernel (see `HYDRAULICS.md` §9.3). Absent (not zero-filled) otherwise. |
+### `/run` — run record
 
-Datasets are chunked (`min(n_cells, 4096)`) and gzip-compressed (level 4). Frame
-groups are zero-padded to six digits.
+| Item | Kind | Description |
+|---|---|---|
+| `argv` | dataset, JSON array | The command line, as given (empty for runs not started from the CLI) |
+| `options` | dataset, JSON object | Every option after the `--scheme` defaults are applied (flow model, scheme, limiter, Courant number, η filter, open boundary, sources, …) |
+| `git_commit`, `git_dirty` | attrs | Code version; `git_dirty` = uncommitted changes to tracked files |
+| `git_diff` | dataset, text | The uncommitted patch (only when `git_dirty`) |
+| `project`, `manifest` | datasets, text | `Project.toml` and `Manifest.toml` of the active environment (exact package versions) |
+| `julia_version`, `hostname`, `cwd`, `backend`, `threads`, `cell_order`, `flow_model`, `started_utc` | attrs | Environment and run settings |
+| `inputs/NN/` | groups | One per input file the run read (`--friction`, `--inflow-point` hydrographs, `--inflow-bci` and its `.bdy`, `--bc-file`). Attrs `role`, `flag`, `argv_value` (as written in `argv`; empty for a `.bdy` found next to the `.bci`), `original_path`, `sha256`, `size`, `embedded`; dataset `bytes` (the file) when `embedded`. Files over 64 MB are referenced by path and checksum only. |
+
+The DEM is not stored: the mesh (below) already holds what the simulation
+used from it (cell elevations, SGS tables).
+
+### `/mesh` — static data
+
+| Dataset | Shape (C order) | dtype | Description |
+|---|---|---|---|
+| `cell_ids` | (n_cells,) | string | Cell IDs. Group attr `id_scheme` (`a5-v0`, `a5-v1` or `cartesian`) |
+| `center_lons`, `center_lats` | (n_cells,) | float64 | Cell centre (degrees) |
+| `elevations` | (n_cells,) | float64 | Bed elevation (m); `NaN` if not sampled |
+| _static variables_ | (n_cells,) | float64 | The mesh's other per-cell scalars, e.g. `friction`, `sgs_z_min` |
+| `cell_area` | (n_cells,) | float64 | Plan area (m²) |
+| `polygon_offsets` | (n_cells+1,) | int64 | Cell *i*'s vertices are `polygon_lon/lat[offsets[i]:offsets[i+1]]` (0-based, CSR) |
+| `polygon_lon`, `polygon_lat` | (n_vertices,) | float64 | Polygon vertices as stored in the mesh file (degrees) |
+| `neighbours` | (n_cells, max_nb) | int32 | Neighbour cells in neighbour-list order, 0-based, `-1` = none |
+| `edge_cells` | (n_edges, 2) | int32 | The two cells of each edge, 0-based (only with `flux_Q`) |
+| `source/` | group | | The mesh file. Attrs `embedded` (`full` or `geometry`), `kind` (`file`: the loaded or `--meshout` file; `resaved`: a mesh generated in the run and not saved, saved for the output), `original_path`, `sha256`, `size`; datasets `parquet` (the GeoParquet file's bytes; `full` only) and `prj` |
+
+All cell arrays are in the **mesh file's cell order** (the simulation may
+reorder cells internally, `--cell-order spatial`; output is written back in
+file order). `--embed-mesh geometry` leaves out `source/parquet` — for
+sweeps on one large SGS mesh, where the copy would dominate the file — and
+`--rerun` then uses the original mesh file after checking its checksum.
+
+### `/results` — time series
+
+| Dataset | Shape (C order) | dtype | Description |
+|---|---|---|---|
+| `t` | (n_frames,) | float64 | Simulation time (s) |
+| `water_depth` | (n_frames, n_cells) | float64 | Depth above local bed (m) |
+| `volume` | (n_frames, n_cells) | float64 | Stored water volume (m³) — primary state variable |
+| `saturation` | (n_frames, n_cells) | float64 | Wetted fraction 0–1 (SGS: meaningful; standard: binary) |
+| `velocity` | (n_frames, n_cells) | float64 | Velocity magnitude (m/s): WLSQ cell-vector reconstruction of face discharges divided by depth (since WP0, 2026-10; earlier files were not in m/s) |
+| `vel_u`, `vel_v` | (n_frames, n_cells) | float64 | Eastward / northward velocity (m/s) |
+| `flux_Q` | (n_frames, n_edges) | float64 | Flux per edge (m³/s), SGS runs with the R-A kernel only (`HYDRAULICS.md` §9.3); frames before its first non-zero value read as 0 |
+
+In Julia the shapes read transposed: `(n_cells, n_frames)`. Datasets grow
+by one frame per output time; chunks are one frame × up to 4096 cells,
+deflate level 4. A whole frame is one contiguous read, and a cell's time
+series one small read per frame. Against format 1 on existing runs
+(`test/bench_output_format.jl`): time series 2–30× and whole-variable reads
+3–6× faster; files within 3% of the size, or several times smaller with many
+frames; writing 4–11% slower (tens of ms per frame).
+
+### `/summary`
+
+Attrs `completed`, `n_frames`, `n_steps`, `wall_simulation_s`,
+`wall_since_start_s`, `vol_added_m3`, `vol_removed_m3`, `vol_domain_m3`,
+`mass_balance_error_m3`, `finished_utc`.
+
+### Reading in Julia
+
+```julia
+include("io/FloodA5Output.jl"); const FO = FloodA5Output   # (FloodModel.jl defines FO)
+
+nf    = FO.n_frames("sim.h5");  t = FO.frame_times("sim.h5")
+h_end = FO.read_frame("sim.h5", "water_depth")             # last frame; or (…, k)
+h     = FO.read_var("sim.h5", "water_depth")               # n_cells × n_frames
+ts    = FO.read_series("sim.h5", "water_depth", [12, 40])  # n_frames × 2
+k     = FO.frame_at("sim.h5", 3600.0)                      # frame nearest t = 1 h
+cells = FO.cell_table("sim.h5")                            # ids, lon, lat, elevation
+polys = FO.cell_polygons("sim.h5")                         # 2 × n_vertices per cell
+info  = FO.run_info("sim.h5")                              # argv, options, git, inputs, summary
+```
+
+Every function also takes an open `HDF5.File`. Indices are 1-based.
+
+### Reproducing a run
+
+```
+julia --project=. FloodModel.jl --rerun sim.h5                   # → sim_rerun.h5
+julia --project=. FloodModel.jl --rerun sim.h5 --output b.h5 --backend gpu
+```
+
+The recorded command line is run again with the embedded mesh
+(`--meshload`) and the embedded input files; mesh-generation flags are
+dropped, and any flag given with `--rerun` replaces the recorded one. With
+the same code (commit) and backend the frames are bit-identical
+(`test/test_output_format.jl` O2–O4); a warning is printed when the code
+differs from the recorded commit.
 
 ### Reading in Python
 
 ```python
-import h5py
+import h5py, json
 import numpy as np
 
 with h5py.File("sim.h5") as f:
-    # Static mesh
-    cell_ids = f["mesh/cell_ids"][:].astype(str)
-    lons     = f["mesh/center_lons"][:]
-    lats     = f["mesh/center_lats"][:]
-
-    # All frames
-    frames = sorted(f["frames"].keys())
-    times  = np.array([f[f"frames/{fr}/t"][()] for fr in frames])
-    depths = np.stack([f[f"frames/{fr}/water_depth"][:] for fr in frames])
-
-# depths.shape = (n_frames, n_cells)
-print(depths[-1].max())   # peak depth in final frame
+    t      = f["results/t"][:]
+    depth  = f["results/water_depth"]            # (n_frames, n_cells)
+    final  = depth[-1, :]                        # one frame
+    gauge  = depth[:, 1234]                      # one cell's time series
+    lons   = f["mesh/center_lons"][:]
+    lats   = f["mesh/center_lats"][:]
+    offs   = f["mesh/polygon_offsets"][:]
+    plon, plat = f["mesh/polygon_lon"][:], f["mesh/polygon_lat"][:]
+    poly0  = np.column_stack([plon[offs[0]:offs[1]], plat[offs[0]:offs[1]]])
+    argv   = json.loads(f["run/argv"][()])
+    opts   = json.loads(f["run/options"][()])
 ```
 
-### Reading with xarray (recommended for analysis)
+With xarray:
 
 ```python
 import xarray as xr
-import h5py
-import numpy as np
-
 with h5py.File("sim.h5") as f:
-    frames = sorted(f["frames"].keys())
-    times  = [f[f"frames/{fr}/t"][()] for fr in frames]
-    lons   = f["mesh/center_lons"][:]
-    lats   = f["mesh/center_lats"][:]
-    depths = np.stack([f[f"frames/{fr}/water_depth"][:] for fr in frames])
-
-ds = xr.Dataset(
-    {"water_depth": (["time", "cell"], depths)},
-    coords={"time": times, "lon": ("cell", lons), "lat": ("cell", lats)}
-)
+    ds = xr.Dataset(
+        {"water_depth": (["time", "cell"], f["results/water_depth"][:])},
+        coords={"time": f["results/t"][:],
+                "lon": ("cell", f["mesh/center_lons"][:]),
+                "lat": ("cell", f["mesh/center_lats"][:])})
 ```
+
+### Format 1 (FloodA5 ≤ 0.3.x)
+
+`/mesh` with `cell_ids`, `elevations`, `center_lons`, `center_lats` (and
+static variables); one group per output time, `/frames/000001/`, …, each
+holding `t` and the per-cell variables above as `(n_cells,)` datasets
+(`flux_Q` only in frames where it was non-zero). No run record, geometry or
+summary. `io/FloodA5Output.jl` reads it; re-run such runs with 0.4.0 to get
+a format-2 file.
 
 ---
 

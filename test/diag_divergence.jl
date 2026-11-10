@@ -15,6 +15,8 @@
 # while it is still small (between 1e-9 m and 1e-3 m), from a log-linear fit.
 
 using HDF5, Printf, Statistics
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 a, b = ARGS[1], ARGS[2]
 label = length(ARGS) >= 3 ? ARGS[3] : basename(b)
@@ -23,15 +25,12 @@ rows = NamedTuple[]
 h5open(a) do A; h5open(b) do B
     ida = read(A["mesh/cell_ids"]); idb = read(B["mesh/cell_ids"])
     ida == idb || error("the two files have different cell order or meshes")
-    ka = sort(collect(keys(A["frames"])), by = x -> parse(Int, x))
-    kb = Set(keys(B["frames"]))
-    for k in ka
-        k in kb || continue
-        ga = A["frames"][k]; gb = B["frames"][k]
-        t  = read(ga["t"])
-        ha = read(ga["water_depth"]); hb = read(gb["water_depth"])
-        ua = read(ga["velocity"]);    ub = read(gb["velocity"])
-        va = read(ga["volume"]);      vb = read(gb["volume"])
+    ta = FO.frame_times(A)
+    for k in 1:min(FO.n_frames(A), FO.n_frames(B))   # frames paired by index
+        t  = ta[k]
+        ha = FO.read_frame(A, "water_depth", k); hb = FO.read_frame(B, "water_depth", k)
+        ua = FO.read_frame(A, "velocity", k);    ub = FO.read_frame(B, "velocity", k)
+        va = FO.read_frame(A, "volume", k);      vb = FO.read_frame(B, "volume", k)
         wet = findall(i -> ha[i] > 0.05 || hb[i] > 0.05, eachindex(ha))
         dh = isempty(wet) ? [0.0] : abs.(ha[wet] .- hb[wet])
         du = isempty(wet) ? [0.0] : abs.(ua[wet] .- ub[wet])

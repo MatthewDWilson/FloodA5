@@ -54,10 +54,15 @@
 #       [--n-dirs 8|16] [--radius-m R] [--saturation-threshold T]
 #
 #   julia --project=. test/test_octagonal_anisotropy.jl --input FILE.h5 --list-frames
+#
+#   N is the 1-based frame index (the same number as the old /frames/NNNNNN
+#   group name); output-format 1 and 2 files both work (io/FloodA5Output.jl).
 
 using HDF5
 using Statistics
 using Printf
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 const EARTH_R = 6_371_000.0
 
@@ -71,21 +76,22 @@ end
 const ARGS_V = String.(ARGS)
 const DO_LIST = "--list-frames" in ARGS_V
 
+# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
 function _frame_names(f)
-    return sort(collect(keys(f["frames"])))
+    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
 end
 
 function _list_frames(h5_path::String)
     h5open(h5_path, "r") do f
         names = _frame_names(f)
+        ts = FO.frame_times(f)
         println("Frames in $h5_path:")
         @printf("%8s  %10s  %8s  %10s\n", "frame#", "t (s)", "n_wet", "max_depth")
-        for nm in names
-            grp = f["frames/$nm"]
-            t = haskey(grp, "t") ? read(grp["t"]) : NaN
-            sat = read(grp["saturation"])
+        for (k, nm) in enumerate(names)
+            t = ts[k]
+            sat = FO.read_frame(f, "saturation", k)
             n_wet = count(>=(1.0), sat)
-            depth = haskey(grp, "water_depth") ? read(grp["water_depth"]) : Float64[]
+            depth = FO.has_var(f, "water_depth") ? FO.read_frame(f, "water_depth", k) : Float64[]
             md = isempty(depth) ? NaN : maximum(depth)
             @printf("%8s  %10.1f  %8d  %10.4f\n", nm, t, n_wet, md)
         end
@@ -101,14 +107,13 @@ function _read_frame(h5_path::String, frame_idx::Int)
         cell_lats = read(f["mesh/center_lats"])
         names = _frame_names(f)
         fname = lpad(string(frame_idx), 6, '0')
-        haskey(f["frames"], fname) ||
+        1 <= frame_idx <= length(names) ||
             error("Frame $fname not found in $h5_path. Available: " *
                   "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
                   "Run with --list-frames to inspect.")
-        grp = f["frames/$fname"]
-        sat   = read(grp["saturation"])
-        depth = haskey(grp, "water_depth") ? read(grp["water_depth"]) : fill(NaN, length(sat))
-        t     = haskey(grp, "t") ? read(grp["t"]) : NaN
+        sat   = FO.read_frame(f, "saturation", frame_idx)
+        depth = FO.has_var(f, "water_depth") ? FO.read_frame(f, "water_depth", frame_idx) : fill(NaN, length(sat))
+        t     = FO.frame_times(f)[frame_idx]
         return cell_lons, cell_lats, sat, depth, t
     end
 end

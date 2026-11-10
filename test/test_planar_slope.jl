@@ -28,6 +28,10 @@
 #   julia --project=. test/test_planar_slope.jl \
 #       --baseline test/planar_embankment/planar_baseline.h5 --list-frames
 #
+# --frame N is the 1-based frame index (the same number as the old
+# /frames/NNNNNN group name); output-format 1 and 2 files both work
+# (io/FloodA5Output.jl).
+#
 # Direction convention: angle = atand(vel_v, vel_u) — standard mathematical
 # convention, NOT the compass-bearing convention used in test_point_spread.jl.
 #   0°    = due east   (the analytically correct downslope direction here)
@@ -44,6 +48,8 @@
 using HDF5
 using Statistics
 using Printf
+isdefined(Main, :FloodA5Output) || include(joinpath(@__DIR__, "..", "io", "FloodA5Output.jl"))
+const FO = FloodA5Output
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -111,21 +117,22 @@ end
 # HDF5 access
 # ---------------------------------------------------------------------------
 
+# Frame labels (1-based index, zero-padded as the old /frames/NNNNNN names)
 function _frame_names(f)
-    return sort(collect(keys(f["frames"])))
+    return [lpad(string(k), 6, '0') for k in 1:FO.n_frames(f)]
 end
 
 function _list_frames(h5_path::String)
     h5open(h5_path, "r") do f
         names = _frame_names(f)
+        ts = FO.frame_times(f)
         println("Frames in $h5_path:")
         @printf("%8s  %10s  %8s  %10s\n", "frame#", "t (s)", "n_wet", "max_depth")
-        for nm in names
-            grp = f["frames/$nm"]
-            t = haskey(grp, "t") ? read(grp["t"]) : NaN
-            sat = read(grp["saturation"])
+        for (k, nm) in enumerate(names)
+            t = ts[k]
+            sat = FO.read_frame(f, "saturation", k)
             n_wet = count(>=(1.0), sat)
-            depth = read(grp["water_depth"])
+            depth = FO.read_frame(f, "water_depth", k)
             md = isempty(depth) ? NaN : maximum(depth)
             @printf("%8s  %10.1f  %8d  %10.4f\n", nm, t, n_wet, md)
         end
@@ -154,19 +161,18 @@ function _read_frame_velocity(h5_path::String, frame_idx::Int;
     h5open(h5_path, "r") do f
         names = _frame_names(f)
         fname = lpad(string(frame_idx), 6, '0')
-        haskey(f["frames"], fname) ||
+        1 <= frame_idx <= length(names) ||
             error("Frame $fname not found in $h5_path. Available: " *
                   "$(first(names, 3))…$(last(names, 3)) ($(length(names)) total). " *
                   "Run with --list-frames to inspect.")
-        grp = f["frames/$fname"]
-        haskey(grp, "vel_u") || error(
+        FO.has_var(f, "vel_u") || error(
             "Frame $fname in $h5_path has no vel_u/vel_v dataset. This file " *
             "was written before vel_u/vel_v were added to _write_frame! — " *
             "re-run the simulation with the updated FloodModel.jl.")
-        u = read(grp["vel_u"])
-        v = read(grp["vel_v"])
-        depth = read(grp["water_depth"])
-        t = haskey(grp, "t") ? read(grp["t"]) : NaN
+        u = FO.read_frame(f, "vel_u", frame_idx)
+        v = FO.read_frame(f, "vel_v", frame_idx)
+        depth = FO.read_frame(f, "water_depth", frame_idx)
+        t = FO.frame_times(f)[frame_idx]
 
         n = length(u)
         wet = depth .> depth_threshold

@@ -76,13 +76,13 @@ for p in paths
         nbrs === nothing && (nbrs = neighbour_lists(mesh_path, read(f["mesh/cell_ids"])))
         # HDF5 frames are in mesh row order, so MESH's static vars line up.
         z  = "--sgs" in ARGS ? copy(MESH[].static_vars["sgs_z_min"]) : read(f["mesh/elevations"])
-        ks = sort(collect(keys(f["frames"])))
+        ts = FO.frame_times(f)
         series = []
-        for (n, k) in enumerate(ks)
-            (n % every == 0 || n == length(ks)) || continue
-            g = f["frames"][k]
-            m = frame_metrics(z, read(g["water_depth"]), read(g["vel_u"]), read(g["vel_v"]), nbrs)
-            push!(series, (t = read(g["t"]), m = m))
+        for n in eachindex(ts)
+            (n % every == 0 || n == length(ts)) || continue
+            m = frame_metrics(z, FO.read_frame(f, "water_depth", n), FO.read_frame(f, "vel_u", n),
+                              FO.read_frame(f, "vel_v", n), nbrs)
+            push!(series, (t = ts[n], m = m))
         end
         if "--series" in ARGS
             for s in series

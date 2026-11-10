@@ -449,7 +449,7 @@ against the synthetic-DEM regression suite — remains future work.
 `state.velocity` (scalar magnitude), `state.vel_u`, `state.vel_v`
 (directional components) are computed after the flux/volume update each
 step from a flux-weighted average across each cell's edges, and written to
-HDF5 output (`/frames/{idx}/velocity`, `vel_u`, `vel_v`). Per-cell velocity
+HDF5 output (`/results/velocity`, `vel_u`, `vel_v`; `/frames/{idx}/…` before 0.4.0). Per-cell velocity
 direction was found to be a noisy diagnostic in practice — near the
 wet/dry front, the locally dominant direction is the front-normal, not the
 regional flow direction, which swamps the regional signal in an
