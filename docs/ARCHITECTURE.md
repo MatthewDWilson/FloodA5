@@ -289,15 +289,45 @@ recorded metrics; `cases/scripts/` helper scripts used by preparation steps.
 
 ### `visualisation/`
 
-Four scripts and one static directory:
+Scripts and one static directory:
 
 | File | Description |
 |---|---|
-| `MakieVisualiser.jl` | GLMakie native desktop window. Module `MakieVisualiser`. |
+| `MakieVisualiser.jl` | GLMakie native desktop window. Module `MakieVisualiser`: `start`/`push_frame!` (live, `--vis makie`) and `replay` (an output file, same window plus frame and speed sliders). |
+| `replay_data.jl` | Module `FloodA5Replay`: the Makie-free half of replay (below). |
+| `replay.jl` | Replay command line (`replay.jl RUN.h5`, also `FloodModel.jl --replay`). |
 | `VisualisationServer.jl` | Oxygen.jl HTTP + WebSocket server. Module `VisualisationServer`. |
-| `view_h5_output.jl` | Standalone post-processing viewer for HDF5 output. |
+| `view_h5_output.jl` | Standalone post-processing viewer for HDF5 output (map, cell time series, `--animate` PNG frames). |
+| `FloodViewer.jl` | Simpler standalone GLMakie viewer for HDF5 output. |
 | `visualise_mesh.jl` | Publication-quality mesh and SGS figures (wire-frame, cross-section, hypsometric curve). |
 | `cesium/` | CesiumJS static files (`index.html`, `config.example.json`). |
+
+**Replay (`replay_data.jl` + `MakieVisualiser.replay`).** `FloodA5Replay`
+(pure Julia, on `analysis/` `FA`) opens an output file: a mesh adaptor with
+the fields `start` reads (`cells[i].id/center_lon/center_lat/boundary`,
+`resolution` from the median cell area), neighbour adjacency and source
+cells (for ring mode), the whole-run series (domain volume and wet cells
+read per frame; input volume rebuilt from the run record — options plus the
+embedded input files, parsed with `boundaryinputs/timeseries_io.jl` —
+and checked against `/summary`; removed volume known per frame only for
+closed boundaries), and `frame(k)` (one frame cached, HDF5 file held open).
+`MakieVisualiser.replay` builds the live window through `start(...;
+_replay = …)` (adds a slider row; the strip moves to row 4) and drives it
+through the same `_set_fields!`/`_update_ring_bars!` as `push_frame!`.
+CI tests the data half (`test/test_replay.jl`); the window is checked by
+rendering it to PNG (`replay.jl RUN.h5 --png out.png`).
+
+**`FloodA5Plots.jl` (`FP`) — static figures with CairoMakie.** For notebooks
+and papers (`USER_GUIDE.md` §6.5); loads `analysis/` (`FA`), not
+`FloodModel.jl`. `plots/core.jl` is Makie-free (house-style colours, colour
+ranges, frame matching, extent classes, map projection, run sources, run
+styles) and is what CI tests (`test/test_plots.jl`, loaded without
+CairoMakie); `plots/makie.jl` is included only when CairoMakie loads
+(`fieldmap(s)`, `difference_map`, `extent_map`, `timeseries`,
+`storage_plot`, `mass_balance_plot`, `mark_points!`, `house_theme`) and is
+exercised by `test/test_plots_render.jl` (local only). Maps draw the cells
+as one fan-triangulated `mesh!`. `test/channel_bench/plot_channel.jl` uses
+its house style.
 
 ---
 
@@ -745,6 +775,8 @@ Key test files:
 | `bench_output_format.jl` | Format 1 vs format 2: write time, size, read times on an existing run (not in CI) |
 | `test_analysis.jl` | `analysis/` (FA): one format-2 fixture run, then `test/analysis/test_*.jl` — core loading, parquet mesh = format-2 mesh, compare/divergence, shape, noise, channel metrics on synthetic fields with known answers (`FA_TEST_ONLY=shape,…` runs a subset) |
 | `test_cases.jl` | `cases/` (FC): every registered case well formed (C1); the smoke tier end to end through the runner, against its expected values (C2); run reuse, changed commands, dry run (C3) |
+| `test_plots.jl` | `visualisation/FloodA5Plots.jl` (FP) without CairoMakie: colour ranges, labels/times, frame matching, extent classes (= `FA.compare_fields`), map projection and aspect, run sources, run styles, on synthetic runs (P1–P8) |
+| `test_plots_render.jl` | FP with CairoMakie: renders every figure type for two fixture runs to PNG (local only; skipped without CairoMakie) |
 | `test_flat_rainpoint.jl` | Flat-terrain point-source integration test |
 | `test_noc_correction.jl` | WLSQ gradient weights and reconstruction correctness (T-NOC1–5) |
 | `test_point_spread.jl` | Point-spread directional-bias benchmark (convex hull, Polsby–Popper circularity) |

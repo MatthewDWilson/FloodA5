@@ -35,6 +35,8 @@ TESTS=(
   test/test_open_boundary.jl
   test/test_output_format.jl
   test/test_analysis.jl
+  test/test_replay.jl
+  test/test_plots.jl
   test/test_cases.jl
 )
 

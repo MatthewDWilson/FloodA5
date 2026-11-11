@@ -9,13 +9,16 @@
 #                              resolution and mesh (SWE and local-inertial)
 #
 #   julia --project=. test/channel_bench/plot_channel.jl RUNDIR
-# (needs CairoMakie: the full project environment)
+# (needs CairoMakie: the full project environment). Colours, markers and theme:
+# the shared house style of visualisation/FloodA5Plots.jl (FP).
 
 using CairoMakie, Statistics, Printf
+include(joinpath(@__DIR__, "..", "..", "visualisation", "FloodA5Plots.jl"))
+const FP = FloodA5Plots
 
 const RUNDIR = ARGS[1]
-const INK, INK2, MUTED, GRID, SURF = colorant"#0b0b0b", colorant"#52514e", colorant"#898781", colorant"#e1e0d9", colorant"#fcfcfb"
-const MESHES = [("a5", "A5", colorant"#2a78d6", :circle), ("cart", "Cartesian", colorant"#eb6834", :rect)]
+const INK, INK2, MUTED, SURF = FP.INK, FP.INK2, FP.MUTED, FP.SURF
+const MESHES = [(m, FP.MESH_STYLE[m].label, FP.MESH_STYLE[m].color, FP.MESH_STYLE[m].marker) for m in ("a5", "cart")]
 const SOLVERS = [("swe", "Full shallow-water (SWE)"), ("li", "Local-inertial (0.3.0 default scheme)")]
 
 lines_ = readlines(joinpath(RUNDIR, "metrics.csv"))
@@ -24,12 +27,7 @@ rows = [split(l, ",") for l in lines_[2:end]]
 num(r, k) = parse(Float64, r[col(k)])
 get_(mesh, solver) = [r for r in rows if r[col("mesh")] == mesh && r[col("solver")] == solver]
 
-set_theme!(Theme(fontsize = 13, textcolor = INK, backgroundcolor = SURF,
-                 Axis = (backgroundcolor = SURF, xgridcolor = GRID, ygridcolor = GRID,
-                         leftspinecolor = MUTED, bottomspinecolor = MUTED, topspinevisible = false,
-                         rightspinevisible = false, xtickcolor = MUTED, ytickcolor = MUTED,
-                         xticklabelcolor = INK2, yticklabelcolor = INK2, titlealign = :left,
-                         titlefont = :bold)))
+set_theme!(FP.house_theme())
 
 # ── metric against cell size ────────────────────────────────────────────────
 fig = Figure(size = (980, 640))

@@ -3,8 +3,10 @@ FloodViewer.jl
 --------------
 Standalone post-processing viewer for FloodA5 simulation output.
 
-Loads mesh geometry from a GeoParquet file and time-series data from a
-sim.h5 HDF5 file, then displays an interactive GLMakie window with:
+Loads mesh geometry (from the output file itself for format-2 files,
+FloodA5 0.4.0+; from the GeoParquet mesh if one is given — needed for
+format-1 files) and time-series data from a sim.h5 HDF5 file, then
+displays an interactive GLMakie window with:
   - Pentagon map coloured by the selected variable
   - Frame slider + Play/Pause button
   - Variable selector (water_depth, saturation, volume)
@@ -13,24 +15,27 @@ sim.h5 HDF5 file, then displays an interactive GLMakie window with:
 
 Usage
 -----
-  julia --threads auto FloodViewer.jl mesh.parquet sim.h5
-  julia --threads auto FloodViewer.jl mesh.parquet sim.h5 --var saturation
-  julia --threads auto FloodViewer.jl mesh.parquet sim.h5 --fps 10
+  julia --project=. --threads auto visualisation/FloodViewer.jl sim.h5            # format 2
+  julia --project=. --threads auto visualisation/FloodViewer.jl mesh.parquet sim.h5
+  julia --project=. --threads auto visualisation/FloodViewer.jl sim.h5 --var saturation
+  julia --project=. --threads auto visualisation/FloodViewer.jl sim.h5 --fps 10
+
+The main viewer for output files is the live viewer's replay mode
+(visualisation/replay.jl); this one is a simpler alternative.
 
 Dependencies
 ------------
-  using Pkg; Pkg.add(["GLMakie", "HDF5", "JSON3", "Colors"])
-  Python env must have: geopandas, pyarrow (for parquet loading)
+  The root project (GLMakie, HDF5); the mesh is read in pure Julia
+  (analysis/FloodA5Analysis.jl), no Python.
 """
 
-push!(LOAD_PATH, joinpath(dirname(@__DIR__), "mesh"))
-include(joinpath(dirname(@__DIR__), "mesh", "A5Grid.jl"))
-
-using .A5Grid
 using GLMakie
 using HDF5
 isdefined(Main, :FloodA5Output) || include(joinpath(dirname(@__DIR__), "io", "FloodA5Output.jl"))
 const FO = FloodA5Output
+isdefined(Main, :FloodA5Analysis) ||
+    include(joinpath(dirname(@__DIR__), "analysis", "FloodA5Analysis.jl"))
+const FA = FloodA5Analysis
 using Printf
 using Dates
 using Statistics: quantile
@@ -40,38 +45,36 @@ using Statistics: quantile
 # ---------------------------------------------------------------------------
 
 """
-    load_mesh_geometry(parquet_path) → (polys, lons, lats, elevations, n_cells)
+    load_mesh_geometry(path) → (polys, lons, lats, elevations, n_cells)
 
-Load the A5Mesh from a GeoParquet file and return:
+Load the mesh geometry — from a GeoParquet mesh (`FA.load_mesh_parquet`,
+row order) or from a format-2 output file's `/mesh` (`FA.mesh_geometry`) —
+and return:
   polys      — Vector of polygon vertex arrays, each (2 × n_verts), for poly!
   lons/lats  — cell centre coordinates
   elevations — bed elevation per cell (NaN if not sampled)
   n_cells    — number of cells
 """
-function load_mesh_geometry(parquet_path::String)
-    @info "Loading mesh geometry from $(basename(parquet_path))..."
-    mesh = load_mesh_geoparquet(parquet_path)
-    n    = length(mesh.cells)
-
-    # Convert boundaries to the format GLMakie poly! expects:
-    # a Vector of (2 × n_verts) matrices (x=lon, y=lat columns)
-    polys = Vector{Matrix{Float64}}(undef, n)
-    for (i, cell) in enumerate(mesh.cells)
-        bnd = cell.boundary
-        m   = length(bnd)
-        mat = Matrix{Float64}(undef, 2, m)
-        for j in 1:m
-            mat[1, j] = bnd[j][1]   # lon
-            mat[2, j] = bnd[j][2]   # lat
-        end
-        polys[i] = mat
+function load_mesh_geometry(path::String)
+    @info "Loading mesh geometry from $(basename(path))..."
+    mesh = if lowercase(splitext(path)[2]) in (".h5", ".hdf5")
+        FO.format_version(path) >= 2 ||
+            error("$path is a format-1 output file (FloodA5 ≤ 0.3.x) without mesh " *
+                  "geometry: give the mesh's .parquet as well")
+        FA.mesh_geometry(path)
+    else
+        FA.load_mesh_parquet(path)
     end
+    n = length(mesh)
+    isempty(mesh.polygons) && error("no cell polygons in $path")
 
-    lons  = [c.center_lon for c in mesh.cells]
-    lats  = [c.center_lat for c in mesh.cells]
-    elevs = get(mesh.static_vars, "elevation", fill(NaN, n))
+    # GLMakie poly! takes (2 × n_verts) matrices (x=lon, y=lat columns)
+    polys = mesh.polygons
+    lons  = mesh.lon
+    lats  = mesh.lat
+    elevs = mesh.elevation
 
-    @info "  $(n) cells loaded  (resolution $(mesh.resolution))"
+    @info "  $(n) cells loaded"
     return polys, lons, lats, elevs, n
 end
 
@@ -164,15 +167,16 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    launch_viewer(parquet_path, h5_path; initial_var="water_depth", fps=5)
+    launch_viewer(mesh_path, h5_path; initial_var="water_depth", fps=5)
 
-Open the interactive GLMakie flood viewer.
+Open the interactive GLMakie flood viewer. `mesh_path`: the GeoParquet mesh,
+or the output file itself (format 2: it carries the mesh).
 """
-function launch_viewer(parquet_path::String, h5_path::String;
+function launch_viewer(mesh_path::String, h5_path::String;
                        initial_var::String = "water_depth",
                        fps::Float64        = 5.0)
 
-    polys, lons, lats, elevs, n_cells = load_mesh_geometry(parquet_path)
+    polys, lons, lats, elevs, n_cells = load_mesh_geometry(mesh_path)
     sim = load_sim_data(h5_path)
 
     sim.n_cells == n_cells ||
@@ -293,7 +297,7 @@ function launch_viewer(parquet_path::String, h5_path::String;
 
     # Play / Pause
     play_btn = Button(panel_grid[6, 1];
-        label     = @lift($playing_obs ? "⏸  Pause" : "▶  Play"),
+        label     = @lift($playing_obs ? "Pause [||]" : "Play  [>]"),
         tellwidth = true)
 
     on(play_btn.clicks) do _
@@ -339,8 +343,8 @@ Total volume : %.0f m³
         halign=:left, tellwidth=false, fontsize=11)
 
     # Export button
-    export_btn = Button(panel_grid[10, 1];
-        label="💾  Export PNG", tellwidth=true)
+    export_btn = Button(panel_grid[10, 1];  # (no emoji: Makie 0.24 has no font for them)
+        label="Export PNG", tellwidth=true)
 
     on(export_btn.clicks) do _
         fname = @sprintf("flooda5_frame_%04d_%s.png",
@@ -395,12 +399,18 @@ end
 function main()
     args = copy(ARGS)
 
-    if "--help" in args || "-h" in args || length(args) < 2
+    # positional: [mesh.parquet] sim.h5 (the values of --var/--fps excluded)
+    pos = [a for (i, a) in enumerate(args)
+           if !startswith(a, "--") && !(i > 1 && args[i-1] in ("--var", "--fps"))]
+    if "--help" in args || "-h" in args || !(1 <= length(pos) <= 2)
         println("""
 FloodViewer.jl — interactive post-processing viewer for FloodA5 output
 
 Usage:
-    julia --threads auto FloodViewer.jl <mesh.parquet> <sim.h5> [options]
+    julia --project=. --threads auto visualisation/FloodViewer.jl [mesh.parquet] <sim.h5> [options]
+
+The mesh is read from sim.h5 for format-2 files (FloodA5 0.4.0+); format-1
+files (≤ 0.3.x) need the GeoParquet mesh as well.
 
 Options:
     --var VAR     Initial variable to display (default: water_depth)
@@ -409,18 +419,18 @@ Options:
     --help        Show this help
 
 Examples:
-    julia --threads auto FloodViewer.jl meshdem2.parquet sim.h5
-    julia --threads auto FloodViewer.jl meshdem2.parquet sim.h5 --var saturation
-    julia --threads auto FloodViewer.jl meshdem2.parquet sim.h5 --fps 10
+    julia --project=. --threads auto visualisation/FloodViewer.jl sim.h5
+    julia --project=. --threads auto visualisation/FloodViewer.jl meshdem2.parquet sim.h5
+    julia --project=. --threads auto visualisation/FloodViewer.jl sim.h5 --var saturation --fps 10
 """)
         exit(0)
     end
 
-    parquet_path = args[1]
-    h5_path      = args[2]
+    h5_path   = pos[end]
+    mesh_path = length(pos) == 2 ? pos[1] : h5_path
 
-    isfile(parquet_path) || error("Parquet file not found: $parquet_path")
-    isfile(h5_path)      || error("HDF5 file not found: $h5_path")
+    isfile(mesh_path) || error("Mesh file not found: $mesh_path")
+    isfile(h5_path)   || error("HDF5 file not found: $h5_path")
 
     # --var
     var_idx = findfirst(==("--var"), args)
@@ -432,7 +442,7 @@ Examples:
     fps_idx = findfirst(==("--fps"), args)
     fps = fps_idx !== nothing ? parse(Float64, args[fps_idx + 1]) : 5.0
 
-    fig = launch_viewer(parquet_path, h5_path;
+    fig = launch_viewer(mesh_path, h5_path;
                         initial_var = initial_var,
                         fps         = fps)
 
@@ -446,4 +456,7 @@ Examples:
     end
 end
 
-main()
+# Run from the command line; `include` only defines the functions
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
