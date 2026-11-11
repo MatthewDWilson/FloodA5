@@ -33,6 +33,30 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-11-11
+
+Notebooks (PATCH). Neither the model nor the output format changes.
+
+### Added
+- **Jupyter notebooks** (`notebooks/`, Julia kernel "Julia FloodA5 1.12";
+  setup in `notebooks/README.md`). Each describes every simulation, prints
+  the exact commands from the case registry and documents the Python steps
+  (DEM generator; A5 meshes through pya5). It runs the cases through the
+  registry (reusing completed runs), checks them, and analyses and draws
+  them with `FA`/`FP`:
+  - `01_planar.ipynb`: `planar_slope`, `planar_embankment`
+  - `02_channel.ipynb`: `channel`; the full series from its recorded
+    metrics
+  - `03_carlisle.ipynb`: `carlisle`, including where the A5
+    local-inertial storage excess sits by depth class
+- Committed without outputs. `notebooks/nbtools.jl` provides `strip` (writes
+  JSON exactly as Jupyter does), `check` and `execute` (headless).
+  `test/test_notebooks.jl` (in CI) checks the kernel, that there are no
+  outputs, and that every code cell parses.
+- Public registry names for notebooks and scripts (`FC.python_command`,
+  `FC.planar_params`, `FC.log_mass_balance`, …), checked in
+  `test/test_cases.jl`.
+
 ## [0.4.3] — 2026-11-11
 
 Visualisation (PATCH). Simulation results and the output format do not change.

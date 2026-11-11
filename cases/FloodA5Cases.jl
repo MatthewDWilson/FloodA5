@@ -477,4 +477,30 @@ for f in sort(readdir(joinpath(@__DIR__, "registry")))
     endswith(f, ".jl") && include(joinpath(@__DIR__, "registry", f))
 end
 
+# ───────────────── public names for notebooks and scripts ─────────────────
+# The notebooks (notebooks/*.ipynb) use these; the underscore helpers in the
+# registry files may be renamed freely, these may not (test/test_cases.jl).
+
+"FloodA5's Python (PyCall's), as the `:python` preparation steps run it."
+python_command() = _python()
+"Environment for running FloodA5's Python: conda's `Library/bin` etc. on PATH."
+python_env(extra_path = String[]) = _env(extra_path)
+"The planar DEM generator's parameters (`planar_embankment_params.json` in `dir`)."
+planar_params(dir) = _planar_params(dir)
+"(lat, lon) of the planar generator's injection point for the given domain."
+planar_point(; kw...) = _planar_point(; kw...)
+"Half-width (m) of the band about the source row excluded from the N/S split (planar_slope)."
+const PLANAR_SLOPE_BAND = _PS_BAND
+"Depth (m) above which a cell counts as wet in the planar_embankment metrics."
+const EMBANKMENT_WET_DEPTH = _PE_WET
+"x-range (m) of a cell polygon in the planar_embankment frame."
+embankment_xrange(mesh, p) = _pe_xrange(mesh, p)
+"(added, removed, domain, error, rel) of a run from its log (the model's step lines)."
+log_mass_balance(logpath) = _case_log_mass_balance(logpath)
+"The channel series table (rms/spread of Δη over orientations) from metric rows."
+channel_series_table(rows) = _ch_series(rows)
+
+export python_command, python_env, planar_params, planar_point, PLANAR_SLOPE_BAND,
+       EMBANKMENT_WET_DEPTH, embankment_xrange, log_mass_balance, channel_series_table
+
 end # module

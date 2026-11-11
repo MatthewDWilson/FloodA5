@@ -14,13 +14,13 @@ Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026
 `maint-*` pushes); every merged PR bumps the version and is tagged
 (`VERSIONING.md`). Status (2026-11-11): 0.4.0 released (WP0–WP5, the SWE
 reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
-backends, the channel series, output format 2). Current phase:
-**consolidation** — reproducible self-describing HDF5 output (done: 0.4.0,
-below), one analysis module (done: 0.4.1, `analysis/`), a test-case
-registry and runner (done: 0.4.2, `cases/`), HDF5 replay in the GLMakie
-viewer and static plots (done: 0.4.3, `visualisation/replay.jl`,
-`FloodA5Plots`), then Jupyter notebooks
-(planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
+backends, the channel series, output format 2). The **consolidation** phase
+is complete: reproducible self-describing HDF5 output (0.4.0, below), one
+analysis module (0.4.1, `analysis/`), a test-case registry and runner
+(0.4.2, `cases/`), HDF5 replay in the GLMakie viewer and static plots
+(0.4.3, `visualisation/replay.jl`, `FloodA5Plots`), Jupyter notebooks
+(0.4.4, `notebooks/`; commit them stripped: `notebooks/nbtools.jl strip`).
+Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series). SGS meshes built before
 2026-10-21 are refused until rebuilt or

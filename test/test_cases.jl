@@ -36,6 +36,12 @@ ENV["FLOODA5_CASES_DIR"] = ROOT
         isempty(c.doc) || @test isfile(joinpath(FC.REPO, first(split(c.doc))))
         @test occursin(c.name, sprint(io -> FC.show_case(c; io)))
     end
+    # the public names the notebooks use (notebooks/*.ipynb)
+    for s in (:python_command, :python_env, :planar_params, :planar_point, :PLANAR_SLOPE_BAND,
+              :EMBANKMENT_WET_DEPTH, :embankment_xrange, :log_mass_balance, :channel_series_table)
+        @test isdefined(FC, s)
+    end
+    @test FC.planar_point() == FC._planar_point()
 end
 
 @testset "C2 — smoke tier end to end" begin
