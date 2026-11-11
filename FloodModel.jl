@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.4.4"
+const FLOODA5_VERSION = "0.5.0"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -4695,15 +4695,21 @@ DEM options:
                      for independent Monte Carlo uncertainty runs.
 
 Flow model options:
-  --flow-model M     Flow routing method: sgs (default) or standard.
-                       sgs       Sub-Grid Sampling — hypsometric volume lookup.
-                                 Captures partial wetting, ditches, channels.
-                                 Requires DEM for pre-processing (auto-run).
-                       standard  Local inertial on mean cell elevation (fast).
-                       swe       Full shallow-water equations (R1 reference
-                                 solver: HLLC, hydrostatic reconstruction,
-                                 mean cell elevation). A benchmark for the
-                                 local-inertial solvers; slower.
+  --flow-model M     Hydraulic engine: standard (default), swe or sgs.
+                       standard  Local-inertial (Bates et al. 2010) on cell-mean
+                                 elevations, with the --scheme corrections
+                                 (default since 0.5.0; fast).
+                       swe       Full shallow-water equations (HLLC, hydrostatic
+                                 reconstruction, MUSCL + SSP-RK2, cell-mean
+                                 elevations). Keeps inertia and advection: use it
+                                 where they matter (dam breaks, rapidly varying
+                                 or supercritical flow, flow around obstacles);
+                                 typically 5-10x more time steps than standard.
+                       sgs       Sub-grid sampling: local-inertial with each cell's
+                                 hypsometric curve and edge sills from the DEM
+                                 (partial wetting, sub-cell channels). Needs a
+                                 mesh built with --flow-model sgs. Opt-in: its
+                                 behaviour at high stage is under investigation.
   --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
   --sgs-samples N    Halton points per cell for SGS pre-processing (default: 512).
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
@@ -5372,10 +5378,10 @@ function main(args=String[])
     scheme_val,                    args = _pop_flag(args, "--scheme")
     q_centre_mode_val,      args = _pop_flag(args, "--q-centre-mode")
 
-    # Default flow method: standard for mesh-only runs (no simulation needed),
-    # sgs for simulation runs (full accuracy by default).
-    flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) :
-                   mesh_only ? :standard : :sgs
+    # Default flow method: standard (local-inertial with the --scheme defaults)
+    # since 0.5.0; sgs before. SGS is opt-in until its behaviour at high stage is
+    # understood (PROJECT_STATE, "SGS at the Carlisle peak").
+    flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) : :standard
     sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
     sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 512
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
@@ -5454,7 +5460,7 @@ function main(args=String[])
     end
 
     flow_method ∉ (:sgs, :standard, :swe) &&
-        (println("ERROR: --flow-model must be 'sgs' or 'standard'\n"); print_help(1))
+        (println("ERROR: --flow-model must be 'standard', 'sgs' or 'swe'\n"); print_help(1))
 
     # --friction-model component|vector  (WP1, 2026-10; default: component —
     # Bates 2010 face-normal friction, unchanged behaviour). Applies to both
@@ -5541,8 +5547,8 @@ function main(args=String[])
     # only wired into step_standard!'s Phase A — step_sgs! is untouched by
     # the directional-bias-reformulation and flow-direction-fixes branches
     # (see FloodA5_DirectionalBias_MergeHandover.md §5.1, "not touched this
-    # branch"). Warn rather than silently doing nothing, since --flow-model
-    # sgs is the default and a user could easily combine these flags without
+    # branch"). Warn rather than silently doing nothing: a user could easily
+    # combine these flags with --flow-model sgs (the default before 0.5.0) without
     # realising they have no effect.
     if flow_method == :sgs
         if momentum_model in (:cell, :blend)

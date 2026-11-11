@@ -721,7 +721,8 @@ Add a case to the registry: a file `cases/registry/<name>.jl` that calls
    `test/<domain>/`; everything derived (resampled DEMs, meshes, hydrographs)
    is a `Prep` step writing into `{case}`, never shared with another case.
 2. **Runs**: one `Job` per run, with every flag that matters explicit,
-   including `--flow-model` (the default is SGS) and any scheme choice, so
+   including `--flow-model` (the default changed from sgs to standard in
+   0.5.0) and any scheme choice, so
    that a change of defaults cannot silently change the case.
 3. **Metrics**: computed with the analysis module (`FA`); add new metrics to
    `analysis/` as pure functions, not to the case file.

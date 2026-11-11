@@ -33,6 +33,30 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-12
+
+Default engine change (MINOR): results change for runs that did not pass
+`--flow-model`.
+
+### Changed
+- ⚠ **`--flow-model` defaults to `standard`** (local-inertial on cell-mean
+  elevations with the `--scheme recommended` corrections); it was `sgs`. SGS
+  becomes opt-in until its behaviour at high stage is understood: on
+  Carlisle near the Eden peak (`carlisle_peak`, 0.4.4) it stores 2.5× the
+  SWE reference, with the river about 3 m high (PROJECT_STATE). A synthetic
+  test is in preparation. Pass `--flow-model sgs` to keep the old default.
+  Every test and registry case already passes `--flow-model` explicitly.
+- `--rerun` pins the recorded flow model and scheme when the original
+  command left them to the default. A run made before 0.5.0 without
+  `--flow-model` therefore reruns as SGS, as recorded, not as today's
+  default (`test/test_output_format.jl` O7).
+- **`--flow-model swe` is a full option**, not a benchmark only. It keeps
+  inertia and advection, so it is the engine for dam breaks, rapidly varying
+  or supercritical flow and flow around obstacles, and remains the reference
+  for the local-inertial engines. It typically takes 5–10× the time steps of
+  `standard`. Help text, README and USER_GUIDE updated.
+- The `--flow-model` error message lists all three engines.
+
 ## [0.4.4] — 2026-11-11
 
 Notebooks (PATCH). Neither the model nor the output format changes.

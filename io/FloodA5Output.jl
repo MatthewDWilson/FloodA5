@@ -544,6 +544,16 @@ function rerun_argv(h5path::AbstractString; output::AbstractString,
             end
             push!(out, flag); append!(out, vals)
         end
+        # Defaults change between versions (0.5.0: --flow-model sgs → standard):
+        # pin the recorded flow model and scheme when the command line left them
+        # to the default, so that the rerun is the recorded run.
+        given = Set(first.(_argv_items(argv)))
+        opts = get(info, "options", Dict{String,Any}())
+        for (flag, val) in (("--flow-model", get(info, "flow_model", get(opts, "flow_model", nothing))),
+                            ("--scheme", get(opts, "scheme", nothing)))
+            (val === nothing || isempty(string(val)) || flag in given || flag in over) && continue
+            append!(out, [flag, string(val)])
+        end
         append!(out, extra)
         append!(out, ["--meshload", mesh])
         "--output" in over || append!(out, ["--output", output])

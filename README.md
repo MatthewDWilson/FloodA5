@@ -200,22 +200,27 @@ results.
 
 ## Solvers
 
-**`--flow-model sgs`** (default) — Sub-Grid Sampling. WSE is derived from stored
-volume via a pre-computed hypsometric curve. The edge flux uses a Manning hydraulic
-radius (R-A) formulation rather than the wide-channel approximation, giving
-physically correct friction scaling in confined channels. Requires a DEM.
+**`--flow-model standard`** (default since 0.5.0) — local-inertial (Bates et al.
+2010) on the cell-mean elevation, with the directional-bias and Δt-consistency
+corrections of `--scheme recommended`. Fast; the general-purpose engine.
 
-**`--flow-model standard`** — the same local-inertial scheme on the mean cell
-elevation (no sub-grid tables). Faster, and useful for exploration or for runs
-without a DEM.
+**`--flow-model swe`** — the full shallow-water equations (HLLC, hydrostatic
+reconstruction, MUSCL + SSP-RK2 with `--swe-order 2`, the default) on the same
+meshes, beds, sources and boundaries. It keeps the inertia and advection that the
+local-inertial approximation drops, so choose it where they matter: dam breaks,
+rapidly varying or supercritical flow, flow around obstacles. It is also the
+reference for the local-inertial engines (`docs/HYDRAULICS.md` §15.10). It
+typically takes 5–10 times as many time steps as `standard`.
 
-**`--flow-model swe`** — a full shallow-water reference solver (HLLC, hydrostatic
-reconstruction, MUSCL + SSP-RK2 with `--swe-order 2`, the default) on the same meshes,
-beds, sources and boundaries. About ten times the cost of `standard`; it is there to
-benchmark the local-inertial schemes against (`docs/HYDRAULICS.md` §15.10), not for
-production runs.
+**`--flow-model sgs`** — Sub-Grid Sampling (opt-in; it was the default before
+0.5.0). WSE is derived from stored volume via a pre-computed hypsometric curve,
+and the edge flux uses a Manning hydraulic radius (R-A) formulation, so sub-cell
+channels and partial wetting are represented. It requires a DEM and a mesh built
+with `--flow-model sgs`. Its behaviour at high stage is under investigation: on
+Carlisle near the peak it holds the river about 3 m above the other engines
+(`projectinstructions/PROJECT_STATE.md`).
 
-Both solvers use the Bates et al. (2010) local-inertial formulation with a
+The local-inertial engines (`standard`, `sgs`) use the Bates et al. (2010) formulation with a
 Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7)
 and a momentum state that matches the flux actually transferred.
 
