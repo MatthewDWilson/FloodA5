@@ -177,4 +177,32 @@ end
     @test nf[1] == nf[2] >= 3
 end
 
+@testset "O7 — default flow model (standard since 0.5.0); --rerun pins the recorded one" begin
+    d = mktempdir()
+    mesh = FO.extract_mesh(O1, d)
+    p = joinpath(DIR, "o10.h5")
+    _run(["--meshload", mesh, "--rainfall", "40", "--sim-duration", "120",
+          "--output", p, "--output-interval", "60"])                # no --flow-model
+    ri = FO.run_info(p)
+    @test ri["flow_model"] == "standard" && !("--flow-model" in ri["argv"])
+    rv = FO.rerun_argv(p; output = joinpath(d, "r.h5"), workdir = d)
+    i = findfirst(==("--flow-model"), rv)
+    @test i !== nothing && rv[i+1] == "standard"                  # pinned
+    j = findfirst(==("--scheme"), rv)
+    @test j !== nothing && rv[j+1] == string(ri["options"]["scheme"])
+    # a run that took the pre-0.5.0 default (sgs) reruns as sgs, not as today's default
+    q = joinpath(DIR, "o10_sgs.h5"); cp(p, q)
+    h5open(q, "r+") do f
+        HDF5.delete_attribute(f["run"], "flow_model")
+        attributes(f["run"])["flow_model"] = "sgs"
+    end
+    rv = FO.rerun_argv(q; output = joinpath(d, "r2.h5"), workdir = d)
+    @test rv[findfirst(==("--flow-model"), rv) + 1] == "sgs"
+    # an explicit flag is kept, not duplicated; an override wins
+    rv = FO.rerun_argv(O1; output = joinpath(d, "r3.h5"), workdir = d)
+    @test count(==("--flow-model"), rv) == 1
+    rv = FO.rerun_argv(q; output = joinpath(d, "r4.h5"), workdir = d, overrides = ["--flow-model", "swe"])
+    @test count(==("--flow-model"), rv) == 1 && rv[findfirst(==("--flow-model"), rv) + 1] == "swe"
+end
+
 println("\nOutput-format tests complete.")

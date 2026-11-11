@@ -232,7 +232,7 @@ All arguments are named flags; position does not matter.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--flow-model sgs\|standard\|swe` | `sgs` | Flow routing method. `sgs`: sub-grid hypsometric (R-A kernel). `standard`: the same local-inertial scheme on the mean cell elevation (no sub-grid tables). `swe`: full shallow-water reference solver on the mean cell elevation (HLLC; about 10× the cost; for benchmarking, `HYDRAULICS.md` §15.10). The local-inertial scheme options do not apply to it. |
+| `--flow-model standard\|swe\|sgs` | `standard` (since 0.5.0; `sgs` before) | Hydraulic engine. `standard`: local-inertial on the mean cell elevation with the `--scheme` corrections. `swe`: the full shallow-water equations on the mean cell elevation (HLLC). It keeps inertia and advection: choose it where they matter (dam breaks, rapidly varying or supercritical flow, obstacles) or as the reference for the local-inertial engines (`HYDRAULICS.md` §15.10). It typically takes 5–10× the time steps, and the local-inertial scheme options do not apply to it. `sgs`: sub-grid hypsometric local-inertial (R-A kernel), opt-in. It needs a mesh built with `--flow-model sgs`, and its behaviour at high stage is under investigation. |
 | `--swe-order 1\|2` | 2 | `swe` only: first order (Euler) or second order (MUSCL, Barth–Jespersen limiter, SSP-RK2). |
 | `--backend cpu\|gpu\|ka-cpu` | `cpu` | (WP5) Where the time steps run. `cpu`: CPU threads. `gpu`: an NVIDIA GPU through CUDA.jl (full project environment); every flow model, with edge momentum and `--cfl-mode local` (the defaults); the state stays on the GPU and is copied back for output and log lines. Results agree with `cpu` to round-off (`ARCHITECTURE.md` §6a). `ka-cpu`: the GPU code path on the CPU, for testing. |
 | `--swe-viscosity C_E` | 0 | `swe` only: eddy viscosity ν_t = C_E·h·u* (u* the friction velocity; typical river values C_E ≈ 0.1–0.6). |
@@ -246,7 +246,7 @@ All arguments are named flags; position does not matter.
 ### 4.3a Directional-bias correction options (standard flow only)
 
 **These flags are designed for, and validated only with, `--flow-model standard`.**
-Under `--flow-model sgs` (the default flow model), `--face-flux-method diamond`
+Under `--flow-model sgs`, `--face-flux-method diamond`
 and `--momentum-model cell` are ignored (a startup warning is printed).
 `--gradient-correction on`, `--gradient-correction-alpha` and
 `--q-centre-theta` **do** affect `step_sgs!` (it applies the legacy WLSQ + V̂
