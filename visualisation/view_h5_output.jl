@@ -115,11 +115,19 @@
 
 #
 
-# Animation mode renders the actual A5 pentagonal cell boundaries from the
+# Animation mode renders the actual cell boundaries. Output files of format 2
 
-# supplied GeoParquet mesh. The HDF5 file deliberately does not contain mesh
+# (FloodA5 0.4.0+) carry the mesh polygons and are used as they are; format-1
 
-# geometry, so --mesh is required for --animate.
+# files (≤ 0.3.x) have no geometry, so --mesh MESH.parquet is required for
+
+# --animate with them (it overrides the embedded mesh if given).
+
+#
+
+# For replaying a run in the live viewer's window (time-series strip, flow
+
+# arrows, frame slider) use visualisation/replay.jl.
 
 #
 
@@ -332,7 +340,7 @@ function parse_args(args)
 
           julia --project=. view_h5_output.jl <h5file>
 
-              --animate --mesh MESH.parquet
+              --animate [--mesh MESH.parquet]   (--mesh: format-1 files)
 
               [--frame-step N]
 
@@ -763,6 +771,8 @@ function load_h5(h5file::String)
 
             n_frames   = n_frames,
 
+            h5file     = h5file,
+
         )
 
     end
@@ -980,6 +990,54 @@ function load_parquet(path::String)
         if haskey(mesh.static_vars, key_string)
 
             df[!, col] = mesh.static_vars[key_string]
+
+        end
+
+    end
+
+    return df, idx
+
+end
+
+
+
+"""
+
+The mesh embedded in a format-2 output file (`/mesh` polygons, file cell
+
+order), as the same DataFrame and index `load_parquet` returns.
+
+"""
+
+function load_h5_mesh(h5file::String)
+
+    ct    = FO.cell_table(h5file)
+
+    polys = FO.cell_polygons(h5file)
+
+    ids   = [normalise_cell_id(c) for c in ct.ids]
+
+    idx   = Dict{String,Int}(ids[i] => i for i in eachindex(ids))
+
+    df = DataFrame(
+
+        cell_id    = ids,
+
+        center_lon = Float64.(ct.lon),
+
+        center_lat = Float64.(ct.lat),
+
+        boundary   = [[P[:, j] for j in axes(P, 2)] for P in polys],
+
+        elevation  = Float64.(ct.elevation),
+
+    )
+
+    h5open(h5file, "r") do f
+
+        for key in ("sgs_cell_area", "sgs_z_min", "sgs_z_max")
+
+            haskey(f["mesh"], key) && (df[!, Symbol(key)] = Float64.(read(f["mesh"][key])))
 
         end
 
@@ -1640,13 +1698,21 @@ function animate_h5(
 
 )
 
-    isnothing(mesh_path) &&
+    # No --mesh: the polygons embedded in a format-2 output file
+    if isnothing(mesh_path)
 
-        error("--mesh is required when using --animate")
+        FO.format_version(data.h5file) >= 2 ||
 
-    isfile(mesh_path) ||
+            error("--mesh is required with --animate for a format-1 output " *
+                  "file (FloodA5 ≤ 0.3.x: no mesh geometry in the file)")
 
-        error("Mesh file not found: $mesh_path")
+    else
+
+        isfile(mesh_path) ||
+
+            error("Mesh file not found: $mesh_path")
+
+    end
 
     frame_step > 0 ||
 
@@ -1656,7 +1722,8 @@ function animate_h5(
 
     println("Animation mode")
 
-    println("  Mesh       : $mesh_path")
+    println("  Mesh       : " *
+            (isnothing(mesh_path) ? "embedded in the output file" : mesh_path))
 
     println("  Frame step : $frame_step")
 
@@ -1689,6 +1756,10 @@ function animate_h5(
     println("  Colormap   : $colormap")
 
     mesh_df, mesh_idx =
+
+        isnothing(mesh_path) ?
+
+        load_h5_mesh(data.h5file) :
 
         load_parquet(mesh_path)
 

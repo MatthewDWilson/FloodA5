@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.4.2"
+const FLOODA5_VERSION = "0.4.3"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -4994,6 +4994,12 @@ Output options:
                      from its embedded mesh and input files. Output goes to
                      FILE_rerun.h5 unless --output is given; any other flag
                      given with --rerun replaces the recorded one.
+  --replay FILE.h5   Replay a recorded run in the GLMakie viewer (the
+                     --vis makie window, with a frame slider); runs no
+                     simulation. Options: --fps N, --var depth|saturation|
+                     volume|velocity|ring, --from T, --paused, --png OUT.png,
+                     --mesh FILE.parquet (format-1 files only). Same as
+                     visualisation/replay.jl FILE.h5 [options].
 
 Examples:
   # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation
@@ -5261,6 +5267,18 @@ function main(args=String[])
     if "--version" in args || "-v" in args
         println("FloodA5 v$FLOODA5_VERSION")
         exit(0)
+    end
+
+    # --replay FILE.h5 [options]: show a recorded run in the GLMakie viewer
+    # (visualisation/replay.jl). Runs no simulation, so like --rerun it is
+    # handled before any other flag and never reaches a run record.
+    rp = findfirst(==("--replay"), args)
+    if rp !== nothing
+        isdefined(MakieVisualiser, :replay) ||
+            error("--replay needs the GLMakie viewer: unset FLOODA5_NO_VIS")
+        isdefined(Main, :replay_main) ||
+            Base.include(Main, joinpath(@__DIR__, "visualisation", "replay.jl"))
+        return Base.invokelatest(Main.replay_main, String.(deleteat!(copy(args), rp)))
     end
 
     # --rerun FILE.h5 [overrides…] (0.4.0): the run recorded in an output file

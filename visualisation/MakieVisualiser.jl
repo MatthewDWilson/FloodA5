@@ -69,6 +69,14 @@
 #                                              vol_removed=0.0,
 #                                              n_wet=…, sim_step=…, sim_dt=…)
 #   MakieVisualiser.stop(vis)
+#
+# Replay of an output file (same window)
+# --------------------------------------
+#   rd  = FloodA5Replay.open_replay("run.h5")        # visualisation/replay_data.jl
+#   vis = MakieVisualiser.replay(rd; fps = 4)         # blocks until closed
+# adds a frame slider and a speed slider (row 3; the strip moves to row 4);
+# the Pause/Play button drives playback and the strip shows the whole run
+# with a marker at the shown frame. Command line: visualisation/replay.jl.
 
 module MakieVisualiser
 
@@ -77,7 +85,7 @@ using Printf
 using Dates
 using Statistics
 
-export MakieVis, start, stop, push_frame!
+export MakieVis, start, stop, push_frame!, replay, replay_goto!
 
 # ---------------------------------------------------------------------------
 # Colour palette (dark theme)
@@ -204,6 +212,11 @@ mutable struct MakieVis
 
     figure  :: Figure
     running :: Threads.Atomic{Bool}
+
+    # The window's screen (`nothing` if not displayed) and, in replay mode,
+    # the replay controls and data (see `replay`); `nothing` when live.
+    screen    :: Any
+    replay_ui :: Any
 end
 
 # ---------------------------------------------------------------------------
@@ -297,7 +310,9 @@ function start(mesh;
                source_indices   :: Vector{Int}                   = Int[],
                adjacency        :: Dict{String, Vector{String}}  = Dict{String,Vector{String}}(),
                max_ring_display :: Int                           = 40,
-               title            :: String                        = "FloodA5 — Makie Viewer")
+               title            :: String                        = "FloodA5 — Makie Viewer",
+               show_window      :: Bool                          = true,
+               _replay                                           = nothing)
 
     n        = length(mesh.cells)
     cell_ids = [c.id for c in mesh.cells]
@@ -387,7 +402,8 @@ function start(mesh;
     ring_vol_obs = Observable(zeros(Float64, max(n_display, 1)))
 
     # --- Figure & layout ----------------------------------------
-    fig = Figure(size = (1200, 800), backgroundcolor = BG_DARK)
+    # (replay mode: 40 px taller for the frame-slider row)
+    fig = Figure(size = (1200, _replay === nothing ? 800 : 840), backgroundcolor = BG_DARK)
 
     # Geographic limits: expand lon half-span by 1/cos(lat) so that one degree
     # of longitude occupies the same data-unit length as one degree of latitude.
@@ -485,7 +501,9 @@ function start(mesh;
     end
 
     # ── Row 4: bottom time-series strip ──────────────────────────────────────
-    ts_grid    = fig[3, 1:2] = GridLayout()
+    # Replay mode (`replay`): a frame-slider row goes above the strip
+    is_replay  = _replay !== nothing
+    ts_grid    = fig[is_replay ? 4 : 3, 1:2] = GridLayout()
     n_ts_cols  = ring_mode ? 4 : 3
 
     # Left — volume budget
@@ -508,7 +526,8 @@ function start(mesh;
     lines!(ax_vol, ts_time, ts_vol_domain;
            color = COL_DOMAIN,  linewidth = 1.8, label = "Domain")
     lines!(ax_vol, ts_time, ts_vol_removed;
-           color = COL_REMOVED, linewidth = 1.8, label = "Removed")
+           color = COL_REMOVED, linewidth = 1.8,
+           label = is_replay ? _replay.removed_label : "Removed")
     axislegend(ax_vol;
         position        = :lt,
         backgroundcolor = RGBAf(0.07, 0.09, 0.12, 0.85),
@@ -519,7 +538,7 @@ function start(mesh;
 
     # Centre — mass-balance error
     ax_mb = Axis(ts_grid[1, 2];
-        title           = "Mass balance error",
+        title           = is_replay ? _replay.mb_title : "Mass balance error",
         titlecolor      = COL_TEXT,
         titlesize       = 12,
         xlabel          = "Sim time (s)",
@@ -703,7 +722,7 @@ function start(mesh;
     on(vel_thresh_slider.value) do v; vel_thresh_obs[] = Float64(v); end
 
     # Row 8: pause / play
-    Label(ctrl_grid[8, 1], "Simulation:";
+    Label(ctrl_grid[8, 1], is_replay ? "Playback:" : "Simulation:";
         color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = false)
     _sim_paused = Ref(false)
     _paused_obs = Observable(false)
@@ -852,7 +871,40 @@ function start(mesh;
         )
     end
 
-    display(fig)
+    # Replay mode: frame slider, frame/time readout and playback speed in a row
+    # above the time-series strip, and a current-time marker on the strip.
+    replay_ui = nothing
+    if is_replay
+        nfr = _replay.nframes
+        rp_grid = fig[3, 1:2] = GridLayout()
+        Label(rp_grid[1, 1], "Frame:";
+            color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = true)
+        frame_slider = Slider(rp_grid[1, 2]; range = 1:max(nfr, 1), startvalue = 1)
+        frame_text = Observable("")
+        Label(rp_grid[1, 3], frame_text;
+            color = COL_TEXT, fontsize = 11, font = "DejaVu Sans Mono",
+            halign = :left, width = 250, tellwidth = true)
+        Label(rp_grid[1, 4], "Speed (frames/s):";
+            color = COL_LABEL, fontsize = 11, halign = :right, tellwidth = true)
+        fps_slider = Slider(rp_grid[1, 5];
+            range = [0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 30.0],
+            startvalue = 4.0, width = 140, tellwidth = true)
+        Label(rp_grid[1, 6], lift(v -> @sprintf("%g", v), fps_slider.value);
+            color = COL_TEXT, fontsize = 11, halign = :left, width = 30, tellwidth = true)
+        colgap!(rp_grid, 8)
+        rowsize!(fig.layout, 3, Fixed(30))
+        rowsize!(fig.layout, 4, Fixed(200))
+        rowgap!(fig.layout, 3, 4)
+        t_marker = lift(t -> [t], sim_time)
+        for ax in (ax_vol, ax_mb, ax_wet)
+            vlines!(ax, t_marker; color = COL_LABEL, linewidth = 1.0, linestyle = :dot)
+        end
+        replay_ui = (slider = frame_slider, fps_slider = fps_slider, frame_text = frame_text,
+                     menu = menu, pause_btn = pause_btn, paused_obs = _paused_obs,
+                     nframes = nfr)
+    end
+
+    screen = show_window ? display(fig) : nothing
     @info "MakieVisualiser: window open — $(n) cells, res $(mesh.resolution)" *
           (ring_mode ? "  [ring mode: $(n_rings) rings]" : "")
 
@@ -875,6 +927,7 @@ function start(mesh;
         ax_vol, ax_mb, ax_wet, ax_ring,
         fig,
         Threads.Atomic{Bool}(true),
+        screen, replay_ui,
     )
     # Wire _sim_paused Ref to vis.paused after construction.
     # The on(pause_btn.clicks) handler writes to _sim_paused[]; here we add
@@ -925,25 +978,8 @@ function push_frame!(vis         :: MakieVis,
         out
     end
 
-    vis.data_depth[]  = _align(depths)
-    vis.data_sat[]    = _align(saturations)
-    vis.data_vol[]    = _align(volumes)
-    vis.data_vel[]    = _align(velocities)
-    # Update vel_v silently first (no notification), then notify vel_u once.
-    # This ensures _update_quiver! sees the current vel_v when it fires.
-    vis.data_vel_v.val = _align(vel_v)
-    vis.data_vel_u[]   = _align(vel_u)   # triggers on(data_vel_u) with both current
-
-    # Update the displayed variable
-    idx      = vis.selected_var[]
-    is_ring  = vis.n_rings > 0 && idx == length(vis.var_labels)
-    new_data = if is_ring
-        vis.data_ring   # ring index is static — only needs to be set once
-    else
-        _pick_data(idx, vis.data_depth, vis.data_sat, vis.data_vol, vis.data_vel)
-    end
-    vis.display_data[] = new_data
-    is_ring || (vis.colorrange[] = _auto_range(new_data, idx))
+    idx, new_data = _set_fields!(vis, _align(depths), _align(saturations), _align(volumes),
+                                 _align(velocities), _align(vel_u), _align(vel_v))
 
     frame            = vis.frame_idx[] + 1
     vis.sim_time[]   = t
@@ -975,22 +1011,7 @@ function push_frame!(vis         :: MakieVis,
     vis.ts_wet[]         = copy(vis._ts_wet)
 
     # --- Ring bar chart update -----------------------------------------------
-    if vis.n_rings > 0
-        n_disp   = length(vis.ring_vol_obs[])
-        vol_data = vis.data_vol[]
-        new_ring_vol = zeros(Float64, n_disp)
-        for r in 0:n_disp-1
-            cells_in_ring = vis.ring_cell_map[r + 1]
-            new_ring_vol[r + 1] = sum(vol_data[i] for i in cells_in_ring; init=0.0)
-        end
-        vis.ring_vol_obs[] = new_ring_vol   # fresh vector → barplot! redraws
-
-        # Scale ring bar chart y-axis to the maximum bar height with headroom
-        if vis.ax_ring !== nothing
-            hi = max(maximum(new_ring_vol; init=0.0) * 1.15, 1.0)
-            ylims!(vis.ax_ring, 0.0, hi)
-        end
-    end
+    _update_ring_bars!(vis)
 
     # --- Auto-scale time-series axes -----------------------------------------
     t_hi = max(t, 1.0)
@@ -1011,6 +1032,216 @@ function stop(vis::MakieVis)
     vis.running[] = false
     try; GLMakie.closeall(); catch; end
     @info "MakieVisualiser: window closed"
+end
+
+# ---------------------------------------------------------------------------
+# Replay of an output file
+# ---------------------------------------------------------------------------
+
+"""
+    replay(rd; fps = 4.0, var = 1, from = 1, playing = true,
+           show_window = true, block = show_window, max_ring_display = 40) → MakieVis
+
+Replay a run from its output file in the live viewer's window: same map,
+colorbar, controls, diagnostics and time-series strip, plus a frame slider
+(scrub to any output time), a playback speed slider (output frames per
+second) and the Pause/Play button driving playback. `rd` is a
+`FloodA5Replay.ReplayData` (`visualisation/replay_data.jl`; duck-typed:
+`mesh`, `t`, `series`, `source_indices`, `adjacency`, `label`, `notes`,
+`frame(k)`). `visualisation/replay.jl` is the command line.
+
+- `var`: initial display variable (index or label, e.g. "Velocity (m/s)").
+- `from`: first frame shown (index).
+- The strip shows the whole run at once with a dotted marker at the shown
+  frame; the volume series come from `rd.series` (see replay_data.jl for
+  what is read from the file and what is rebuilt from the run record).
+- `show_window = false` builds the figure without a window (for `save`);
+  `block = true` returns only when the window is closed.
+"""
+function replay(rd; fps::Real = 4.0, var = 1, from::Integer = 1, playing::Bool = true,
+                show_window::Bool = true, block::Bool = show_window,
+                max_ring_display::Int = 40)
+    t  = Float64.(rd.t)
+    nf = length(t)
+    nf > 0 || error("replay: no frames")
+    s  = rd.series
+    vis = start(rd.mesh;
+                source_indices   = Vector{Int}(rd.source_indices),
+                adjacency        = rd.adjacency,
+                max_ring_display = max_ring_display,
+                title            = "FloodA5 replay — " * rd.label,
+                show_window      = show_window,
+                _replay          = (nframes = nf, removed_label = s.removed_label,
+                                    mb_title = s.mb_title))
+    ui = merge(vis.replay_ui, (rd = rd, current = Ref(0)))
+    vis.replay_ui = ui
+
+    # Whole-run time series (fixed during replay)
+    for (buf, obs, v) in ((vis._ts_time,        vis.ts_time,        t),
+                          (vis._ts_vol_added,   vis.ts_vol_added,   s.vol_added),
+                          (vis._ts_vol_domain,  vis.ts_vol_domain,  s.vol_domain),
+                          (vis._ts_vol_removed, vis.ts_vol_removed, s.vol_removed),
+                          (vis._ts_mb_err,      vis.ts_mb_err,      s.mb_err),
+                          (vis._ts_wet,         vis.ts_wet,         s.n_wet))
+        append!(buf, Float64.(v))
+        obs[] = copy(buf)
+    end
+    fmax(v) = maximum((x for x in v if isfinite(x)); init = 0.0)
+    # (2% headroom on the right when end-of-run markers sit at the last time)
+    t_hi = max(t[end], 1.0) * (s.end_mark === nothing ? 1.0 : 1.02)
+    for ax in (vis.ax_vol, vis.ax_mb, vis.ax_wet)
+        xlims!(ax, 0.0, t_hi)
+    end
+    _autolimits_vol!(vis.ax_vol, fmax(s.vol_added), fmax(s.vol_domain), fmax(s.vol_removed))
+    mbv = Float64[x for x in s.mb_err if isfinite(x)]
+    if s.end_mark !== nothing
+        te, rem, mb = s.end_mark
+        scatter!(vis.ax_vol, [te], [rem]; color = COL_REMOVED, marker = :diamond,
+                 markersize = 11, label = "Removed (end)")
+        if isfinite(mb)
+            scatter!(vis.ax_mb, [te], [mb]; color = COL_MBERR, marker = :diamond, markersize = 11)
+            push!(mbv, mb)
+        end
+        _autolimits_vol!(vis.ax_vol, fmax(s.vol_added), fmax(s.vol_domain),
+                         max(fmax(s.vol_removed), rem))
+    end
+    isempty(mbv) ? ylims!(vis.ax_mb, -1.0, 1.0) : _autolimits_mb!(vis.ax_mb, mbv)
+    _autolimits_wet!(vis.ax_wet, Float64.(s.n_wet), vis.n_cells)
+
+    # Frame display: the slider drives everything
+    on(k -> _replay_show!(vis, k), ui.slider.value)
+    on(ui.menu.selection) do _
+        ui.current[] > 0 && _replay_diag!(vis, ui.current[])
+    end
+    vi = var isa Integer ? Int(var) : findfirst(==(String(var)), vis.var_labels)
+    vi === nothing && error("replay: unknown variable $(repr(var)); one of $(vis.var_labels)")
+    vi == 1 || (ui.menu.i_selected[] = vi)
+    replay_goto!(vis, from)
+
+    # Play/Pause: Play at the last frame starts again from the first
+    on(ui.pause_btn.clicks) do _
+        !vis.paused[] && ui.slider.value[] >= nf && replay_goto!(vis, 1)
+    end
+    playing || (ui.pause_btn.clicks[] = ui.pause_btn.clicks[] + 1)
+    set_close_to!(ui.fps_slider, Float64(fps))
+
+    foreach(n -> @info("Replay: " * n), rd.notes)
+    if show_window
+        if block
+            try
+                _replay_loop(vis)
+            catch e
+                e isa InterruptException || rethrow(e)
+            finally
+                stop(vis)
+            end
+        else
+            @async _replay_loop(vis)
+        end
+    end
+    return vis
+end
+
+"""
+    replay_goto!(vis, k) → vis
+
+Show frame `k` of a replay (moves the slider).
+"""
+function replay_goto!(vis::MakieVis, k::Integer)
+    ui = vis.replay_ui
+    ui === nothing && error("replay_goto!: not a replay window")
+    k = clamp(Int(k), 1, ui.nframes)
+    if ui.slider.value[] == k
+        _replay_show!(vis, k)             # the slider would not move: show directly
+    else
+        set_close_to!(ui.slider, k)       # → on(slider.value) → _replay_show!
+    end
+    ui.current[] == k || _replay_show!(vis, k)
+    return vis
+end
+
+# Playback: advance one frame per 1/fps s while not paused; pause at the end.
+function _replay_loop(vis::MakieVis)
+    ui = vis.replay_ui
+    while vis.running[] && (vis.screen === nothing || isopen(vis.screen))
+        if !vis.paused[]
+            k = ui.slider.value[]
+            if k >= ui.nframes
+                ui.pause_btn.clicks[] = ui.pause_btn.clicks[] + 1
+            else
+                set_close_to!(ui.slider, k + 1)
+            end
+        end
+        sleep(1.0 / ui.fps_slider.value[])
+    end
+end
+
+function _replay_show!(vis::MakieVis, k::Integer)
+    ui = vis.replay_ui
+    rd = ui.rd
+    fr = rd.frame(k)
+    _set_fields!(vis, fr.depth, fr.saturation, fr.volume, fr.velocity, fr.vel_u, fr.vel_v)
+    ui.current[]    = k
+    vis.sim_time[]  = Float64(rd.t[k])
+    vis.frame_idx[] = k
+    _update_ring_bars!(vis)
+    ui.frame_text[] = @sprintf("%d / %d   t = %s", k, ui.nframes, _fmt_time(Float64(rd.t[k])))
+    _replay_diag!(vis, k)
+    return nothing
+end
+
+function _replay_diag!(vis::MakieVis, k::Integer)
+    ui  = vis.replay_ui
+    rd  = ui.rd
+    s   = rd.series
+    idx = vis.selected_var[]
+    shown = vis.display_data[]
+    mx  = maximum((x for x in shown if isfinite(x)); init = 0.0)
+    vis.diag_text[] = _build_replay_diag(
+        Float64(rd.t[k]), k, ui.nframes, rd.label, vis.var_labels[idx], mx,
+        Int(round(s.n_wet[k])), s.vol_added[k], s.vol_domain[k], s.vol_removed[k],
+        s.mb_err[k], s.removed_label, s.inputs_known, s.removed,
+        vis.n_cells, vis.resolution)
+end
+
+function _fmt_val(x::Float64)
+    isfinite(x) || return @sprintf("%10s", "n/a")
+    return @sprintf("%10.4g", x)
+end
+
+function _build_replay_diag(t, k, nf, label, var_label, max_val, n_wet,
+                            vol_added, vol_domain, vol_removed, mb_err,
+                            removed_label, inputs_known, removed, n_cells, res)::String
+    s   = "─────────────────────"
+    vl  = length(var_label) > 13 ? var_label[1:13] : rpad(var_label, 13)
+    fl  = length(label) > 19 ? label[1:16] * "…" : label
+    rl  = removed === :closed ? " Removed   " : " Rem+MB err"
+    out = removed === :closed ? "closed" : removed === :end_only ? "end only" : "unknown"
+    lines = [
+        " FloodA5  Replay",
+        " $s",
+        @sprintf(" Sim time   %10s", _fmt_time(t)),
+        @sprintf(" Frame      %10s", "$k / $nf"),
+        " File  $fl",
+        " $s",
+        " Variable",
+        "  $vl",
+        @sprintf(" Max value  %10.4g", max_val),
+        @sprintf(" Wet cells  %10d",   n_wet),
+        " $s",
+        " Mass Balance",
+        " Vol added  " * _fmt_val(vol_added),
+        " Vol domain " * _fmt_val(vol_domain),
+        rl * _fmt_val(vol_removed),
+        " MB error   " * _fmt_val(mb_err),
+        " $s",
+        @sprintf(" Mesh cells %10d", n_cells),
+        @sprintf(" Resolution %10d", res),
+        " $s",
+        @sprintf(" Inputs     %10s", inputs_known ? "rebuilt" : "n/a"),
+        @sprintf(" Outflow    %10s", out),
+    ]
+    return join(lines, "\n")
 end
 
 # ---------------------------------------------------------------------------
@@ -1136,6 +1367,55 @@ function _update_quiver!(segs_obs   :: Observable{Vector{Point2f}},
     rots_obs[]  = rots
     sizes_obs[] = sizes
     lw_obs[]    = peak_lw
+end
+
+"""
+    _set_fields!(vis, depth, sat, vol, vel, vel_u, vel_v) → (idx, shown)
+
+Set the per-cell data Observables (mesh order) and the displayed variable
+with its colour range. Shared by `push_frame!` and replay.
+"""
+function _set_fields!(vis::MakieVis, depth, sat, vol, vel, vel_u, vel_v)
+    vis.data_depth[]  = depth
+    vis.data_sat[]    = sat
+    vis.data_vol[]    = vol
+    vis.data_vel[]    = vel
+    # Update vel_v silently first (no notification), then notify vel_u once.
+    # This ensures _update_quiver! sees the current vel_v when it fires.
+    vis.data_vel_v.val = vel_v
+    vis.data_vel_u[]   = vel_u   # triggers on(data_vel_u) with both current
+
+    # Update the displayed variable
+    idx      = vis.selected_var[]
+    is_ring  = vis.n_rings > 0 && idx == length(vis.var_labels)
+    new_data = if is_ring
+        vis.data_ring   # ring index is static — only needs to be set once
+    else
+        _pick_data(idx, vis.data_depth, vis.data_sat, vis.data_vol, vis.data_vel)
+    end
+    vis.display_data[] = new_data
+    is_ring || (vis.colorrange[] = _auto_range(new_data, idx))
+    return idx, new_data
+end
+
+"Per-ring volume bar chart (ring mode only) from the current `data_vol`."
+function _update_ring_bars!(vis::MakieVis)
+    vis.n_rings > 0 || return
+    n_disp   = length(vis.ring_vol_obs[])
+    vol_data = vis.data_vol[]
+    new_ring_vol = zeros(Float64, n_disp)
+    for r in 0:n_disp-1
+        cells_in_ring = vis.ring_cell_map[r + 1]
+        new_ring_vol[r + 1] = sum(vol_data[i] for i in cells_in_ring; init=0.0)
+    end
+    vis.ring_vol_obs[] = new_ring_vol   # fresh vector → barplot! redraws
+
+    # Scale ring bar chart y-axis to the maximum bar height with headroom
+    if vis.ax_ring !== nothing
+        hi = max(maximum(new_ring_vol; init=0.0) * 1.15, 1.0)
+        ylims!(vis.ax_ring, 0.0, hi)
+    end
+    return
 end
 
 function _pick_data(idx, d_depth, d_sat, d_vol, d_vel)

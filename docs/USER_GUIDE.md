@@ -468,6 +468,38 @@ julia --threads auto FloodModel.jl \
     --vis makie
 ```
 
+**Replay of an output file.** The same window replays any run from its HDF5
+output — whether or not it was visualised live, and while it is still
+running (frames written so far):
+
+```bash
+julia --project=. --threads auto visualisation/replay.jl sim.h5
+julia --project=. --threads auto visualisation/replay.jl sim.h5 --var velocity --from 3600 --fps 8
+julia --project=. --threads auto FloodModel.jl --replay sim.h5          # the same
+julia --project=. visualisation/replay.jl sim.h5 --from 7200 --png t2h.png   # one frame to PNG, no window
+```
+
+A frame slider scrubs to any output time, a speed slider sets the playback
+rate (output frames per second) and Pause/Play drives playback; the display
+menu and flow arrows work on the shown frame. The time-series strip shows
+the whole run with a dotted marker at the shown frame:
+
+- *Domain* volume and wet cells: read from the file (every frame).
+- *Added*: rebuilt from the run record (rainfall, point sources and the
+  embedded hydrograph / `.bci` / `.bdy` files, integrated as the model's
+  mass balance) and checked against the recorded end-of-run total; not
+  shown if it cannot be rebuilt or does not match, and never for format-1
+  files.
+- *Removed*: the file stores outflow only at the end of the run. Closed
+  boundaries remove nothing; for open boundaries the strip shows
+  added − domain (= removed + mass-balance error, labelled so) and the
+  recorded end-of-run removed volume and error as ◆ markers.
+
+Options: `--fps N`, `--var depth|saturation|volume|velocity|ring`, `--from T`
+(s), `--paused`, `--png FILE`, `--mesh FILE.parquet` (format-1 files only:
+they carry no mesh geometry). In Julia: `rd = FloodA5Replay.open_replay("sim.h5")`
+(`visualisation/replay_data.jl`), then `MakieVisualiser.replay(rd)`.
+
 ### 6.2 CesiumJS viewer (`--vis cesium` or `--vis`)
 
 > **Note:** The CesiumJS viewer is currently paused in development. It is
@@ -497,7 +529,11 @@ version control. The viewer falls back to OpenStreetMap tiles if the token is ab
 
 ### 6.3 Post-processing viewer
 
-After a simulation, view stored output interactively:
+After a simulation, view stored output interactively (for the full viewer,
+replay the run: §6.1). Format-2 files (0.4.0+) carry the mesh, so
+`--animate` and `visualisation/FloodViewer.jl sim.h5` need no mesh file;
+format-1 files need it (`--animate --mesh mesh.parquet`,
+`FloodViewer.jl mesh.parquet sim.h5`).
 
 ```bash
 # Map at final frame, time series for a specific cell
@@ -524,6 +560,47 @@ julia --project=. visualisation/visualise_mesh.jl \
     --mesh my_mesh_sgs.parquet 6345f2518e800000 \
     --outdir figures/ --headless
 ```
+
+### 6.5 Static figures from output files (CairoMakie)
+
+`visualisation/FloodA5Plots.jl` (`FP`) draws maps, comparisons and time
+series of finished runs for notebooks and papers. It needs only the output
+files (format 2 carries the mesh; for ≤ 0.3.x files load runs with
+`parquet = …`) and the analysis module — not `FloodModel.jl` or Python.
+
+```julia
+include("visualisation/FloodA5Plots.jl"); const FP = FloodA5Plots; const FA = FP.FA
+using CairoMakie
+li  = FA.load_run("test/case_runs/carlisle/runs/a5_li.h5")
+swe = FA.load_run("test/case_runs/carlisle/runs/a5_swe.h5")
+
+FP.fieldmap(li; t = 4 * 3600)                    # depth map at 4 h (also var = :speed, :wse, …)
+FP.fieldmaps([li, swe], [2, 4, 6] .* 3600)       # runs × times, one colour range
+FP.difference_map(swe, li; t = 6 * 3600)         # Δh = li − swe on cells wet in either
+FP.extent_map(swe, li; t = 6 * 3600)             # hits / misses / false alarms, CSI
+FP.storage_plot([li, swe])                       # storage against time
+FP.mass_balance_plot(li)                         # Σ volume, dS/dt, summary check
+FP.timeseries([li, swe], [(lon = -2.925, lat = 54.897, label = "floodplain")])
+save("maps.png", FP.fieldmaps([li, swe], [7200.0]); px_per_unit = 2)
+```
+
+- Each function returning a `Figure` has a `…!(fig[i, j], …)` form for
+  composing panels; map panels return a `MapPanel` whose `coords` and
+  `range` can be passed to the next panel, and `FP.mark_points!(panel,
+  points; labels)` adds gauges or labels. `FP.activate!()` applies the house
+  style to figures you lay out yourself.
+- Maps draw the mesh polygons: `coords = :lonlat` (degrees, drawn to scale)
+  or `:local` (metres about `origin = :centre`, `:source` or `(lon, lat)`).
+  Cells with depth ≤ `dry_threshold` (0.01 m) show the `basemap`
+  (`:elevation` greys, `:grey`, `:none`). Colour ranges default to the
+  rounded 98th percentile of the wet values (symmetric for differences).
+- Times are matched to each run's nearest frame (within 60 % of the frame
+  interval); titles give the time as hh:mm.
+- Line plots style runs by mesh and solver when that identifies them (A5
+  blue, Cartesian orange; local-inertial solid, SWE dashed, SGS dotted),
+  otherwise by series colour (`style = :series`).
+- Speed: ~1 s per Carlisle-size map (30k cells) after the first call
+  (~20 s of compilation); ~6 s for 5 × 10⁵ cells.
 
 ---
 

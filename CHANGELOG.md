@@ -33,6 +33,43 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-11-11
+
+Visualisation (PATCH). Simulation results and the output format do not change.
+
+### Added
+- **Static figures** (`visualisation/FloodA5Plots.jl`, module `FloodA5Plots`, `FP`;
+  CairoMakie, from output files alone — no model, no Python): `fieldmap`/`fieldmaps`
+  (maps at a frame or a runs × times grid, elevation basemap, sources from
+  the run record), `difference_map`, `extent_map` (hits/misses/false alarms,
+  CSI), `timeseries`, `storage_plot`, `mass_balance_plot`; `…!` forms compose
+  panels for notebooks. A Carlisle res-18 map takes ~0.9 s. Makie-free parts
+  (`visualisation/plots/core.jl`: colour ranges, frame matching, extent
+  classes, projections) are tested in CI (`test/test_plots.jl`); every plot
+  type is rendered by the local `test/test_plots_render.jl`.
+  `test/channel_bench/plot_channel.jl` uses its house style (byte-identical
+  PNGs).
+- **Replay of an output file in the GLMakie viewer**: `visualisation/replay.jl
+  RUN.h5` (or `FloodModel.jl --replay RUN.h5`) opens the `--vis makie` window
+  on a recorded run, with a frame slider, a playback-speed slider and
+  Pause/Play; `--fps`, `--var`, `--from`, `--paused`, `--png`, `--mesh`
+  (format-1 files). The time-series strip shows the whole run: domain volume
+  and wet cells from the file, input volume rebuilt from the run record and
+  checked against `/summary`, removed volume per frame for closed boundaries
+  only (open: added − domain plus the recorded end values). Data layer
+  `visualisation/replay_data.jl` (`FloodA5Replay`, Makie-free, tested by
+  `test/test_replay.jl` in CI); `MakieVisualiser.replay`, `replay_goto!`;
+  `MakieVisualiser.start` gains `show_window`. The live path is unchanged
+  (`push_frame!` now shares `_set_fields!`/`_update_ring_bars!` with replay).
+
+### Changed
+- `visualisation/FloodViewer.jl` reads the mesh in pure Julia (`FA`) — from
+  the output file for format 2, so the parquet argument is optional — instead
+  of through Python; its emoji button labels (which Makie 0.24 cannot render)
+  are plain text; `main()` runs only from the command line.
+- `visualisation/view_h5_output.jl --animate` uses the mesh embedded in a
+  format-2 file; `--mesh` is needed only for format-1 files.
+
 ## [0.4.2] — 2026-11-11
 
 Test-case registry (PATCH). Simulation results do not change. The output's

@@ -17,7 +17,9 @@ reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
 backends, the channel series, output format 2). Current phase:
 **consolidation** — reproducible self-describing HDF5 output (done: 0.4.0,
 below), one analysis module (done: 0.4.1, `analysis/`), a test-case
-registry and runner (done: 0.4.2, `cases/`), HDF5 replay in the GLMakie viewer, then Jupyter notebooks
+registry and runner (done: 0.4.2, `cases/`), HDF5 replay in the GLMakie
+viewer and static plots (done: 0.4.3, `visualisation/replay.jl`,
+`FloodA5Plots`), then Jupyter notebooks
 (planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series). SGS meshes built before

@@ -157,6 +157,8 @@ FloodA5/
 │   └── expected/              # recorded metrics per case
 ├── visualisation/
 │   ├── MakieVisualiser.jl     # Native desktop viewer (GLMakie)
+│   ├── replay.jl              # Replay an HDF5 output in the GLMakie viewer
+│   ├── replay_data.jl         # Replay data (Makie-free, tested in CI)
 │   ├── VisualisationServer.jl # HTTP + WebSocket server for CesiumJS viewer
 │   ├── view_h5_output.jl      # Post-processing viewer for HDF5 output
 │   ├── visualise_mesh.jl      # Publication-quality mesh and SGS figures
@@ -294,7 +296,13 @@ FloodA5 includes two visualisation backends:
 
 **GLMakie** (`--vis makie`) — a native desktop window that updates live during
 simulation. No browser, no token, no configuration required. This is the
-recommended option.
+recommended option. The same window replays any HDF5 output file, with a
+frame slider and playback controls, whether or not the run was visualised
+live:
+
+```bash
+julia --project=. --threads auto visualisation/replay.jl sim.h5     # or FloodModel.jl --replay sim.h5
+```
 
 **CesiumJS** (`--vis cesium` or `--vis`) — a browser-based 3D viewer with
 Google Photorealistic Tiles support.
@@ -334,6 +342,9 @@ reference run, point-spread and planar shape, noise, channel series).
 Post-processing tools:
 
 ```bash
+# Replay in the GLMakie viewer (frame slider, time-series strip, flow arrows)
+julia --project=. --threads auto visualisation/replay.jl sim.h5
+
 # Interactive viewer: map snapshot + cell time series
 julia --project=. visualisation/view_h5_output.jl sim.h5 --cell <cell_id>
 
@@ -436,8 +447,9 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
 - ✅ A registry of named test cases with a single runner (`cases/`, 0.4.2):
   each case generates its inputs, runs, and checks its metrics against
   physical expectations and recorded values (`docs/TEST_CASES.md`)
-- Replay of any HDF5 output in the GLMakie viewer, and static plots for
-  reports
+- ✅ Replay of any HDF5 output in the GLMakie viewer (`visualisation/replay.jl`
+  or `--replay`), and static CairoMakie figures for reports and notebooks
+  (`visualisation/FloodA5Plots.jl`) — 0.4.3
 - Jupyter notebooks documenting the test cases end to end (planar tests,
   channel series, Carlisle), from mesh generation to comparison
 
