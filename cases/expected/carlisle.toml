@@ -4,8 +4,9 @@
 arrival_s = 9748.652484179494
 bias = 1.0630984952120384
 csi = 0.6179428724688213
+input_error_rel = -2.3925218169004335e-5
 mass_balance_log_rel = 2.396427417554957e-5
-mass_balance_rel = 0.0
+mass_balance_rel = 1.9902037479263098e-14
 rms_dh = 0.29314333222075406
 speed_ratio_deep = 1.1850399606325057
 storage_m3 = 3.3693268179978193e6
@@ -16,8 +17,9 @@ vol_removed_m3 = 2.5239122e6
 
 [a5_sgs]
 arrival_s = 7717.450148179509
+input_error_rel = -2.127962998682142e-5
 mass_balance_log_rel = 2.1279729463818767e-5
-mass_balance_rel = 0.0
+mass_balance_rel = 1.612611418670844e-14
 storage_m3 = 4.299972724089067e6
 t = 21600.0
 vol_added_m3 = 5.9164286e6
@@ -25,8 +27,9 @@ vol_removed_m3 = 1.6177271e6
 
 [a5_swe]
 arrival_s = 6684.701450109334
+input_error_rel = -3.698633219143899e-6
 mass_balance_log_rel = 3.700803395411071e-6
-mass_balance_rel = 0.0
+mass_balance_rel = 1.3372640069876737e-15
 storage_m3 = 2.690392365191402e6
 t = 21600.0
 vol_added_m3 = 5.917634e6
@@ -36,8 +39,9 @@ vol_removed_m3 = 3.2275549e6
 arrival_s = 5988.784520546506
 bias = 0.8507223113964687
 csi = 0.6872422508979646
+input_error_rel = -2.5594642517784277e-5
 mass_balance_log_rel = 2.563236884832302e-5
-mass_balance_rel = 0.0
+mass_balance_rel = 2.9880472424371704e-14
 rms_dh = 0.12959546164218735
 speed_ratio_deep = 1.058862697839594
 storage_m3 = 2.3020531093658945e6
@@ -48,16 +52,17 @@ vol_removed_m3 = 3.574191e6
 
 [cart_swe]
 arrival_s = 5726.833625668449
+input_error_rel = -2.8160579317824352e-6
 mass_balance_log_rel = 2.8118051845181945e-6
-mass_balance_rel = 0.0
+mass_balance_rel = 2.9564437784551205e-14
 storage_m3 = 2.3310172918810397e6
 t = 21600.0
 vol_added_m3 = 5.903680699999999e6
 vol_removed_m3 = 3.5730526e6
 
 [meta]
-flooda5_version = "0.4.1"
-git_commit = "3197283c4b1b1204c769bd82c624ef5d2781ed86"
-git_dirty = true
+flooda5_version = "0.4.2"
+git_commit = "914e6ea4d19ad329fae65bc03435f5881dcc877d"
+git_dirty = false
 platform = "NT x86_64"
-recorded_utc = "2026-11-10T23:10:19Z"
+recorded_utc = "2026-11-11T00:05:13Z"

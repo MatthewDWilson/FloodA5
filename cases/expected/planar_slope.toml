@@ -17,7 +17,8 @@ dir_frac30 = 1.0
 dir_mean_w = -3.355540249792129
 dir_std_w = 13.807531537210288
 inj_point_mismatch_deg = 0.0
-mass_balance_rel = 0.0
+input_error_rel = -6.05192932804736e-13
+mass_balance_rel = 6.184563972059655e-13
 storage_m3 = 7200.000000000097
 t_end = 72000.0
 
@@ -38,7 +39,8 @@ dir_frac30 = 0.9591836734693877
 dir_mean_w = 2.380448154719565
 dir_std_w = 13.524004744224532
 inj_point_mismatch_deg = 0.0
-mass_balance_rel = 0.0
+input_error_rel = -6.05192932804736e-13
+mass_balance_rel = 6.021612837991907e-13
 storage_m3 = 7199.999999999968
 t_end = 72000.0
 
@@ -59,13 +61,14 @@ dir_frac30 = 0.9574468085106383
 dir_mean_w = -2.956768681664079e-6
 dir_std_w = 13.257975746123115
 inj_point_mismatch_deg = 0.0
-mass_balance_rel = 0.0
+input_error_rel = -6.05192932804736e-13
+mass_balance_rel = 6.032981521764075e-13
 storage_m3 = 7199.999999999984
 t_end = 72000.0
 
 [meta]
-flooda5_version = "0.4.1"
-git_commit = "3197283c4b1b1204c769bd82c624ef5d2781ed86"
-git_dirty = true
+flooda5_version = "0.4.2"
+git_commit = "914e6ea4d19ad329fae65bc03435f5881dcc877d"
+git_dirty = false
 platform = "NT x86_64"
-recorded_utc = "2026-11-10T21:50:45Z"
+recorded_utc = "2026-11-11T00:05:00Z"
