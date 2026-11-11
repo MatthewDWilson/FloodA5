@@ -14,6 +14,18 @@ storage_ratio = 1.2523551811960767
 t = 21600.0
 vol_added_m3 = 5.8879313e6
 vol_removed_m3 = 2.5239122e6
+wet_area_0p1_km2 = 3.062525158171027
+
+[a5_li_norain]
+arrival_s = 7131.590676037821
+input_error_rel = -3.140426928193724e-5
+mass_balance_log_rel = 3.1427204348027414e-5
+mass_balance_rel = 6.750321105843588e-15
+storage_m3 = 1.971964511501865e6
+t = 21600.0
+vol_added_m3 = 5.0211275e6
+vol_removed_m3 = 3.0504554e6
+wet_area_0p1_km2 = 1.2536794942987188
 
 [a5_sgs]
 arrival_s = 7717.450148179509
@@ -24,6 +36,7 @@ storage_m3 = 4.299972724089067e6
 t = 21600.0
 vol_added_m3 = 5.9164286e6
 vol_removed_m3 = 1.6177271e6
+wet_area_0p1_km2 = 5.262006512339385
 
 [a5_swe]
 arrival_s = 6684.701450109334
@@ -34,6 +47,7 @@ storage_m3 = 2.690392365191402e6
 t = 21600.0
 vol_added_m3 = 5.917634e6
 vol_removed_m3 = 3.2275549e6
+wet_area_0p1_km2 = 2.8807544257117517
 
 [cart_li]
 arrival_s = 5988.784520546506
@@ -49,6 +63,18 @@ storage_ratio = 0.9875744454509077
 t = 21600.0
 vol_added_m3 = 5.8714823e6
 vol_removed_m3 = 3.574191e6
+wet_area_0p1_km2 = 2.32304173763662
+
+[cart_li_norain]
+arrival_s = 6194.624316405336
+input_error_rel = -3.0098494080941872e-5
+mass_balance_log_rel = 3.012787300780933e-5
+mass_balance_rel = 2.7741009415793347e-16
+storage_m3 = 1.6578235519736041e6
+t = 21600.0
+vol_added_m3 = 5.0219277e6
+vol_removed_m3 = 3.365038e6
+wet_area_0p1_km2 = 0.9491397197229466
 
 [cart_swe]
 arrival_s = 5726.833625668449
@@ -59,10 +85,11 @@ storage_m3 = 2.3310172918810397e6
 t = 21600.0
 vol_added_m3 = 5.903680699999999e6
 vol_removed_m3 = 3.5730526e6
+wet_area_0p1_km2 = 2.7306696201394365
 
 [meta]
-flooda5_version = "0.4.2"
-git_commit = "914e6ea4d19ad329fae65bc03435f5881dcc877d"
-git_dirty = false
+flooda5_version = "0.4.3"
+git_commit = "2dc1095ec17ffd5f1f9a2cca246658308a7814ee"
+git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-11T00:05:13Z"
+recorded_utc = "2026-11-11T09:13:56Z"

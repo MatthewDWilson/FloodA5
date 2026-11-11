@@ -1,0 +1,87 @@
+# Expected metrics for case "carlisle_peak" — written by `julia --project=. cases/run.jl baseline carlisle_peak`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5_li]
+bias_w0 = 0.8719157472417252
+bias_w1 = 0.8856652032830693
+bias_wmid = 0.8893303614691346
+csi_w0 = 0.8566454436927975
+csi_w1 = 0.870845563867058
+csi_wmid = 0.8746153846153846
+input_error_rel = -8.691526307309416e-6
+mass_balance_rel = 6.0501133744534545e-15
+rms_dh_w0 = 0.5507491578748734
+rms_dh_w1 = 0.5351417126762926
+rms_dh_wmid = 0.533155948653883
+storage_ratio_w0 = 0.7434721765846913
+storage_ratio_w1 = 0.7619418268817297
+storage_ratio_wmid = 0.7589287802654293
+storage_w0_m3 = 6.842406435408702e6
+storage_w1_m3 = 8.0064657733228905e6
+storage_wmid_m3 = 7.670615040987368e6
+t_end = 199800.0
+wet_area_0p1_w0_km2 = 4.282214532687672
+wet_area_0p1_w1_km2 = 4.571373461219839
+wet_area_0p1_wmid_km2 = 4.520635198173051
+
+[a5_sgs]
+input_error_rel = -6.49610535417054e-6
+mass_balance_rel = 2.00125967099783e-13
+storage_w0_m3 = 2.4077668302801747e7
+storage_w1_m3 = 2.667494025754638e7
+storage_wmid_m3 = 2.5366137052976888e7
+t_end = 199800.0
+wet_area_0p1_w0_km2 = 7.874782603525605
+wet_area_0p1_w1_km2 = 8.121085231007436
+wet_area_0p1_wmid_km2 = 7.997933923728967
+
+[a5_swe]
+input_error_rel = -1.6045190071042734e-6
+mass_balance_rel = 2.987222307986084e-14
+storage_w0_m3 = 9.20331204167028e6
+storage_w1_m3 = 1.0507975137799691e7
+storage_wmid_m3 = 1.0107160566904092e7
+t_end = 199800.0
+wet_area_0p1_w0_km2 = 4.9112709951785
+wet_area_0p1_w1_km2 = 5.161514264716855
+wet_area_0p1_wmid_km2 = 5.083190110273875
+
+[cart_li]
+bias_w0 = 0.9323024054982818
+bias_w1 = 0.9307348761672757
+bias_wmid = 0.9439020354128744
+csi_w0 = 0.9181306498379669
+csi_w1 = 0.9205977382875605
+csi_wmid = 0.9309607955946413
+input_error_rel = -8.216015548733923e-6
+mass_balance_rel = 3.743505870350287e-14
+rms_dh_w0 = 0.2907184785430479
+rms_dh_w1 = 0.34461334323444215
+rms_dh_wmid = 0.3118898272523737
+storage_ratio_w0 = 0.8566781589824097
+storage_ratio_w1 = 0.8462288220876486
+storage_ratio_wmid = 0.856583624357391
+storage_w0_m3 = 6.789743370750042e6
+storage_w1_m3 = 7.92267507753831e6
+storage_wmid_m3 = 7.605226941895788e6
+t_end = 199800.0
+wet_area_0p1_w0_km2 = 4.324125692621196
+wet_area_0p1_w1_km2 = 4.567187640312839
+wet_area_0p1_wmid_km2 = 4.545670637555707
+
+[cart_swe]
+input_error_rel = -1.4439213347355695e-6
+mass_balance_rel = 4.3673939387624434e-14
+storage_w0_m3 = 7.925664147683093e6
+storage_w1_m3 = 9.362331878501905e6
+storage_wmid_m3 = 8.87855747604471e6
+t_end = 199800.0
+wet_area_0p1_w0_km2 = 4.638114465140706
+wet_area_0p1_w1_km2 = 4.907077008928377
+wet_area_0p1_wmid_km2 = 4.815828997174969
+
+[meta]
+flooda5_version = "0.4.4"
+git_commit = "5d6a5cf1fbe06ad3011ab3d13314146e82f0a411"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-11T19:34:44Z"
