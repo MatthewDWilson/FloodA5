@@ -623,7 +623,7 @@ Q-centring at θ = 0.9 — which averages a face with its "most collinear" faces
 ~144° apart on pentagons — by itself deflects the steady flow.
 
 **Full simulations.** Cartesian flat point spread (10 m³/s, closed, t = 3600 s;
-`test/run_wp1_matrix.sh`, `test/wp1_metrics.jl spread`), four-fold anisotropy A4:
+`test/archive/run_wp1_matrix.sh`, `test/wp1_metrics.jl spread`), four-fold anisotropy A4:
 
 | dx | component, edge | vector, edge | vector, cell |
 |---|---|---|---|
@@ -860,7 +860,7 @@ through integral or smoothed quantities.
 ### 15.6 Damping diagnostics (2026-10-23)
 
 Tools: `test/diag_step_spectrum.jl`, `test/diag_operator_spectrum.jl`,
-`test/diag_divergence.jl`, `test/diag_d2_summary.sh`.
+`test/diag_divergence.jl`, `test/archive/diag_d2_summary.sh`.
 
 **Linear stability of the full step** (finite-difference Jacobian; lake at
 rest, 3 m deep, Courant 0.7): on A5 the explicit diamond grows by 0.14% per

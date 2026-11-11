@@ -17,7 +17,7 @@ reference `--flow-model swe`, the Δt-consistent 0.3.0 default, CPU/GPU
 backends, the channel series, output format 2). Current phase:
 **consolidation** — reproducible self-describing HDF5 output (done: 0.4.0,
 below), one analysis module (done: 0.4.1, `analysis/`), a test-case
-registry and runner, HDF5 replay in the GLMakie viewer, then Jupyter notebooks
+registry and runner (done: 0.4.2, `cases/`), HDF5 replay in the GLMakie viewer, then Jupyter notebooks
 (planar → channel → Carlisle); see `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series). SGS meshes built before
@@ -50,6 +50,13 @@ without `_orient_collinear!`-style signs.
 - Large data lives in `test/carlisle`, `test/planar_embankment`, `test/square`
   (git-ignored: `*.h5`, `*.parquet`, `*.tif`). Don't commit outputs; experiment
   runs go in `test/wp1_runs/` (git-ignored). Run matrices: `test/run_jobs.sh`.
+- Test cases: `julia --project=. cases/run.jl list|show|run|check CASE`
+  (`docs/TEST_CASES.md`). Cases generate their own inputs in
+  `test/case_runs/<case>/`; never share a derived input (DEM, mesh) between
+  cases. After a code change that can move results, run the affected cases
+  with `--fresh` and `check`; re-record expected values (`baseline`) only for
+  a deliberate change, and say so in the CHANGELOG. Old run scripts are in
+  `test/archive/` and rely on pre-0.3.0 defaults.
 - Python: FloodA5 uses PyCall's Python (Julia's Conda.jl Python,
   `~/.julia/conda/3`), not other conda envs; it needs conda's `Library\bin` on
   PATH, so call it from Julia rather than straight from Git Bash. pya5 is 1.x

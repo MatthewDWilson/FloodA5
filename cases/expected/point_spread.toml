@@ -1,0 +1,56 @@
+# Expected metrics for case "point_spread" — written by `julia --project=. cases/run.jl baseline point_spread`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5_res16]
+A4 = -0.01138476061050483
+A6 = 0.0021937963713755675
+circularity = 0.9581471529312416
+cv_radius = 0.07920697139213966
+input_error_rel = 0.0
+mass_balance_rel = 4.042198674546348e-16
+n_wet = 126.0
+ratio_1cm = 0.976734838172058
+storage_m3 = 35999.99999999997
+t = 3600.0
+
+[a5_res18]
+A4 = -0.0014849843490250376
+A6 = 3.209338594700116e-5
+circularity = 0.9902702314159489
+cv_radius = 0.027635162946898183
+input_error_rel = 0.0
+mass_balance_rel = 2.021099337273174e-16
+n_wet = 1447.0
+ratio_1cm = 0.9994842743186559
+storage_m3 = 36000.0
+t = 3600.0
+
+[cart_dx12p5]
+A4 = 0.021172735755030536
+A6 = -4.5691859446774824e-12
+circularity = 0.9945961759399278
+cv_radius = 0.014172453139181888
+input_error_rel = 0.0
+mass_balance_rel = 6.063298011819521e-16
+n_wet = 4257.0
+ratio_1cm = 1.015001851313436
+storage_m3 = 36000.000000000015
+t = 3600.0
+
+[cart_dx25]
+A4 = 0.0371777773800736
+A6 = -8.450023310729306e-12
+circularity = 0.9840188875030611
+cv_radius = 0.0333958474724381
+input_error_rel = 0.0
+mass_balance_rel = 2.627429138455126e-15
+n_wet = 1157.0
+ratio_1cm = 1.04318516770354
+storage_m3 = 35999.999999999985
+t = 3600.0
+
+[meta]
+flooda5_version = "0.4.1"
+git_commit = "f2c12021c23c66ad4ee905faad34bab146d3cd95"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-11T00:04:57Z"

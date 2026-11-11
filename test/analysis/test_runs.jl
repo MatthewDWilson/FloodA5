@@ -18,3 +18,10 @@
     @test hypot(sum(V1 .* x), sum(V1 .* y)) / sum(V1) < 12.5   # early volume centroid in the source cell
     @test x[i] == 0.0 && y[i] == 0.0
 end
+
+@testset "A-runs — storage of SGS runs is Σ volume" begin
+    r = FA.load_run(FIX_H5)
+    s = FA.Run(r.path, r.label, r.format, r.t, r.mesh, r.info, "sgs")   # the same file, read as SGS
+    @test FA.storage(s) == FA.stored_volume(s)
+    @test FA.compare(s, s).storage_ratio == 1.0 && FA.compare(r, s).storage == FA.stored_volume(s)
+end

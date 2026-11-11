@@ -263,6 +263,30 @@ output is identical to the pre-module versions. Each keeps its own historical
 projection constants (Earth radius, metres per degree, origin snapping),
 passed to `FA` explicitly.
 
+### `cases/` — test-case registry `FloodA5Cases` (`FC`)
+
+Named, runnable test cases (`docs/TEST_CASES.md`, "The test-case
+registry"). `cases/FloodA5Cases.jl` defines the data types and the runner;
+`cases/registry/*.jl` the cases (included in name order, into one module —
+helpers are prefixed per case); `cases/run.jl` the CLI (`list`, `show`,
+`prep`, `run`, `check`, `baseline`); `cases/expected/<case>.toml` the
+recorded metrics; `cases/scripts/` helper scripts used by preparation steps.
+
+- A `Case` is data: `Prep` steps (`:floodmodel`, `:julia`, `:python`,
+  `:write`) skipped when their outputs exist; `Job`s, each a `FloodModel.jl`
+  argument list (the runner appends `--output {runs}/<job>.h5`); `analyse(ctx)`
+  with `FA`; `Check`s; tolerances. Placeholders `{case}`, `{runs}`, `{repo}`.
+- Runs are separate Julia processes (`-P` at a time, `-T` threads each) using
+  the active project, so CI runs them under `ci/`. A run is reused if its
+  output's run record has the same argv and `completed`; it does not compare
+  code versions (`--fresh` after a code change).
+- `analyse` adds `mass_balance_rel` (conservation, from the summary) and
+  `input_error_rel` to every job; `check` runs the physical checks, then
+  compares with the expected values (|Δ| ≤ atol + rtol·|expected|).
+- The smoke tier runs end to end in CI (`test/test_cases.jl`); the others are
+  run by hand. Expected values are recorded on one platform (Windows); the
+  smoke case's tolerance allows for CI's Linux round-off.
+
 ### `visualisation/`
 
 Four scripts and one static directory:
@@ -720,6 +744,7 @@ Key test files:
 | `test_output_format.jl` | HDF5 output format 2: run record, embedded mesh and inputs, geometry, `--rerun` bit-identical (O1–O4), format-1 reader (O5) |
 | `bench_output_format.jl` | Format 1 vs format 2: write time, size, read times on an existing run (not in CI) |
 | `test_analysis.jl` | `analysis/` (FA): one format-2 fixture run, then `test/analysis/test_*.jl` — core loading, parquet mesh = format-2 mesh, compare/divergence, shape, noise, channel metrics on synthetic fields with known answers (`FA_TEST_ONLY=shape,…` runs a subset) |
+| `test_cases.jl` | `cases/` (FC): every registered case well formed (C1); the smoke tier end to end through the runner, against its expected values (C2); run reuse, changed commands, dry run (C3) |
 | `test_flat_rainpoint.jl` | Flat-terrain point-source integration test |
 | `test_noc_correction.jl` | WLSQ gradient weights and reconstruction correctness (T-NOC1–5) |
 | `test_point_spread.jl` | Point-spread directional-bias benchmark (convex hull, Polsby–Popper circularity) |

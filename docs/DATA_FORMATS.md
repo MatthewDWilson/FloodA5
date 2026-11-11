@@ -189,7 +189,18 @@ frames; writing 4–11% slower (tens of ms per frame).
 
 Attrs `completed`, `n_frames`, `n_steps`, `wall_simulation_s`,
 `wall_since_start_s`, `vol_added_m3`, `vol_removed_m3`, `vol_domain_m3`,
-`mass_balance_error_m3`, `finished_utc`.
+`mass_balance_error_m3`, `vol_applied_m3`, `conservation_error_m3`,
+`finished_utc`.
+
+- `vol_added_m3`: the exact time integral of the inputs (rainfall,
+  hydrographs, point sources); `vol_applied_m3`: what the time stepping
+  actually added (Σ rate·Δt, rates evaluated at the start of each step).
+  They differ by the sources' first-order time integration (a few % on a
+  steep 10-minute hydrograph ramp; negligible for constant rates).
+- `conservation_error_m3` = applied − in domain − removed: conservation
+  alone (round-off). `mass_balance_error_m3` = added − in domain − removed,
+  as in the run log, includes the time-integration difference.
+- Before 0.4.2 the volume attrs and the mass-balance error were written as 0.
 
 ### Reading in Julia
 

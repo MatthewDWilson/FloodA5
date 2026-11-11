@@ -185,6 +185,9 @@ end
 # ---------------------------------------------------------------------------
 
 const BRIDGE_DIR    = @__DIR__
+# Suffix for temporary files in BRIDGE_DIR (process id + random): several
+# mesh generations may run in one checkout at once (the test-case runner).
+_tmp_tag() = string(getpid(), "_", string(rand(UInt32); base = 16))
 const BRIDGE_SCRIPT = "a5_bridge.py"
 const PYTHON_CMD    = Ref{String}("python")   # safe fallback; overwritten by _find_python()
 
@@ -1251,14 +1254,18 @@ function mesh_for_aoi(geojson_path_or_str::String, resolution::Int;
     kept_lats = lats[mask]
     @info "  Points inside AOI: $(length(kept_lons)) — handing off to Python..."
 
-    tmp_aoi = joinpath(BRIDGE_DIR, "_tmp_aoi.geojson")
+    # unique names: several mesh generations may run in one checkout at once
+    tag     = _tmp_tag()
     ext     = format == :geoparquet ? ".parquet" : ".geojson"
-    tmp_out = joinpath(BRIDGE_DIR, "_tmp_mesh" * ext)
+    aoi_nm  = "_tmp_aoi_$tag.geojson"
+    out_nm  = "_tmp_mesh_$tag" * ext
+    tmp_aoi = joinpath(BRIDGE_DIR, aoi_nm)
+    tmp_out = joinpath(BRIDGE_DIR, out_nm)
     fmt_str = format == :geoparquet ? "geoparquet" : "geojson"
 
     try
         write(tmp_aoi, geojson_str)
-        result = _run_bridge("mesh_for_aoi", "_tmp_aoi.geojson", string(resolution), "_tmp_mesh" * ext, fmt_str)
+        result = _run_bridge("mesh_for_aoi", aoi_nm, string(resolution), out_nm, fmt_str)
         @info "  Python bridge: $(result["cell_count"]) cells written to $(result["output"])"
 
         mesh = load_mesh_from_file(tmp_out, geojson_str, resolution)
@@ -1583,8 +1590,9 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
         push!(cells_data, d)
     end
 
-    tmp_cells  = joinpath(BRIDGE_DIR, "_tmp_save_cells.json")
-    tmp_out    = joinpath(BRIDGE_DIR, "_tmp_save.parquet")
+    tag        = _tmp_tag()       # unique: concurrent saves in one checkout
+    tmp_cells  = joinpath(BRIDGE_DIR, "_tmp_save_cells_$tag.json")
+    tmp_out    = joinpath(BRIDGE_DIR, "_tmp_save_$tag.parquet")
     path_fwd   = replace(path, "\\" => "/")
     tmp_fwd    = replace(tmp_out, "\\" => "/")
 
@@ -1607,11 +1615,11 @@ with open('$(tmp_cells_fwd)', 'r') as f:
 bridge.mesh_to_geoparquet(cells, '$(tmp_fwd)', id_scheme='$(mesh.id_scheme)')
 print('ok')
 """
-        tmp_script = joinpath(BRIDGE_DIR, "_tmp_save.py")
+        tmp_script = joinpath(BRIDGE_DIR, "_tmp_save_$tag.py")
         write(tmp_script, py_code)
         buf = IOBuffer(); errbuf = IOBuffer()
         try
-            run(pipeline(Cmd(Cmd([PYTHON_CMD[], "_tmp_save.py"]); dir=BRIDGE_DIR),
+            run(pipeline(Cmd(Cmd([PYTHON_CMD[], basename(tmp_script)]); dir=BRIDGE_DIR),
                          stdout=buf, stderr=errbuf))
         catch e
             error("GeoParquet save failed: $(String(take!(errbuf)))")
