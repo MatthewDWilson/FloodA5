@@ -34,7 +34,8 @@ output records the same command line and completed; `--fresh` runs it again
 | `planar_embankment` | standard | 2a | SGS passes water through a sub-cell notch near its sill; standard only at the crest | ~6 min |
 | `channel` | standard | 7 | straight channel, 22/11 m cells, 0°/45°, A5/Cartesian, SWE/LI (16 runs) | ~15 min |
 | `channel_series` | full | 7 | the full 224-run channel series | hours |
-| `carlisle` | full | 3 | 6 h, local-inertial vs SWE on A5 res 18 and Cartesian 20 m, plus SGS | ~45 min |
+| `carlisle` | full | 3 | first 6 h with a 10 mm/h *test* rain (the §15.11 record), local-inertial vs SWE on A5 res 18 and Cartesian 20 m, plus SGS; no-rain runs for contrast | ~45 min |
+| `carlisle_peak` | full | 3 | the 6 h before the Eden peak (49.5–55.5 h), river inflow only: local-inertial vs SWE on A5 and Cartesian, plus SGS | ~1.5 h |
 
 The older run scripts that these cases replace are in `test/archive/` (see
 its README): they rely on the pre-0.3.0 defaults and no longer reproduce the
@@ -345,9 +346,12 @@ julia --threads 1 --project=. FloodModel.jl \
 - SGS run shows earlier and more extensive inundation compared to the standard solver
   due to sub-cell channel routing, particularly in the narrow inter-levee channels.
 
-### Registry case `carlisle`: 6 h against the SWE reference
+### Registry cases `carlisle` and `carlisle_peak`: against the SWE reference
 
-`cases/registry/carlisle.jl` (full tier) runs the comparison of HYDRAULICS
+`cases/registry/carlisle.jl` (full tier) has two cases on the same meshes. Both
+start with the river dry.
+
+**`carlisle`: the first 6 h, with a test rain.** It runs the comparison of HYDRAULICS
 §15.10–15.11: the first 6 h with 10 mm/h rain, on A5 res 18 and on a 20 m
 Cartesian grid aligned with the LiDAR averaged to 20 m
 (`cases/scripts/average_dem.jl`: GDAL `-tr 20 20 -r average -tap`, then
@@ -375,6 +379,50 @@ Results at 6 h (0.4.1; recorded values in brackets):
 6 h.) The checks: SWE storage and arrival within 1% and 2% of the record,
 local-inertial/SWE ratios within ±0.05, the A5 ratio above the Cartesian one
 by > 0.15, CSI ≥ 0.55 and rms Δh ≤ 0.35 m, SGS within 2%, mass balance.
+
+**The rain is a test forcing.** The 10 mm/h uniform rain comes from the damping
+series (HYDRAULICS §15.6–15.11); it is not the 2005 event's rain. It puts 60 mm
+(0.88 Mm³) on every cell in 6 h, while the inflows are still low (Eden 100–230
+m³/s). It is only 15% of the water added, but it makes most of the 6 h flooded
+area. Two extra runs, `a5_li_norain` and `cart_li_norain`, repeat the
+local-inertial runs without it. The area deeper than 0.1 m at 6 h is 3.06 km²
+with rain and 1.25 km² without on A5, and 2.32 against 0.95 km² on Cartesian
+(check: without rain < 60% of with rain). The 6 h maps of this case show mostly
+rain-on-grid, not river flooding.
+
+**`carlisle_peak`: the 6 h before the Eden's peak, river inflow only.** It
+simulates the event from t = 0 to the Eden's peak (1 273 m³/s at 55.5 h; the
+model has no start-time option) and compares the solvers at 49.5, 52.5 and
+55.5 h. It has no rain, outputs every 1800 s, and reuses the `carlisle` meshes
+(run `cases/run.jl prep carlisle` first). Its runs are the same five:
+local-inertial and SWE on each mesh, and SGS on A5. The two SWE runs over 55.5 h
+take several hours on CPU, at 6 threads each.
+
+Results in the window (0.4.4; 49.5 / 52.5 / 55.5 h):
+
+| run | storage at 55.5 h (Mm³) | ÷ SWE | rms Δh | CSI | bias | area > 0.1 m at 55.5 h (km²) |
+|---|---|---|---|---|---|---|
+| A5 SWE | 10.51 | | | | | 5.16 |
+| A5 local-inertial | 8.01 | 0.74 / 0.76 / 0.76 | 0.53–0.55 m | 0.86–0.87 | 0.87–0.89 | 4.57 |
+| Cartesian SWE | 9.36 | | | | | 4.91 |
+| Cartesian local-inertial | 7.92 | 0.86 / 0.86 / 0.85 | 0.29–0.34 m | 0.92–0.93 | 0.93–0.94 | 4.57 |
+| A5 SGS | 26.67 | | | | | 8.12 |
+
+**Near the peak the local-inertial default stores less than the reference.** In
+the first 6 h with the test rain it stores more. Near the peak:
+
+- **It conveys more.** Its water is faster where the reference is ≥ 3 m deep:
+  1.34× on A5 and 1.15× on Cartesian at 55.5 h. It lets more water out and stands
+  0.3–0.6 m lower over the floodplain.
+- **It is insensitive to the mesh.** The two local-inertial runs store 8.01 and
+  7.92 Mm³; the two references differ by 12%.
+- **SGS holds the Eden back by metres.** Its water surface is a median 3.0 m above
+  the local-inertial one, and only 0.07 Mm³ is below the cell-mean bed. This
+  points to a conveyance problem at high stage, still to be investigated.
+
+Output frames drift late of their nominal times (by up to ~110 s at 55 h, because
+each write is scheduled from the previous one), so frames are matched within
+300 s. `notebooks/03_carlisle.ipynb` analyses both cases.
 
 ### Validation data
 

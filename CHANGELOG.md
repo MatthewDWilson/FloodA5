@@ -47,8 +47,9 @@ Notebooks (PATCH). Neither the model nor the output format changes.
   - `01_planar.ipynb`: `planar_slope`, `planar_embankment`
   - `02_channel.ipynb`: `channel`; the full series from its recorded
     metrics
-  - `03_carlisle.ipynb`: `carlisle`, including where the A5
-    local-inertial storage excess sits by depth class
+  - `03_carlisle.ipynb`: `carlisle_peak` (the 6 h before the Eden peak)
+    and `carlisle` (the recorded first-6 h window), each with where the
+    local-inertial storage difference sits by depth class
 - Committed without outputs. `notebooks/nbtools.jl` provides `strip` (writes
   JSON exactly as Jupyter does), `check` and `execute` (headless).
   `test/test_notebooks.jl` (in CI) checks the kernel, that there are no
@@ -56,6 +57,21 @@ Notebooks (PATCH). Neither the model nor the output format changes.
 - Public registry names for notebooks and scripts (`FC.python_command`,
   `FC.planar_params`, `FC.log_mass_balance`, …), checked in
   `test/test_cases.jl`.
+- **Case `carlisle_peak`**: the event from t = 0 to the River Eden's peak
+  (1273 m³/s at 55.5 h), river inflow only. It compares the 6 h before the
+  peak, local-inertial vs SWE on A5 res 18 and Cartesian 20 m, plus SGS.
+  - At high flow the local-inertial default stores **less** than SWE: 0.76×
+    on A5 and 0.85× on Cartesian at 55.5 h, with CSI 0.87 / 0.92. That is the
+    opposite of the early window's 1.25× / 0.99×.
+  - SGS stores 2.5× SWE, with the Eden about 3 m high. This is flagged for
+    investigation and has no check.
+
+### Changed
+- Case `carlisle`: its 10 mm/h uniform rain is labelled as a test forcing (60
+  mm in 6 h, not the event's rain). Two no-rain local-inertial runs show
+  that the rain-on-grid sheet makes most of the 6 h flooded area: 3.06 vs
+  1.25 km² on A5, 2.32 vs 0.95 km² on Cartesian. There is a new
+  `wet_area_0p1_km2` metric and a check.
 
 ## [0.4.3] — 2026-11-11
 
