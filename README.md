@@ -450,8 +450,9 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
 - ✅ Replay of any HDF5 output in the GLMakie viewer (`visualisation/replay.jl`
   or `--replay`), and static CairoMakie figures for reports and notebooks
   (`visualisation/FloodA5Plots.jl`) — 0.4.3
-- Jupyter notebooks documenting the test cases end to end (planar tests,
+- ✅ Jupyter notebooks documenting the test cases end to end (planar tests,
   channel series, Carlisle), from mesh generation to comparison
+  (`notebooks/`, 0.4.4)
 
 **Physics and correctness**
 - Grid-scale velocity noise in deep channels under the 0.3.0 default (the

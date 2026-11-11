@@ -26,3 +26,6 @@ test/wp1_runs/
 # Test-case registry outputs (cases/run.jl)
 test/case_runs/
 mesh/_tmp_*
+
+# Executed notebook copies (notebooks/nbtools.jl execute)
+test/notebook_runs/

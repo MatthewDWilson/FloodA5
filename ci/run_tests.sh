@@ -38,6 +38,7 @@ TESTS=(
   test/test_replay.jl
   test/test_plots.jl
   test/test_cases.jl
+  test/test_notebooks.jl
 )
 
 failed=()
