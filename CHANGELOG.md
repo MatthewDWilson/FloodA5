@@ -33,6 +33,44 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-11-12
+
+SGS diagnosis (PATCH): the model does not change.
+
+### Added
+- Registry checks can be marked as **expected failures**: `Check(…; xfail =
+  "reason")` marks a check of the correct behaviour that the model is known to
+  fail. It is reported as XFAIL (or XPASS once it passes) and does not fail
+  the case. `sgs_strip` uses it for its eight SGS checks (`test/test_cases.jl`
+  C4).
+- **Case `sgs_strip`** (`cases/registry/sgs_strip.jl`, docs/TEST_CASES.md
+  §2c) and **`notebooks/04_sgs_strip.ipynb`**: the SGS model on a synthetic
+  4 km strip (0.1% slope, a 5 × 1 m channel a quarter of a 20 m cell wide) at
+  3 m³/s (in bank) and 20 m³/s (overbank), against analytic normal levels,
+  storage per metre and kinematic arrival times, and a 2.5 m reference.
+  SGS, local-inertial and SWE on Cartesian 20 m, SGS and local-inertial on
+  A5 res 18. The SGS tables are also checked against the terrain directly
+  (`cases/scripts/sgs_strip_tables.jl`). DEM generator
+  `cases/scripts/sgs_strip_dem.jl`; terrain and analytic hydraulics in
+  `cases/scripts/sgs_strip_geometry.jl`; public names `FC.sgs_strip_*`.
+  The model does not change.
+- Findings (no fix yet; the case's SGS checks state the correct behaviour
+  and fail): SGS storage is measured correctly (the tables' volumes match
+  the terrain to 0.3%; overbank, the volume above the cell-mean bed equals
+  the water volume), but SGS **conveyance** is wrong:
+  - overbank, an edge's flow area stops growing once the water is above the
+    cell's highest DEM sample (`build_sgs_tables!` tabulates edge curves on
+    the cell's own z_min–z_max levels; `edge_area_radius` returns the top
+    value above them), and face points above a cell's z_max never wet in its
+    table. The 20 m strip's tables carry at most 4.9 m³/s at the bed slope,
+    so at 20 m³/s SGS piles water up towards the inflow (δ 4.8 m above the
+    floodplain against 0.37 m; still filling at 8 h). At the `carlisle_peak`
+    SGS peak 85% of wet cells, holding 26.1 of 26.7 Mm³, are in this regime;
+  - in bank, the legacy donor cap (SGS's default limiter) lets a cell pass
+    at most V/(2N) per step, so a channel cell carries Q only once it holds
+    2N·Q·Δt: at 3 m³/s the channel fills to the brim (storage 1.4× the true
+    value). `--limiter positivity` gives the analytic level within 1 cm.
+
 ## [0.5.0] — 2026-11-12
 
 Default engine change (MINOR): results change for runs that did not pass
