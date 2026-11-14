@@ -91,17 +91,23 @@ Job(name, args; threads = 4, tags...) =
     Job(String(name), String.(args), threads, Dict{Symbol,Any}(tags))
 
 """
-    Check(name, test; detail = "")
+    Check(name, test; detail = "", xfail = "")
 
 A physical check: `test(metrics) -> Bool`, where `metrics[job][metric]` are
 the case's metrics. `detail(metrics) -> String` explains the outcome.
+
+`xfail = "reason"` marks a check of the *correct* behaviour that the model is
+known to fail (a documented defect): it is reported as XFAIL and does not
+fail the case; if it starts to pass it is reported as XPASS (remove the
+`xfail` then). Never use it to hide an unexplained failure.
 """
 struct Check
     name::String
     test::Function
     detail::Function
+    xfail::String
 end
-Check(name, test; detail = m -> "") = Check(String(name), test, detail)
+Check(name, test; detail = m -> "", xfail = "") = Check(String(name), test, detail, String(xfail))
 
 """
     Case(; name, title, doc, tier, description, prep, jobs, analyse, checks,
@@ -383,9 +389,15 @@ function check(c::Case, m::Metrics = analyse(c); io::IO = stdout)
         catch err
             println(io, "  check $(ch.name): ERROR ", sprint(showerror, err)); false
         end
-        ok &= pass
         det = try ch.detail(m) catch; "" end
-        println(io, "  ", pass ? "PASS" : "FAIL", "  ", ch.name, isempty(det) ? "" : "  — " * det)
+        if isempty(ch.xfail)
+            ok &= pass
+            println(io, "  ", pass ? "PASS" : "FAIL", "  ", ch.name, isempty(det) ? "" : "  — " * det)
+        else                                   # a documented defect: report, don't fail
+            println(io, "  ", pass ? "XPASS" : "XFAIL", " ", ch.name, isempty(det) ? "" : "  — " * det,
+                    "\n         expected failure: ", ch.xfail,
+                    pass ? "\n         → it now passes: remove its `xfail`" : "")
+        end
     end
     ep = expected_path(c)
     if !isfile(ep)
@@ -500,7 +512,29 @@ log_mass_balance(logpath) = _case_log_mass_balance(logpath)
 "The channel series table (rms/spread of Δη over orientations) from metric rows."
 channel_series_table(rows) = _ch_series(rows)
 
+"The SGS strip's terrain parameters (NamedTuple) from `sgs_strip_params.json` in `dir`."
+sgs_strip_params(dir) = _ss_params_file(dir)
+"The SGS strip's analytic answers (normal levels, storage per metre, arrival times) for parameters `p`."
+sgs_strip_analytic(p) = _ss_analytic(p)
+"Floodplain elevation (m) at x (m) on the SGS strip."
+sgs_strip_zf(p, x) = _ss_zf(p, x)
+"Bed relative to the floodplain across the SGS strip at y (m): the terrain the DEM represents."
+sgs_strip_zrel(p, y) = _ss_zrel(p, y)
+"Conveyance K(δ) (`:twod`, `:cells`, `:lumped`; see cases/scripts/sgs_strip_geometry.jl): Q = K·√S/n."
+sgs_strip_conveyance(p, δ, mode; kw...) = _ss_conveyance(p, δ, mode; kw...)
+"Storage per metre (m²) at level δ above the floodplain (`:water` or `:cells`)."
+sgs_strip_storage(p, δ, mode = :water; kw...) = _ss_storage(p, δ, mode; kw...)
+"Per-cell x, y, δ (level above the floodplain), volume, volume above the cell-mean bed, wet and channel masks at frame k."
+sgs_strip_profile(r, k, p) = _ss_profile(r, k, p)
+"The SGS-table diagnostics of a mesh (`cart20` or `a5r18`): `tables_<mesh>.json` in `dir`, as a Dict."
+sgs_strip_tables(dir, mesh) = _ss_tables(dir, mesh)
+"Measuring reach (m from the upstream end) and Manning's n of the SGS strip."
+const SGS_STRIP_REACH = _SS_REACH
+const SGS_STRIP_N = _SS_N
+
 export python_command, python_env, planar_params, planar_point, PLANAR_SLOPE_BAND,
-       EMBANKMENT_WET_DEPTH, embankment_xrange, log_mass_balance, channel_series_table
+       EMBANKMENT_WET_DEPTH, embankment_xrange, log_mass_balance, channel_series_table,
+       sgs_strip_params, sgs_strip_analytic, sgs_strip_zf, sgs_strip_zrel, sgs_strip_conveyance,
+       sgs_strip_storage, sgs_strip_profile, sgs_strip_tables, SGS_STRIP_REACH, SGS_STRIP_N
 
 end # module

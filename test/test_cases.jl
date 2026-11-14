@@ -8,6 +8,8 @@
 #     run, analysis, physical checks, expected values) in a temp directory
 # C3  a completed run is reused; a changed command line or a missing output
 #     is run again; --dry-run runs nothing
+# C4  expected failures (Check xfail): reported XFAIL/XPASS, never failing a
+#     case; an ordinary failing check still fails it
 
 ENV["FLOODA5_NO_VIS"] = "1"
 include(joinpath(@__DIR__, "..", "cases", "FloodA5Cases.jl"))
@@ -38,10 +40,26 @@ ENV["FLOODA5_CASES_DIR"] = ROOT
     end
     # the public names the notebooks use (notebooks/*.ipynb)
     for s in (:python_command, :python_env, :planar_params, :planar_point, :PLANAR_SLOPE_BAND,
-              :EMBANKMENT_WET_DEPTH, :embankment_xrange, :log_mass_balance, :channel_series_table)
+              :EMBANKMENT_WET_DEPTH, :embankment_xrange, :log_mass_balance, :channel_series_table,
+              :sgs_strip_params, :sgs_strip_analytic, :sgs_strip_zf, :sgs_strip_zrel, :sgs_strip_conveyance,
+              :sgs_strip_storage, :sgs_strip_profile, :sgs_strip_tables, :SGS_STRIP_REACH, :SGS_STRIP_N)
         @test isdefined(FC, s)
     end
     @test FC.planar_point() == FC._planar_point()
+end
+
+@testset "C1b — the SGS strip's analytic answers (no runs)" begin
+    # cases/scripts/sgs_strip_geometry.jl on the case's own terrain parameters
+    p = FC._SS_DEM
+    a = FC.sgs_strip_analytic(p)
+    @test isapprox(a["delta_2d_q3"], -0.267; atol = 1e-3)      # in bank: 0.733 m in the channel
+    @test isapprox(a["delta_2d_q20"], 0.372; atol = 1e-3)      # overbank
+    @test isapprox(a["delta_cells20_q3"], 0.045; atol = 1e-3)  # the 20 m cell-mean grid, in bank
+    # full rows: the exact-table (lumped) and cell-mean conveyances coincide
+    @test isapprox(a["delta_cells20_q20"], a["delta_lumped20_q20"]; atol = 1e-6)
+    # above the floodplain the volume above the cell-mean beds is the water volume
+    @test isapprox(a["store_cells20_q20"], FC.sgs_strip_storage(p, a["delta_cells20_q20"]); rtol = 1e-3)
+    @test FC.sgs_strip_zrel(p, 0.0) ≈ -p.D && FC.sgs_strip_zrel(p, 10.0) ≈ 0.0
 end
 
 @testset "C2 — smoke tier end to end" begin
@@ -74,6 +92,20 @@ end
     mv(FC.job_output(c, j), FC.job_output(c, j) * ".away")
     @test FC.job_status(c, j) === :missing
     mv(FC.job_output(c, j) * ".away", FC.job_output(c, j))
+end
+
+@testset "C4 — expected failures (xfail)" begin
+    m = Dict("run" => Dict("x" => 1.0))
+    mk(checks) = FC.Case(name = "xfail_test_case", title = "t", jobs = FC.Job[], checks = checks)
+    io = IOBuffer()
+    @test FC.check(mk([FC.Check("known defect", m -> false; xfail = "documented")]), m; io)
+    s = String(take!(io)); @test occursin("XFAIL", s) && occursin("documented", s)
+    @test FC.check(mk([FC.Check("fixed defect", m -> true; xfail = "documented")]), m; io)
+    @test occursin("XPASS", String(take!(io)))
+    @test !FC.check(mk([FC.Check("ordinary", m -> false), FC.Check("known", m -> false; xfail = "d")]), m; io)
+    # the registered SGS strip case marks only its SGS-behaviour checks
+    xs = [ch for ch in FC.case("sgs_strip").checks if !isempty(ch.xfail)]
+    @test !isempty(xs) && all(ch -> occursin("SGS", ch.name), xs)
 end
 
 println("\nTest-case registry tests complete.")

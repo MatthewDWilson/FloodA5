@@ -32,6 +32,7 @@ output records the same command line and completed; `--fresh` runs it again
 | `point_spread` | standard | 1, 5b | flat point source: A4/A6, sector ratio, circularity on A5 res 16/18 and Cartesian 25/12.5 m | ~8 min |
 | `planar_slope` | standard | 2b | N/S volume symmetry on a 0.1% plane, A5 res 16/18 and Cartesian 25 m | ~10 min |
 | `planar_embankment` | standard | 2a | SGS passes water through a sub-cell notch near its sill; standard only at the crest | ~6 min |
+| `sgs_strip` | standard | 2c | SGS against analytic normal flow, storage and arrival on a 4 km strip with a sub-cell channel (16 runs; several SGS checks fail by design: expected failures until SGS is fixed) | ~40 min |
 | `channel` | standard | 7 | straight channel, 22/11 m cells, 0°/45°, A5/Cartesian, SWE/LI (16 runs) | ~15 min |
 | `channel_series` | full | 7 | the full 224-run channel series | hours |
 | `carlisle` | full | 3 | first 6 h with a 10 mm/h *test* rain (the §15.11 record), local-inertial vs SWE on A5 res 18 and Cartesian 20 m, plus SGS; no-rain runs for contrast | ~45 min |
@@ -238,6 +239,83 @@ symmetric plume).
 hybrid limiter + local CFL 0.05 (HYDRAULICS §15.1); the 0.3.0 default 0.19
 (§15.8). `test/test_planar_symmetry.jl` and `test/wp1_metrics.jl planar`
 compute the same metrics for arbitrary output files.
+
+### 2c. SGS on a strip with known answers (`sgs_strip`)
+
+Written to answer whether SGS's large storage at Carlisle (26.7 Mm³ at the
+Eden peak against 10.5 SWE, 8.0 LI) is how storage is measured or lost
+conveyance. Notebook: `notebooks/04_sgs_strip.ipynb`.
+
+```bash
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run sgs_strip -P 2     # ~40 min the first time
+```
+
+**Terrain** (`cases/scripts/sgs_strip_dem.jl`, 0.5 m DEM, EPSG:4326 in the
+Cartesian generator's metric frame about 0°E 51°N; geometry and analytic
+hydraulics in `cases/scripts/sgs_strip_geometry.jl`): a strip 4000 m long
+and 60 m wide on a 0.1% slope, a 5 m × 1 m rectangular channel on its centre
+line, Manning n = 0.03, no walls in the DEM (`--wall 0`); the mesh edges are
+closed (`--bc-file`: a Closed line round the strip, a ZeroGradient line
+across the downstream end). Below x = 3800 m the bed steepens to 2.1%, a
+supercritical control that isolates the strip from each model's outflow
+boundary (in a trial without it, the 2.5 m SWE run's transmissive outlet held
+the water 0.86 m above normal depth at the outlet and was still filling at
+6 h). Inflow 3 m³/s (in bank) or 20 m³/s (overbank) in the channel 31 m from
+the upstream end, 10-minute ramp. Meshes: Cartesian 20 m (3 rows; the channel
+a quarter of the middle row) with SGS tables or cell-mean beds; A5 res 18
+likewise (every cell the AOI touches: a ragged strip 95 m wide on average); a
+Cartesian 2.5 m reference. Runs (16): SGS (default limiter, and `--limiter
+positivity`), LI and SWE on 20 m; SGS and LI on A5; LI and SWE on 2.5 m;
+8 h (2.5 m: 4 h).
+
+**Analytic answers** (level δ above the floodplain at uniform flow): 2-D
+(Σ strips h^(5/3), the fine-grid limit) −0.267 / +0.372 m with 3.57 /
+27.34 m²/m of storage; 20 m cell-mean rows +0.045 / +0.409 m (7.71 /
+29.52 m²/m); 20 m rows with exact SGS edge tables (one A, one R = A/P per
+face) −0.254 / +0.409 m. Above the floodplain the volume above the cell-mean
+bed *is* the water volume, so a cell-mean grid's storage differs from the
+true volume only where cells are partly wet (in bank: 2.2× here).
+`cases/scripts/sgs_strip_tables.jl` (a preparation step) compares the SGS
+tables with the terrain directly.
+
+Results (0.4.4; measuring reach x = 1000–2000 m, last frame; storage in m²/m):
+
+| | 3 m³/s δ (m) | storage | 20 m³/s δ (m) | storage | dS/dt ÷ Q at 20 m³/s |
+|---|---|---|---|---|---|
+| analytic 2-D | −0.267 | 3.57 | 0.372 | 27.34 | 0 |
+| LI / SWE 2.5 m | −0.263 / −0.264 | 3.57 / 3.56 | 0.373 / 0.373 | 27.38 | 0 |
+| LI / SWE 20 m | 0.045 | 7.70 | 0.408 | 29.52 | 0 |
+| SGS 20 m | −0.001 | 5.05 | 4.75 | 106.7 | 0.75 |
+| SGS 20 m, `--limiter positivity` | −0.259 | 3.61 | 4.42 | 99.0 | 0.73 |
+| LI A5 res 18 | 0.095 | 14.09 | 0.390 | 42.05 | 0 |
+| SGS A5 res 18 | 0.173 (filling) | 17.43 | 0.783 | 49.33 | 0.91 |
+
+Findings: (1) storage is measured correctly — the tables hold the terrain's
+volume to 0.3% (A5 median 0.05%), and overbank SGS's water volume equals its
+volume above the cell-mean bed; (2) overbank, an SGS face's flow area stops
+growing when the water rises above the cell's highest DEM sample
+(`build_sgs_tables!` tabulates edge curves on the cell's own z_min–z_max
+levels; `edge_area_radius` returns the top value above them; face points
+above a cell's z_max never wet in its table; the kernel averages the two
+cells' A and R): at δ = 0.4 m faces carry 39% (channel) and 2.5% (floodplain)
+of their true flow area on 20 m, 40% and 3% on A5, and the 20 m tables carry
+at most 4.9 m³/s at the bed slope, so SGS piles water up (δ ≈ 21 m at the
+inflow after 8 h); (3) in bank, the legacy donor cap (SGS's default limiter,
+V/(2N) per edge and step) makes a channel cell hold 2N·Q·Δt before it passes
+Q — brim-full here; positivity limiting removes it. At the `carlisle_peak`
+SGS peak 85% of wet cells, holding 26.1 of 26.7 Mm³, have their water above
+z_max (median 2.9 m above; median cell relief 0.56 m).
+
+Checks: the 2.5 m references against the analytic levels (0.03 m, 3%) and
+in-bank arrival times (10%); the 20 m LI/SWE runs against the cell-mean
+analytic; A5 LI steady and within 0.15 m overbank; the measurement identity;
+mass. The SGS checks state the correct behaviour and **fail** (expected
+failures until SGS is fixed): overbank face areas within 10% (tables), the
+tables carry 20 m³/s, SGS in-bank level/storage (default limiter), SGS
+overbank level within 0.10 m and storage within 10% of 2-D, arrival within
+15% of the 2.5 m reference, A5 SGS in bank and against A5 LI overbank.
+Expected values are recorded only for the runs whose checks pass (and the
+analytic values), not the failing SGS runs or the table diagnostics.
 
 ---
 
