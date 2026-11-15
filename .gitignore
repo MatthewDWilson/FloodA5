@@ -27,5 +27,8 @@ test/wp1_runs/
 test/case_runs/
 mesh/_tmp_*
 
+# Benchmark-suite smoke tests (benchmarks/run.jl --quick)
+benchmarks/results/*-quick.json
+
 # Executed notebook copies (notebooks/nbtools.jl execute)
 test/notebook_runs/

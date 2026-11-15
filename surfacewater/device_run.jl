@@ -14,6 +14,10 @@
 # Solvers: `--flow-model swe` (stage 1), `standard` (stage 2; the options
 # listed in surfacewater/std_device.jl) and `sgs` (stage 3, local CFL).
 # Not on a device: --limiter-stats, legacy CFL, cell/blend momentum.
+#
+# 0.6.0: the backend's working precision (`--precision`, precision.jl). In
+# Float32 (standard flow and SWE) the device arrays are Float32 copies, the
+# volume and the outflow totals Float64; the host FlowState stays Float64.
 
 struct DeviceRun{K, B<:ComputeBackend, AT, VI, VF}
     be         :: B
@@ -38,6 +42,8 @@ function DeviceRun(state::FlowState, method::FlowMethod, be::ComputeBackend, sou
             throw(ArgumentError("source type $(typeof(s)) is not supported on a device backend"))
     end
     ns = length(sources)
+    T = _precision(be); lev = _levels(be)
+    prep(a) = to_device(be, _to_precision(T, a))
     stage(K, a) = DeviceRun{K, typeof(be), typeof(a), typeof(to_device(be, zeros(Int, 0))),
                             typeof(to_device(be, zeros(0)))}(
         be, a, to_device(be, zeros(Int, ns)), to_device(be, zeros(ns)),
@@ -48,14 +54,17 @@ function DeviceRun(state::FlowState, method::FlowMethod, be::ComputeBackend, sou
     if method isa SWEFlow
         sw = state.swe
         @inbounds for k in eachindex(sw.gbc); sw.gbc[k] = _swe_bc_code(state.ghost_cell_bc[k]); end
-        return stage(:swe, to_device(be, _swe_args(state)))
+        return stage(:swe, prep(_swe_args(state; lev = lev)))
     elseif method isa StandardFlow
         state.momentum_model === :edge ||
             throw(ArgumentError("a device backend supports --momentum-model edge only"))
         state.cfl_mode === :local ||
             throw(ArgumentError("a device backend supports --cfl-mode local only"))
-        return stage(:std, to_device(be, _std_device_args(state)))
+        return stage(:std, prep(_std_device_args(state; lev = lev)))
     elseif method isa SGSFlow
+        (T === Float64 && lev isa AbsLevels) ||
+            throw(ArgumentError("--precision float32 is not available for --flow-model sgs " *
+                                "(standard and swe only)"))
         state.cfl_mode === :local ||
             throw(ArgumentError("a device backend supports --cfl-mode local only"))
         return stage(:sgs, to_device(be, _sgs_device_args(state)))
@@ -111,22 +120,26 @@ _device_step!(dev::DeviceRun{:swe}, dt::Float64, courant::Float64) =
 _device_step!(dev::DeviceRun{:std}, dt::Float64, courant::Float64) = _std_step!(dev.be, dev.a, dt, dev.glptr)
 _device_step!(dev::DeviceRun{:sgs}, dt::Float64, courant::Float64) = _sgs_step!(dev.be, dev.a, dt, dev.glptr)
 
+# device array → host array (the host's is Float64 at any working precision)
+_pull!(dst::Array{T}, src::AbstractArray{T}) where {T} = dst === src ? dst : copyto!(dst, src)
+_pull!(dst::Array, src::AbstractArray) = copyto!(dst, Array(src))
+
 "Copy the state the host reads back (volume, depth, discharges, outflow)."
 function _device_sync!(dev::DeviceRun{:swe}, state::FlowState)
     synchronize!(dev.be)
     a = dev.a
-    copyto!(state.volume, a.V); copyto!(state.water_depth, a.d)
-    copyto!(state.qvec_u, a.qx); copyto!(state.qvec_v, a.qy)
-    copyto!(state.swe.clamp_vol, a.clamp)
+    _pull!(state.volume, a.V); _pull!(state.water_depth, a.d)
+    _pull!(state.qvec_u, a.qx); _pull!(state.qvec_v, a.qy)
+    _pull!(state.swe.clamp_vol, a.clamp)
     state.vol_removed = dev.removed[]
     return nothing
 end
 function _device_sync!(dev::DeviceRun{K}, state::FlowState) where {K}   # :std, :sgs
     synchronize!(dev.be)
     a = dev.a
-    copyto!(state.volume, a.volume); copyto!(state.water_depth, a.water_depth)
-    K === :sgs ? copyto!(state.edges.flux_Q, a.flux_Q) : copyto!(state.edges.flux, a.flux)
-    copyto!(state.qvec_u, a.qvec_u); copyto!(state.qvec_v, a.qvec_v)
+    _pull!(state.volume, a.volume); _pull!(state.water_depth, a.water_depth)
+    K === :sgs ? _pull!(state.edges.flux_Q, a.flux_Q) : _pull!(state.edges.flux, a.flux)
+    _pull!(state.qvec_u, a.qvec_u); _pull!(state.qvec_v, a.qvec_v)
     state.vol_removed = Array(a.removed)[1]
     gf = Array(a.g_fprev)                     # ghost-edge momentum, for a later CPU step
     for (k, g) in enumerate(state.ghost_edges)

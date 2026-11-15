@@ -138,7 +138,7 @@ geometry) are still readable through the same functions.
 | `git_commit`, `git_dirty` | attrs | Code version; `git_dirty` = uncommitted changes to tracked files |
 | `git_diff` | dataset, text | The uncommitted patch (only when `git_dirty`) |
 | `project`, `manifest` | datasets, text | `Project.toml` and `Manifest.toml` of the active environment (exact package versions) |
-| `julia_version`, `hostname`, `cwd`, `backend`, `threads`, `cell_order`, `flow_model`, `started_utc` | attrs | Environment and run settings |
+| `julia_version`, `hostname`, `cwd`, `backend`, `precision` (since 0.6.0), `threads`, `cell_order`, `flow_model`, `started_utc` | attrs | Environment and run settings |
 | `inputs/NN/` | groups | One per input file the run read (`--friction`, `--inflow-point` hydrographs, `--inflow-bci` and its `.bdy`, `--bc-file`). Attrs `role`, `flag`, `argv_value` (as written in `argv`; empty for a `.bdy` found next to the `.bci`), `original_path`, `sha256`, `size`, `embedded`; dataset `bytes` (the file) when `embedded`. Files over 64 MB are referenced by path and checksum only. |
 
 The DEM is not stored: the mesh (below) already holds what the simulation
@@ -188,7 +188,8 @@ frames; writing 4–11% slower (tens of ms per frame).
 ### `/summary`
 
 Attrs `completed`, `n_frames`, `n_steps`, `wall_simulation_s`,
-`wall_since_start_s`, `vol_added_m3`, `vol_removed_m3`, `vol_domain_m3`,
+`wall_first5_steps_s` (since 0.6.0: device set-up and the first five steps —
+on a GPU mostly kernel compilation), `wall_since_start_s`, `vol_added_m3`, `vol_removed_m3`, `vol_domain_m3`,
 `mass_balance_error_m3`, `vol_applied_m3`, `conservation_error_m3`,
 `finished_utc`.
 

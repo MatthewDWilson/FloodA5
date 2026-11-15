@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.5.1"
+const FLOODA5_VERSION = "0.6.0"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -324,6 +324,7 @@ include(joinpath(@__DIR__, "mesh", "DiamondFlux.jl"))
 # SWEWork (R1 shallow-water reference solver), for FlowState.swe
 include(joinpath(@__DIR__, "surfacewater", "swe_types.jl"))
 # WP5: compute backends (CPU threads, KernelAbstractions devices)
+include(joinpath(@__DIR__, "surfacewater", "precision.jl"))   # 0.6.0: --precision
 include(joinpath(@__DIR__, "surfacewater", "backend.jl"))
 
 """
@@ -1239,9 +1240,11 @@ mutable struct TimingLog
     vol_applied  :: Float64    # volume the time stepping actually added (Σ source·dt, m³).
                                # vol_added is the exact time integral of the inputs, so
                                # vol_applied - vol_added is the sources' time-integration error
+    first_steps  :: Float64    # wall time of device set-up and the first 5 steps (s): the
+                               # compilation of the step, on a GPU of its kernels (0.6.0)
 end
 TimingLog() = TimingLog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                        0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                        0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 function _fmt_elapsed(s::Float64)::String
     s < 0.0005 && return "< 1 ms"
@@ -2283,9 +2286,10 @@ discharge with their own width and the result scaled by edge e's width.
 `qu`/`qv` must be unit-discharge vectors (Phase F) and `flux` a read-only
 snapshot (WP0 thread-safety rule).
 """
-@inline function _q_centred_consistent(flux::AbstractVector{Float64}, e::Int, edges,   # EdgeList or _edge_view
-                                       qu::AbstractVector{Float64}, qv::AbstractVector{Float64},
-                                       theta::Float64; volumetric::Bool = false)::Float64
+@inline function _q_centred_consistent(flux::AbstractVector{T}, e::Int, edges,   # EdgeList or _edge_view
+                                       qu::AbstractVector{T}, qv::AbstractVector{T},
+                                       theta::T; volumetric::Bool = false)::T where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     w_e = volumetric ? max(edges.width[e], 1e-9) : 1.0
     q0  = flux[e] / w_e
     nx  = edges.nf_x[e]; ny = edges.nf_y[e]
@@ -2303,6 +2307,7 @@ snapshot (WP0 thread-safety rule).
     end
     n_nb == 0 && return flux[e]
     return w_e * (theta * q0 + (1.0 - theta) * acc / n_nb)
+    end
 end
 
 # ---------------------------------------------------------------------------
@@ -3558,6 +3563,7 @@ function run_simulation!(state            :: FlowState,
 
     # WP5: on a device backend the state lives on the device during the run
     # (surfacewater/device_run.jl); `state` is brought up to date when read.
+    t_wall0 = time()
     dev = backend isa CPUThreads ? nothing : DeviceRun(state, method, backend, merged_sources)
     dev !== nothing && LIMITER_STATS[] &&
         throw(ArgumentError("--limiter-stats is not available on a device backend"))
@@ -3667,6 +3673,8 @@ function run_simulation!(state            :: FlowState,
 
         t    += dt
         step += 1
+        step == 5 && timing !== nothing && (dev !== nothing && synchronize!(dev.be);
+                                            timing.first_steps = time() - t_wall0)
         LIMITER_STATS[] && _lstats_step!(t)                 # D1b (--limiter-stats)
         # WP5: bring the host state up to date where it is read below
         dev !== nothing && ((vis !== nothing && step % VIS_INTERVAL == 0) ||
@@ -3992,6 +4000,26 @@ The open-boundary limiter (`--boundary-limiter`, D1b) of a scheme:
 scheme_boundary_limiter(scheme::Symbol, flow_method::Symbol) =
     scheme === :recommended && flow_method === :standard ? :positivity : :legacy
 
+"""
+    _check_precision(precision, backend, flow_method) → Float64 | Float32
+
+The float type of `--precision`, or an ArgumentError: Float32 runs on the
+device backends (gpu, ka_cpu) with standard flow or SWE; the CPU-thread path
+is the Float64 reference.
+"""
+function _check_precision(precision::Symbol, backend::Symbol, flow_method::Symbol)
+    precision in (:float64, :float32) ||
+        throw(ArgumentError("precision must be :float64 or :float32 (got :$precision)"))
+    precision === :float64 && return Float64
+    backend === :cpu &&
+        throw(ArgumentError("--precision float32 needs --backend gpu (or ka-cpu): " *
+                            "the CPU-thread path is the Float64 reference"))
+    flow_method === :sgs &&
+        throw(ArgumentError("--precision float32 is not available for --flow-model sgs " *
+                            "(standard and swe only)"))
+    return Float32
+end
+
 function run_flood_model(;
     mesh_source      :: Tuple,
     mesh_only        :: Bool    = false,
@@ -4035,6 +4063,7 @@ function run_flood_model(;
     swe_order         :: Int     = 2,         # R1: 1 | 2 (--flow-model swe)
     swe_viscosity     :: Float64 = 0.0,       # R1: eddy viscosity C_E (0 = off)
     backend           :: Symbol  = :cpu,      # WP5: :cpu | :gpu (CUDA) | :ka_cpu (device path on the CPU)
+    precision         :: Symbol  = :float64,  # 0.6.0: :float64 | :float32 (gpu / ka_cpu; standard and swe)
     rainfall_rate     :: Float64 = 0.0,
     injection_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
     rainpoint_specs   :: Vector{Tuple{Float64,Float64,Float64}} = Tuple{Float64,Float64,Float64}[],
@@ -4071,6 +4100,7 @@ function run_flood_model(;
 
     @info "=== A5 Flood Model ===" FLOODA5_VERSION Dates.now()
     @info "Vis mode    : $vis_mode"
+    _check_precision(precision, backend, flow_method)      # 0.6.0: refuse before any work
     if !mesh_only
         @info "Flow method : $flow_method"
     end
@@ -4512,7 +4542,8 @@ function run_flood_model(;
             "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
             "manning_n" => manning_n, "friction" => friction_source,
             "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
-            "cell_order" => cell_order, "backend" => backend, "limiter_stats" => limiter_stats,
+            "cell_order" => cell_order, "backend" => backend, "precision" => precision,
+            "limiter_stats" => limiter_stats,
             "rainfall_rate_m_per_s" => rainfall_rate,
             "injection_points" => injection_specs, "rainpoints" => rainpoint_specs,
             "inflow_points" => [string.(collect(s)) for s in inflow_specs],
@@ -4527,7 +4558,8 @@ function run_flood_model(;
         run = FO.provenance(@__DIR__)
         merge!(run, Dict{String,Any}(
             "argv" => run_argv, "options" => options, "cwd" => pwd(),
-            "backend" => string(backend), "threads" => Threads.nthreads(),
+            "backend" => string(backend), "precision" => string(precision),
+            "threads" => Threads.nthreads(),
             "cell_order" => string(cell_order), "flow_model" => string(flow_method),
             "started_utc" => FO._nowutc()))
         _write_mesh_metadata!(sim_output, mesh_file;
@@ -4551,11 +4583,13 @@ function run_flood_model(;
     t0 = time()
     # WP5: a GPU run goes through invokelatest, so that it sees the methods
     # CUDA.jl defines when _cuda_backend() loads it
+    # 0.6.0: --precision float32 (device backends; surfacewater/precision.jl)
+    fp = _check_precision(precision, backend, flow_method)
     compute = backend === :cpu    ? CPUThreads() :
-              backend === :gpu    ? _cuda_backend() :
-              backend === :ka_cpu ? KADevice(KernelAbstractions.CPU()) :
+              backend === :gpu    ? _cuda_backend(; precision = fp) :
+              backend === :ka_cpu ? KADevice(KernelAbstractions.CPU(); precision = fp) :
               throw(ArgumentError("backend must be :cpu, :gpu or :ka_cpu (got :$backend)"))
-    backend === :cpu || @info "Compute backend: $(backend) ($(typeof(compute)))"
+    backend === :cpu || @info "Compute backend: $(backend), $(precision) ($(typeof(compute)))"
     Base.invokelatest(run_simulation!, flow_state, mesh, sim_duration, dt_max,
                       vis, vis_mode, sim_output;
                       method        = method_obj,
@@ -4569,6 +4603,7 @@ function run_flood_model(;
     sim_output.enabled && FO.write_summary!(sim_output.path, Dict{String,Any}(
         "completed" => true, "n_frames" => sim_output.frame_count, "n_steps" => tl.n_steps,
         "wall_simulation_s" => tl.simulation, "wall_since_start_s" => time() - t_total,
+        "wall_first5_steps_s" => tl.first_steps,     # set-up and compilation of the step (0.6.0)
         "vol_added_m3" => tl.vol_added, "vol_removed_m3" => tl.vol_removed,
         "vol_domain_m3" => tl.vol_domain, "mass_balance_error_m3" => tl.mb_err,
         # conservation alone: what the stepping added vs what is stored and left
@@ -4918,9 +4953,20 @@ Flow model options:
   --backend cpu|gpu|ka-cpu
                      (WP5) Where the time steps run. cpu (default): CPU
                      threads. gpu: an NVIDIA GPU through CUDA.jl (full
-                     project environment; --flow-model swe so far); the state
+                     project environment; every flow model); the state
                      stays on the GPU and is copied back for output and log
                      lines. ka-cpu: the GPU code path on the CPU (testing).
+  --precision float64|float32
+                     (0.6.0) Working precision of the time steps. float64
+                     (default). float32: with --backend gpu (or ka-cpu), for
+                     --flow-model standard and swe — fluxes and momentum in
+                     single precision, cell volumes and the mass totals in
+                     double, water levels taken relative to a local datum, so
+                     mass is conserved as in a float64 run and depths agree
+                     with it to about 1e-6 m over short runs (longer runs
+                     diverge as any two float64 runs with different round-off
+                     do). About twice the float64 speed on GPUs with slow
+                     double-precision arithmetic. Output files are float64.
   --cell-order spatial|file
                      Order of cells in memory during the simulation (WP4).
                      spatial (default) sorts them along a Morton curve —
@@ -5601,6 +5647,12 @@ function main(args=String[])
     backend in (:cpu, :gpu, :ka_cpu) ||
         (println("ERROR: --backend requires 'cpu', 'gpu' or 'ka-cpu' (got '$backend_val')
 "); print_help(1))
+    precision_val, args = _pop_flag(args, "--precision")
+    precision = precision_val === nothing ? :float64 : Symbol(precision_val)
+    precision in (:float64, :float32) ||
+        (println("ERROR: --precision requires 'float64' or 'float32' (got '$precision_val')\n"); print_help(1))
+    precision === :float32 && backend === :cpu &&
+        (println("ERROR: --precision float32 needs --backend gpu (or ka-cpu)\n"); print_help(1))
     rainfall_val, args = _pop_flag(args, "--rainfall")
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
@@ -5771,6 +5823,7 @@ function main(args=String[])
         swe_order       = swe_order,
         swe_viscosity   = swe_viscosity,
         backend         = backend,
+        precision       = precision,
         rainfall_rate    = rainfall_rate,
         injection_specs  = injection_specs,
         rainpoint_specs  = rainpoint_specs,

@@ -33,6 +33,68 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-15
+
+Float32 on the device backends and a benchmark suite (MINOR). Float64
+results do not change: end states of every solver and scheme (CPU and
+`ka-cpu`, A5 and Cartesian) and the determinism fingerprints are bit-identical
+to 0.5.1.
+
+### Added
+- **`--precision float64|float32`** (default `float64`; `run_flood_model(…;
+  precision = :float32)`), for `--backend gpu` and `ka-cpu` with
+  `--flow-model standard` and `swe`. Refused with `--backend cpu` and with
+  `--flow-model sgs` (SGS follows its review). Depths, fluxes and velocities
+  are Float32; cell volumes and the mass totals stay Float64, and water
+  levels are formed relative to a local datum from bed differences taken in
+  Float64, so the result does not depend on the elevation datum
+  (`surfacewater/precision.jl`: `@fp`, `AbsLevels` / `RelLevels`). Output
+  files stay Float64; the precision is recorded in the run record and
+  `--rerun` reproduces it. Design: review plan §7.3; ARCHITECTURE.md §6a.
+- `test/test_precision.jl` (CI, on `ka-cpu`): Float32 against Float64 for
+  SWE and standard flow on Cartesian and A5 meshes, mass conservation, lake
+  at rest, datum independence, relative levels in Float64, the refusals and
+  the run record.
+- **Benchmark suite** `benchmarks/` (`julia --project=. benchmarks/run.jl`,
+  `benchmarks/README.md`): step throughput on 256²–2048² grids, CPU thread
+  scaling, and whole Carlisle runs (A5 res 18, Cartesian 20 m and 5 m;
+  standard and SWE) on CPU, GPU Float64 and GPU Float32, each device run
+  with its agreement with the reference (storage, extent CSI, depth
+  differences) and its conservation error. Results are kept per machine in
+  `benchmarks/results/<host>-<os>.json` (committed); first file:
+  `c002it-windows.json`.
+- **`notebooks/05_performance.ipynb`**: runs the sections the machine it is
+  opened on has no results for, and compares all machines with results.
+- `test/benchmark_backend.jl`: `--configs cpu,gpu64,gpu32[,kacpu64,kacpu32]`,
+  `--json FILE`, accuracy and mass columns, and `--min-cellsteps N` (the
+  suite times at least 10⁸ cell-steps per grid: 20 steps of a 512² grid take
+  a GPU 0.1 s, and gave rates wrong by up to a factor of three).
+- Run summary: `wall_first5_steps_s` (set-up and the first five steps; on a
+  GPU this is kernel compilation, about 40–50 s per process).
+
+### Changed
+- Kernel bodies (`kernels.jl`, `std_device.jl`, `swe_reference.jl`,
+  `eta_filter.jl`, the flux functions in `flow2d.jl`) are generic in the
+  float type. `KADevice` carries the precision and the level mode.
+- `test/benchmark_sim.jl` and `test/run_benchmarks.*` are superseded by the
+  suite's `threads` section (they need a configuration file that is no
+  longer in the repository).
+
+### Measured (Xeon E-2278G, 16 threads; RTX 4000 SFF Ada; `benchmarks/run.jl --force`)
+- Step throughput at 2048² (million cell-steps per second), CPU / GPU
+  Float64 / GPU Float32: standard 8.3 / 113 / 214; SWE 3.4 / 36 / 83.
+  Float32 differs from the CPU by 1·10⁻⁶ m there (26 steps) and by at most
+  8·10⁻⁶ m on any grid (256², 1 528 steps). Below
+  about 3·10⁵ cells Float32 gains little (standard, 512²: 64 / 60).
+- Carlisle 5 m (582 012 cells, 1 h), SWE: GPU Float64 893 s, Float32 388 s;
+  standard: CPU 328 s, GPU Float64 103 s, Float32 94 s (about 50 s of each
+  GPU run is compilation). At 30 000 cells the GPU is slower than the CPU
+  for standard flow in either precision.
+- Float32 against Float64 at the end of the Carlisle runs: storage within
+  1.4·10⁻⁴, extent CSI ≥ 0.997, conservation error ≤ 1·10⁻⁸. On A5 with the
+  standard solver, the differences are those of GPU Float64 against the CPU
+  (round-off amplification, HYDRAULICS.md §15.5), not of the precision.
+
 ## [0.5.1] — 2026-11-12
 
 SGS diagnosis (PATCH): the model does not change.

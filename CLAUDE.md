@@ -22,6 +22,8 @@ analysis module (0.4.1, `analysis/`), a test-case registry and runner
 (0.4.2, `cases/`), HDF5 replay in the GLMakie viewer and static plots
 (0.4.3, `visualisation/replay.jl`, `FloodA5Plots`), Jupyter notebooks
 (0.4.4, `notebooks/`; commit them stripped: `notebooks/nbtools.jl strip`).
+0.6.0: `--precision float32` on the device backends (standard, swe) and the
+benchmark suite (`benchmarks/`, `notebooks/05_performance.ipynb`).
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series). SGS meshes built before
@@ -40,7 +42,14 @@ without `_orient_collinear!`-style signs.
   `julia --project=. test/test_wp0_regressions.jl`
 - Thread determinism: `julia --project=. -t 1 test/check_determinism.jl` vs `-t 4`;
   compare the `FINGERPRINT` lines.
-- Step benchmark: `julia --project=. -t 8 test/benchmark_baseline.jl`.
+- Step benchmark: `julia --project=. -t 8 test/benchmark_baseline.jl`; CPU/GPU,
+  Float64/Float32 and whole runs, per machine: `julia --project=. benchmarks/run.jl`
+  (results in `benchmarks/results/<machine>.json`, committed).
+- Kernel bodies (`surfacewater/kernels.jl`, `*_device.jl`, `swe_reference.jl`)
+  are generic in the float type: write literals inside `@fp T …`, never form
+  z + h except through the level helpers (`_edge_levels`, `_swe_face_z`, …),
+  and keep volume sums in `eltype(volume)` (`surfacewater/precision.jl`).
+  Float64 results must stay bit-identical; Float32: `test/test_precision.jl`.
   Performance changes must keep results bit-identical unless stated: compare
   determinism fingerprints and Carlisle outputs frame by frame against `main`
   (use `--cell-order file`; spatial order changes round-off, and the standard

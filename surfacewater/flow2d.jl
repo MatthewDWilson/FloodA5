@@ -91,18 +91,20 @@ previous step's values while the threaded edge loop runs. Passing the live
 result then depends on edge order and thread scheduling. `step_standard!`
 and `step_sgs!` pass a start-of-step copy.
 """
-@inline function _q_centred(flux  :: AbstractVector{Float64},
+@inline function _q_centred(flux  :: AbstractVector{T},
                               e    :: Int,
                               ci   :: Int,   # collinear_i[e]
                               cj   :: Int,   # collinear_j[e]
-                              theta:: Float64 = Q_CENTRE_THETA_DEFAULT
-                              )::Float64
+                              theta:: T = convert(T, Q_CENTRE_THETA_DEFAULT)
+                              )::T where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     q0   = flux[e]
     n_nb = (ci != 0 ? 1 : 0) + (cj != 0 ? 1 : 0)
     n_nb == 0 && return q0
     q_nb = (ci != 0 ? flipsign(flux[abs(ci)], ci) : 0.0) +
            (cj != 0 ? flipsign(flux[abs(cj)], cj) : 0.0)
     return theta * q0 + (1.0 - theta) * q_nb / n_nb
+    end
 end
 
 # ---------------------------------------------------------------------------
@@ -136,7 +138,7 @@ Discharge magnitude used in the friction denominator: `|q_n|` (component,
 Bates 2010) or `√(q_n² + q_t²)` (vector). Works for unit discharge (m²/s) and
 volumetric discharge (m³/s) alike.
 """
-@inline _friction_q(q_n::Float64, q_t::Float64, vector_friction::Bool) =
+@inline _friction_q(q_n::T, q_t::T, vector_friction::Bool) where {T<:AbstractFloat} =
     vector_friction ? sqrt(q_n * q_n + q_t * q_t) : abs(q_n)
 
 """
@@ -148,8 +150,8 @@ so the cap acts on the discharge vector's magnitude rather than on one
 face-normal component (which is anisotropic in the same way as component
 friction).
 """
-@inline function _froude_cap(q_new::Float64, q_t::Float64, q_max::Float64,
-                             vector_friction::Bool)::Float64
+@inline function _froude_cap(q_new::T, q_t::T, q_max::T,
+                             vector_friction::Bool)::T where {T<:AbstractFloat}
     vector_friction || return clamp(q_new, -q_max, q_max)
     q_mag = sqrt(q_new * q_new + q_t * q_t)
     return q_mag > q_max ? q_new * (q_max / q_mag) : q_new
@@ -281,20 +283,21 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     `_bates_flux_limited_corrected` for production simulations; this
     function is retained for `--gradient-correction off` benchmarking.
 """
-@inline function _bates_flux_limited(q_prev       :: Float64,
-                                      wse_i        :: Float64,
-                                      wse_j        :: Float64,
-                                      z_sill       :: Float64,
-                                      width        :: Float64,
-                                      L            :: Float64,
-                                      cos_theta    :: Float64,
-                                      n_mann       :: Float64,
-                                      dt           :: Float64,
-                                      depth_donor  :: Float64;
-                                      vol_limit_divisor :: Float64 = 5.0,
-                                      q_t               :: Float64 = 0.0,
+@inline function _bates_flux_limited(q_prev       :: T,
+                                      wse_i        :: T,
+                                      wse_j        :: T,
+                                      z_sill       :: T,
+                                      width        :: T,
+                                      L            :: T,
+                                      cos_theta    :: T,
+                                      n_mann       :: T,
+                                      dt           :: T,
+                                      depth_donor  :: T;
+                                      vol_limit_divisor :: T = convert(T, 5.0),
+                                      q_t               :: T = zero(T),
                                       vector_friction   :: Bool    = false
-                                      )::Tuple{Float64,Float64}
+                                      )::Tuple{T,T} where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     h_flow = max(wse_i, wse_j) - z_sill
     if h_flow <= HFLOW_THRESHOLD
         # Edge is dry — zero out stale momentum so adjacent cells don't
@@ -336,6 +339,7 @@ q_stored is the unit discharge (m²/s) to persist as q_prev next step.
     # Fix C: return the post-limiting q so the caller stores a consistent q_prev
     Q = q_new * width
     return (Q, q_new)
+    end
 end
 
 
@@ -438,18 +442,19 @@ cos_theta-scaled WSE difference. Used exclusively by `step_standard!` when
 See `_bates_flux_corrected` for the argument-by-argument correspondence
 with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
 """
-@inline function _bates_flux_limited_corrected(q_prev      :: Float64,
-                                                h_flow      :: Float64,
-                                                dWSE_n      :: Float64,
-                                                width       :: Float64,
-                                                L           :: Float64,
-                                                n_mann      :: Float64,
-                                                dt          :: Float64,
-                                                depth_donor :: Float64;
-                                                vol_limit_divisor :: Float64 = 5.0,
-                                                q_t               :: Float64 = 0.0,
+@inline function _bates_flux_limited_corrected(q_prev      :: T,
+                                                h_flow      :: T,
+                                                dWSE_n      :: T,
+                                                width       :: T,
+                                                L           :: T,
+                                                n_mann      :: T,
+                                                dt          :: T,
+                                                depth_donor :: T;
+                                                vol_limit_divisor :: T = convert(T, 5.0),
+                                                q_t               :: T = zero(T),
                                                 vector_friction   :: Bool    = false
-                                                )::Tuple{Float64,Float64}
+                                                )::Tuple{T,T} where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     if h_flow <= HFLOW_THRESHOLD
         # See _bates_flux_limited's matching comment: zero out stale
         # momentum on dry edges rather than leaving edges.flux[e] unchanged.
@@ -481,6 +486,7 @@ with the legacy kernel (`dWSE_n` replaces `wse_i`, `wse_j`, `cos_theta`).
     # Fix C: return the post-limiting q so the caller stores a consistent q_prev.
     Q = q_new * width
     return (Q, q_new)
+    end
 end
 
 
@@ -828,15 +834,16 @@ Returns `(Q_out, q_stored)` where:
 Sign convention: Q_out > 0 → water leaves cell ci.
 Caller applies: state.volume[ci] -= Q_out * dt
 """
-@inline function _bates_ghost_flux(q_prev    :: Float64,
-                                    wse_ci    :: Float64,
-                                    wse_ghost :: Float64,
-                                    z_sill    :: Float64,
-                                    width     :: Float64,
-                                    L         :: Float64,
-                                    n_mann    :: Float64,
-                                    dt        :: Float64,
-                                    depth_ci  :: Float64)::Tuple{Float64,Float64}
+@inline function _bates_ghost_flux(q_prev    :: T,
+                                    wse_ci    :: T,
+                                    wse_ghost :: T,
+                                    z_sill    :: T,
+                                    width     :: T,
+                                    L         :: T,
+                                    n_mann    :: T,
+                                    dt        :: T,
+                                    depth_ci  :: T)::Tuple{T,T} where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     # Closed BC sentinel
     wse_ghost == -Inf && return (0.0, 0.0)
 
@@ -845,7 +852,7 @@ Caller applies: state.volume[ci] -= Q_out * dt
     # This also handles the ZeroGradient case (wse_ghost == wse_ci) where
     # the momentum term q_prev carries any remaining outflow; if q_prev is
     # also zero or negative the kernel correctly returns near-zero.
-    wse_ghost >= wse_ci + 1e-10 && return (0.0, 0.0)
+    _ghost_above(wse_ghost, wse_ci) && return (0.0, 0.0)
 
     # Call _bates_flux_limited with (wse_ghost, wse_ci) as the (i, j) pair.
     # wse_i = wse_ghost < wse_ci = wse_j, so dWSE = wse_ghost - wse_ci < 0
@@ -859,6 +866,7 @@ Caller applies: state.volume[ci] -= Q_out * dt
     Q_out < 0.0 && return (0.0, 0.0)
 
     return (Q_out, q_stored)
+    end
 end
 
 
