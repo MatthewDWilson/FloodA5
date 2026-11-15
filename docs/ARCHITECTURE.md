@@ -710,23 +710,61 @@ edge order — which reproduces the CPU loop exactly. With
 (4 on a 360 × 360 grid); with `legacy` the neighbours run along the boundary
 and the levels approach one per edge.
 
-**Throughput** (`test/benchmark_backend.jl`: all cells wet, Cartesian n × n,
-million cell-steps per second; Xeon E-2278G, 8 cores / 16 threads, against
-an RTX 4000 SFF Ada, whose FP64 rate is 1/64 of FP32):
+**Throughput** (`benchmarks/run.jl --sections step`, 0.6.0: all cells wet,
+Cartesian n × n, at least 10⁸ cell-steps timed per grid; million cell-steps
+per second; Xeon E-2278G, 8 cores / 16 threads, against an RTX 4000 SFF
+Ada, whose FP64 rate is 1/64 of FP32; GPU columns Float64 / Float32):
 
-| cells | standard CPU | standard GPU | SWE CPU | SWE GPU |
+| cells | standard CPU | standard GPU 64 / 32 | SWE CPU | SWE GPU 64 / 32 |
 |---|---|---|---|---|
-| 65 536 | 10.0 | 7.2 | 3.1 | 4.8 |
-| 262 144 | 9.1 | 26.0 | 2.4 | 22.0 |
-| 1 048 576 | 8.4 | 93.2 | 2.7 | 29.4 |
+| 65 536 | 10.5 | 25 / 27 | 3.3 | 18 / 26 |
+| 262 144 | 9.6 | 64 / 60 | 3.4 | 27 / 54 |
+| 1 048 576 | 8.7 | 81 / 203 | 3.5 | 32 / 70 |
+| 4 194 304 | 8.3 | 113 / 214 | 3.4 | 36 / 83 |
 
-The GPU overtakes the CPU at about 10⁵ cells; below that, launch latency
+Float32 doubles the GPU rate from about 10⁶ cells (standard) and 2.5·10⁵
+cells (SWE); on smaller grids the fixed cost per step dominates and the
+precision makes little difference. Repeated runs vary by about 15%
+(standard, 1024², GPU Float64: 81–97). Timings of fewer than about 10⁷
+cell-steps on the GPU are unreliable (hence `--min-cellsteps`; the table of
+0.3.x here, from 20 steps per grid, understated the small grids). CPU thread
+scaling at 1024² (section `threads`): standard 3.1, 5.1, 7.7, 8.7, 9.3
+Mc·s/s at 1, 2, 4, 8, 16 threads; SWE 0.85, 1.4, 2.3, 3.1, 3.1.
+
+In a continuous run the GPU overtakes the CPU at about 10⁵ cells; below that, launch latency
 (about 20 launches per standard step with the default options) dominates. Dry cells cost nothing
 on the CPU (active-edge set, WP4) but are still visited on the GPU, so a
 mostly dry domain moves the crossover upward.
 
-**Precision and agreement.** Float64 throughout. The device path run on the
-CPU is bit-identical to `CPUThreads` for all three solvers
+**Float32** (`--precision float32`, 0.6.0; `surfacewater/precision.jl`).
+For the standard and SWE solvers on a device backend (`KADevice(ka;
+precision = Float32)`); the CPU-thread path is always Float64, and SGS is
+refused. The kernel bodies are generic in the float type: literals and
+physical constants inside `@fp T …` are converted to `T`, which is the
+identity for Float64, so the Float64 code is unchanged. Three things keep
+Float32 usable:
+
+- *Levels relative to a local datum* (`RelLevels`). A water level z + h at
+  100 m elevation has 10⁻⁵ m resolution in Float32, more than the level
+  differences that drive flow. The bodies therefore never form z + h: they
+  take level differences as (bed difference) + (depth difference), with the
+  bed differences (`zsi`, `zsj`, `dzadj`, `zva`, `zvb`, … from
+  `_rel_offsets`; `dzadj`, `dzji`, `dsill`, `gdz` for SWE) computed once in
+  Float64 and then stored in Float32. Results do not depend on the
+  elevation datum (`test/test_precision.jl` P5). Float64 keeps the original
+  arithmetic (`AbsLevels`); all level arithmetic goes through helpers that
+  dispatch on the mode (`_edge_levels`, `_diamond_dn`, `_swe_face_z`, …).
+- *Volumes and mass totals in Float64.* `_to_precision` converts the device
+  arguments but keeps `volume`, the SWE stage volumes and the boundary and
+  clamp totals (`_KEEP_F64`); sums run in `eltype(volume)`. Conservation in
+  Float32 runs is 10⁻¹²–10⁻⁸ relative (Float64: 10⁻¹⁴).
+- *Round-off-scaled thresholds* where Float64 used 10⁻¹⁰
+  (`_ghost_above`, `_fit_reg`).
+
+Output files are Float64 in either precision.
+
+**Precision and agreement.** The device path run on the
+CPU in Float64 is bit-identical to `CPUThreads` for all three solvers
 (`test/test_backend.jl`, in CI). On the GPU, single steps agree to round-off
 (10⁻¹⁵ relative); over a run the local-inertial solvers amplify round-off
 at wet/dry thresholds (depth rms 10⁻⁸–10⁻⁶ m on a rained plane over 1 h,
@@ -738,9 +776,40 @@ then diverge locally by up to 1–2 m — exactly as a CPU run in Morton cell
 order diverges from one in file order, in the same cells and at the same
 times — while total storage stays within 3·10⁻⁴ (CPU reordering: 5·10⁻⁴).
 At this size (30 000 cells) the GPU is slower than 16 CPU threads for
-standard flow (153 vs 104 s) and faster for SGS (127 vs 281 s). FP64 throughput varies a lot between GPUs
-(1/64 of FP32 on most workstation and consumer cards); a Float32 option is
-future work.
+standard flow (115 vs 41 s, 50 s of it compilation) and faster for SGS
+(127 vs 281 s, 0.3.x) and SWE (191 vs 583 s).
+
+Float32 against Float64, whole runs (`benchmarks/run.jl`, section
+`carlisle`; forcing of the `carlisle` case; differences at the end of the
+run, against the CPU run unless stated):
+
+| mesh, duration | model | config | wall s | storage ratio − 1 | CSI (0.1 m) | rms Δh wet, m | max Δh, m | conservation |
+|---|---|---|---|---|---|---|---|---|
+| A5 res 18, 6 h | standard | GPU Float64 | 115 | −9·10⁻⁵ | 0.9981 | 2.5·10⁻² | 0.74 | 2·10⁻¹⁴ |
+| | | GPU Float32 | 121 | −1.4·10⁻⁴ | 0.9969 | 2.7·10⁻² | 0.75 | 1·10⁻¹¹ |
+| A5 res 18, 6 h | SWE | GPU Float64 | 191 | −9·10⁻¹³ | 1.0000 | 3·10⁻⁵ | 2·10⁻³ | 5·10⁻¹⁶ |
+| | | GPU Float32 | 171 | 2·10⁻⁸ | 1.0000 | 3·10⁻⁴ | 2·10⁻² | 2·10⁻¹² |
+| Cartesian 20 m, 6 h | standard | GPU Float64 | 89 | 2·10⁻¹⁵ | 1.0000 | 4·10⁻¹³ | 3·10⁻¹¹ | 3·10⁻¹⁴ |
+| | | GPU Float32 | 92 | 2·10⁻⁷ | 1.0000 | 5·10⁻⁵ | 3·10⁻³ | 9·10⁻¹² |
+| Cartesian 20 m, 6 h | SWE | GPU Float64 | 232 | −3·10⁻¹⁰ | 1.0000 | 2·10⁻⁵ | 1·10⁻³ | 1·10⁻¹⁴ |
+| | | GPU Float32 | 221 | 1·10⁻⁵ | 0.9999 | 8·10⁻⁴ | 4·10⁻² | 9·10⁻¹³ |
+| Cartesian 5 m, 1 h | standard | GPU Float64 | 103 | 2·10⁻¹⁴ | 1.0000 | 2·10⁻¹¹ | 6·10⁻⁹ | 4·10⁻¹⁵ |
+| (582 012 cells; CPU 328 s) | | GPU Float32 | 94 | −2·10⁻⁸ | 0.9999 | 9·10⁻⁶ | 5·10⁻⁴ | 1·10⁻⁸ |
+| Cartesian 5 m, 1 h | SWE | GPU Float64 | 893 | (reference) | | | | 2·10⁻¹⁴ |
+| | | GPU Float32 | 388 | −9·10⁻⁹ | 0.9999 | 2·10⁻⁴ | 5·10⁻² | 9·10⁻¹³ |
+
+Float32 changes storage by at most 10⁻⁵ where the Float64 GPU run itself
+reproduces the CPU (Cartesian meshes, SWE), with depth differences of
+millimetres to a few centimetres at single cells and no more than 0.05% of
+cells differing by over 1 cm. On A5 with the standard solver the Float32
+run differs from the CPU run as much as the Float64 GPU run does (4% of
+cells by over 1 cm, in both): there the round-off amplification, not the
+precision, sets the difference. Each GPU process spends 40–50 s compiling
+kernels (`wall_first5_steps_s` in the run summary), which is most of the
+wall time of the small runs above; FP64 throughput varies a lot between GPUs
+(1/64 of FP32 on most workstation and consumer cards), so the Float32 gain
+should be measured per machine (`benchmarks/`,
+`notebooks/05_performance.ipynb`).
 
 **Adding a pass** (or a phase to an existing solver): write the body in the
 solver's `*_device.jl` (or `kernels.jl`), make the CPU function call it

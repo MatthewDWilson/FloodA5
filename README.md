@@ -1,5 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
-![Version 0.5.0](https://img.shields.io/badge/Version-0.5.0-lightgrey)
+![Version 0.6.0](https://img.shields.io/badge/Version-0.6.0-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -287,10 +287,18 @@ records the options that were tried and rejected. The CLI flags are documented i
 
 **Performance.** Each time step is multi-threaded (`julia --threads auto`), or
 runs on an NVIDIA GPU with `--backend gpu` (every flow model; worthwhile from
-roughly 10⁵ cells — see `docs/ARCHITECTURE.md` §6a).
-Carlisle res-18 (30,000 cells, river inflows plus 10 mm/h rain, 8 threads)
-runs at roughly 500 simulated hours per wall-clock hour with the standard
-solver and 125 with SGS; mostly dry domains run much faster.
+roughly 10⁵ cells — see `docs/ARCHITECTURE.md` §6a). On the GPU,
+`--precision float32` (standard and SWE) roughly doubles the step rate of
+large meshes; volumes and mass totals stay in Float64, and the flood extent
+agrees with the Float64 run to a CSI above 0.99.
+Carlisle res-18 (30,000 cells, river inflows plus 10 mm/h rain, 8–16 CPU
+threads) runs at roughly 500 simulated hours per wall-clock hour with the
+standard solver and 125 with SGS; mostly dry domains run much faster. The 5 m
+Carlisle mesh (580,000 cells) runs one simulated hour in 328 s on 16 CPU
+threads and in about 100 s on a workstation GPU, half of that compilation.
+`julia --project=. benchmarks/run.jl` measures a machine and keeps its
+results (`benchmarks/README.md`); `notebooks/05_performance.ipynb` compares
+machines.
 
 ---
 
@@ -373,6 +381,7 @@ loading the visualisers.
 FLOODA5_NO_VIS=1 bash ci/run_tests.sh .                    # Git Bash / Linux / macOS
 julia --project=. -t 1 test/check_determinism.jl           # compare FINGERPRINT lines with -t 4
 julia --project=. -t 8 test/benchmark_baseline.jl          # step benchmark
+julia --project=. benchmarks/run.jl                        # CPU/GPU, Float64/Float32 benchmark suite
 ```
 
 Other individual tests and benchmarks:
@@ -482,7 +491,8 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
 **Performance**
 - Restructuring as a Julia package with precompilation (start-up and
   first-step compilation now dominate short runs)
-- A Float32 option and profiling of the GPU path
+- Float32 for the SGS solver (standard and SWE have it: `--precision float32`),
+  and the GPU's fixed cost per step on small meshes
 
 **Visualisation**
 - The GLMakie viewer is the primary viewer. The CesiumJS web viewer is low

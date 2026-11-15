@@ -23,6 +23,10 @@
 #
 # CUDA.jl is loaded only when a GPU run is requested (`_cuda_backend()`), so
 # CPU runs and CI need neither CUDA nor a GPU.
+#
+# 0.6.0: a KADevice also carries the working precision (`--precision`):
+# Float64 (default), or Float32 for the fluxes and momentum with the volume
+# kept in Float64 — surfacewater/precision.jl.
 
 using KernelAbstractions
 import Adapt
@@ -33,14 +37,36 @@ abstract type ComputeBackend end
 struct CPUThreads <: ComputeBackend end
 
 """
-    KADevice(ka)
+    KADevice(ka; precision = Float64, levels = <by precision>)
 
 A KernelAbstractions backend: `KADevice(CUDABackend())` for an NVIDIA GPU;
 `KADevice(KernelAbstractions.CPU())` runs the device code path on the CPU.
+`precision` is the working float type of the solver arrays (Float64, or
+Float32 with the volume kept in Float64); `levels` the water-level
+formulation, `AbsLevels()` for Float64 and `RelLevels()` for Float32
+(`RelLevels()` with Float64 is for tests) — surfacewater/precision.jl.
 """
-struct KADevice{B} <: ComputeBackend
-    ka :: B
+struct KADevice{B, T<:AbstractFloat, LV} <: ComputeBackend
+    ka  :: B
+    lev :: LV
 end
+function KADevice(ka; precision::Type = Float64,
+                  levels = precision === Float64 ? AbsLevels() : RelLevels())
+    precision in (Float64, Float32) ||
+        throw(ArgumentError("precision must be Float64 or Float32 (got $precision)"))
+    levels isa Union{AbsLevels, RelLevels} ||
+        throw(ArgumentError("levels must be AbsLevels() or RelLevels()"))
+    precision === Float32 && levels isa AbsLevels &&
+        throw(ArgumentError("Float32 needs RelLevels(): absolute water levels are not resolved in Float32"))
+    return KADevice{typeof(ka), precision, typeof(levels)}(ka, levels)
+end
+
+"Working float type of a backend's solver arrays."
+_precision(::ComputeBackend) = Float64
+_precision(::KADevice{B, T}) where {B, T} = T
+"Water-level formulation of a backend (surfacewater/precision.jl)."
+_levels(::ComputeBackend) = AbsLevels()
+_levels(be::KADevice) = be.lev
 
 @kernel function _foreach_kernel!(body, args)
     i = @index(Global, Linear)
@@ -99,7 +125,7 @@ function _minimum(x::Array{Float64})
     end
     return m
 end
-_minimum(x::AbstractArray) = minimum(x; init = Inf)
+_minimum(x::AbstractArray) = minimum(x; init = typemax(eltype(x)))
 function _maximum(x::Array{Float64})
     m = 0.0
     @inbounds for v in x
@@ -107,7 +133,7 @@ function _maximum(x::Array{Float64})
     end
     return m
 end
-_maximum(x::AbstractArray) = maximum(x; init = 0.0)     # for non-negative x
+_maximum(x::AbstractArray) = maximum(x; init = zero(eltype(x)))     # for non-negative x
 
 "Σ_k dt·x[k]·y[k], in index order on host arrays."
 function _dot_sum(dt::Float64, x::Array{Float64}, y::Array{Float64})
@@ -117,17 +143,18 @@ function _dot_sum(dt::Float64, x::Array{Float64}, y::Array{Float64})
     end
     return s
 end
+# (each product in the arrays' type, as the cell update forms it; the sum in Float64)
 _dot_sum(dt::Float64, x::AbstractArray, y::AbstractArray) =
-    dt * mapreduce(*, +, x, y; init = 0.0)
+    dt * mapreduce((a, b) -> Float64(a * b), +, x, y; init = 0.0)
 
 """
-    _cuda_backend() → KADevice
+    _cuda_backend(; precision = Float64) → KADevice
 
-Load CUDA.jl (on first use) and return `KADevice(CUDABackend())`; errors if
-no functional GPU is found. Call the GPU run through `Base.invokelatest`, so
-that it sees the methods CUDA.jl has just defined.
+Load CUDA.jl (on first use) and return `KADevice(CUDABackend(); precision)`;
+errors if no functional GPU is found. Call the GPU run through
+`Base.invokelatest`, so that it sees the methods CUDA.jl has just defined.
 """
-function _cuda_backend()
+function _cuda_backend(; precision::Type = Float64)
     if !isdefined(Main, :CUDA)
         try
             @eval Main using CUDA
@@ -137,5 +164,5 @@ function _cuda_backend()
     end
     ok = Base.invokelatest(() -> Main.CUDA.functional())
     ok || error("--backend gpu: CUDA.jl found no functional GPU")
-    return KADevice(Base.invokelatest(() -> Main.CUDA.CUDABackend()))
+    return KADevice(Base.invokelatest(() -> Main.CUDA.CUDABackend()); precision = precision)
 end

@@ -57,24 +57,41 @@ end
 # evaluated at cell i (fit on δ_j = η_j − η_i for precision; cell i is the
 # point d = 0, δ = 0). A tiny Tikhonov term on the gradient keeps one-neighbour
 # and collinear stencils defined.
-@inline function _eta_residual(i::Int, η::AbstractVector, V::AbstractVector,
-                               adj::AbstractMatrix, cei::AbstractMatrix, sill::AbstractVector,
-                               dxm::AbstractMatrix, dym::AbstractMatrix)   # Polyester passes PtrArrays
+#
+# 0.6.0: takes the kernels' argument tuple, and the fit's two inputs per
+# neighbour slot — the face depth above the sill and δ — from `_ef_pair`:
+# from the levels η = z + h (AbsLevels), or from the depths and the bed
+# offsets, without forming a level (RelLevels; surfacewater/precision.jl).
+@inline function _ef_pair(::AbsLevels, a, s, i, j, e)
     @inbounds begin
-        V[i] > 0.0 || return 0.0
-        ηi = η[i]
+        ηi = a.f_eta[i]
+        return min(ηi, a.f_eta[j]) - a.sill[e], a.f_eta[j] - ηi
+    end
+end
+@inline function _ef_pair(::RelLevels, a, s, i, j, e)
+    @inbounds begin
+        h = a.water_depth
+        δ = (h[j] - h[i]) + a.dzadj[s, i]
+        return min(zero(δ), δ) + h[i] + (a.ci[e] == i ? a.zsi[e] : a.zsj[e]), δ
+    end
+end
+
+@inline function _eta_residual(lev, i::Int, a)
+    T = eltype(a.f_r)
+    @fp T @inbounds begin
+        a.volume[i] > 0.0 || return 0.0
+        dxm = a.f_dx; dym = a.f_dy
         W = 0.0; sx = 0.0; sy = 0.0; sd = 0.0; wg = 0.0; ng = 0
         sxx = 0.0; sxy = 0.0; syy = 0.0; sxd = 0.0; syd = 0.0
-        for s in 1:size(adj, 1)
-            j = adj[s, i]; j == 0 && continue
-            e = cei[s, i]; e == 0 && continue
-            hf = min(ηi, η[j]) - sill[e]
+        for s in 1:size(a.adj, 1)
+            j = a.adj[s, i]; j == 0 && continue
+            e = a.cei[s, i]; e == 0 && continue
+            hf, δ = _ef_pair(lev, a, s, i, j, e)
             hf > 0.0 || continue                      # also false for NaN
             dx = dxm[s, i]; dy = dym[s, i]; d2 = dx * dx + dy * dy
             d2 > 0.0 || continue
             wg += 1.0 / d2; ng += 1
             w = min(hf / ETA_FILTER_HW, 1.0) / d2
-            δ = η[j] - ηi
             W += w; sx += w * dx; sy += w * dy; sd += w * δ
             sxx += w * dx * dx; sxy += w * dx * dy; syy += w * dy * dy
             sxd += w * dx * δ; syd += w * dy * δ
@@ -82,7 +99,7 @@ end
         W > 0.0 || return 0.0
         W += wg / ng                                  # the cell itself (d = 0, δ = 0)
         mx = sx / W; my = sy / W; md = sd / W
-        λ = 1e-10 * (sxx + syy) / W                  # regularises exact degeneracy only
+        λ = _fit_reg(T) * (sxx + syy) / W            # regularises exact degeneracy only
         cxx = sxx / W - mx * mx + λ; cyy = syy / W - my * my + λ; cxy = sxy / W - mx * my
         cxd = sxd / W - mx * md;     cyd = syd / W - my * md
         det = cxx * cyy - cxy * cxy

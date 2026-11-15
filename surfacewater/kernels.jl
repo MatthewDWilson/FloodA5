@@ -62,16 +62,48 @@ function _std_arrays(state::FlowState, ws::StepWorkspace, flux_prev)
             stats = LIMITER_STATS[], lflag = _lf_flag(), lhf = _lf_hf())   # D1b (--limiter-stats)
 end
 
+# Water levels of an edge's two cells and its sill (0.6.0, surfacewater/precision.jl).
+# AbsLevels: z + V/A, as always. RelLevels: relative to the sill, from the
+# offsets zsi = z_i − sill, zsj = z_j − sill and the cell depths.
+@inline function _edge_levels(::AbsLevels, M, e, ci, cj)
+    @inbounds begin
+        wse_ci = M.elevation[ci] + M.volume[ci] / max(M.cell_area[ci], 1.0)
+        wse_cj = M.elevation[cj] + M.volume[cj] / max(M.cell_area[cj], 1.0)
+        return wse_ci, wse_cj, M.sill[e]
+    end
+end
+@inline _edge_levels(::RelLevels, M, e, ci, cj) =
+    @inbounds (M.zsi[e] + M.water_depth[ci], M.zsj[e] + M.water_depth[cj], zero(eltype(M.zsi)))
+
+# Diamond face-normal head. RelLevels: M.veta holds Σ w·h at the vertices and
+# zva/zvb the vertices' interpolated bed relative to the sill (the four
+# coefficients sum to zero, so the datum drops out).
+@inline _diamond_dn(::AbsLevels, M, e, wse_ci, wse_cj) =
+    @inbounds diamond_dWSE_n_v(M.dtab, e, wse_ci, wse_cj, M.veta, M.L[e])
+@inline function _diamond_dn(::RelLevels, M, e, wse_ci::T, wse_cj::T) where {T}
+    @inbounds begin
+        t = M.dtab
+        t.valid[e] || return convert(T, NaN)
+        ha = M.veta[t.va_idx[e]]; hb = M.veta[t.vb_idx[e]]
+        (isnan(ha) || isnan(hb)) && return convert(T, NaN)
+        dn = t.c_i[e] * wse_ci + t.c_va[e] * (M.zva[e] + ha) +
+             t.c_j[e] * wse_cj + t.c_vb[e] * (M.zvb[e] + hb)
+        return -M.L[e] * dn
+    end
+end
+
 """
     _face_flux_std!(e, opts, M, dt)
 
 Phase A of `step_standard!` for edge `e`: face discharge (stored in M.flux[e],
 Fix C) and signed edge volume after the per-edge donor cap (M.edge_vol[e]).
-Transcribed from the stage-1 loop body; bit-identical to it.
+Transcribed from the stage-1 loop body; bit-identical to it. Written for any
+float type (0.6.0, surfacewater/precision.jl): T is M.flux's.
 """
 @inline function _face_flux_std!(e::Int, ::StdOpts{GC, FF, MOM, QC, VF, POS, FIXB}, M,
-                                 dt::Float64) where {GC, FF, MOM, QC, VF, POS, FIXB}
-    @inbounds begin
+                                 dt_in) where {GC, FF, MOM, QC, VF, POS, FIXB}
+    T = eltype(M.flux); dt = convert(T, dt_in); lev = _lev(M)
+    @fp T @inbounds begin
         ci = M.ci[e]; cj = M.cj[e]
         # Degenerate edge guard (NaN in geometry or elevation)
         if (isnan(M.width[e])        || isnan(M.L[e])            ||
@@ -82,10 +114,9 @@ Transcribed from the stage-1 loop body; bit-identical to it.
             M.stats && (M.lflag[e] = 0x00)
             return nothing
         end
-        wse_ci = M.elevation[ci] + M.volume[ci] / max(M.cell_area[ci], 1.0)
-        wse_cj = M.elevation[cj] + M.volume[cj] / max(M.cell_area[cj], 1.0)
+        wse_ci, wse_cj, sill = _edge_levels(lev, M, e, ci, cj)
         # Dry edge: both kernels return (0, 0)
-        if max(wse_ci, wse_cj) - M.sill[e] <= HFLOW_THRESHOLD
+        if max(wse_ci, wse_cj) - sill <= HFLOW_THRESHOLD
             M.flux[e] = 0.0
             M.edge_vol[e] = 0.0
             M.stats && (M.lflag[e] = 0x00)
@@ -110,10 +141,10 @@ Transcribed from the stage-1 loop body; bit-identical to it.
         if GC
             dWSE_n = NaN
             if FF === :diamond
-                dWSE_n = diamond_dWSE_n_v(M.dtab, e, wse_ci, wse_cj, M.veta, M.L[e])
+                dWSE_n = _diamond_dn(lev, M, e, wse_ci, wse_cj)
             elseif FF === :diamond_wetdry
                 dWSE_n = diamond_stencil_wet_v(M.dtab, e, M.vwet) ?
-                         diamond_dWSE_n_v(M.dtab, e, wse_ci, wse_cj, M.veta, M.L[e]) :
+                         _diamond_dn(lev, M, e, wse_ci, wse_cj) :
                          M.cos_theta[e] * (wse_ci - wse_cj)
             end
             if isnan(dWSE_n)
@@ -122,14 +153,14 @@ Transcribed from the stage-1 loop body; bit-identical to it.
                 Vhat_dot = gx_f * M.skew_x[e] + gy_f * M.skew_y[e]
                 dWSE_n   = M.cos_theta[e] * (wse_ci - wse_cj) - M.alpha * M.L[e] * Vhat_dot
             end
-            h_flow = max(wse_ci, wse_cj) - M.sill[e]
+            h_flow = max(wse_ci, wse_cj) - sill
             Q, q_stored = _bates_flux_limited_corrected(
                 q_prev_eff, h_flow, dWSE_n, M.width[e], M.L[e],
                 min(M.manning_n[ci], M.manning_n[cj]), dt, depth_donor;
                 vol_limit_divisor = M.max_nb, q_t = q_t, vector_friction = VF)
         else
             Q, q_stored = _bates_flux_limited(
-                q_prev_eff, wse_ci, wse_cj, M.sill[e], M.width[e], M.L[e], M.cos_theta[e],
+                q_prev_eff, wse_ci, wse_cj, sill, M.width[e], M.L[e], M.cos_theta[e],
                 min(M.manning_n[ci], M.manning_n[cj]), dt, depth_donor;
                 vol_limit_divisor = M.max_nb, q_t = q_t, vector_friction = VF)
         end
@@ -137,12 +168,12 @@ Transcribed from the stage-1 loop body; bit-identical to it.
         ev = Q * dt
         ev_raw = ev
         if !POS && !iszero(ev)                 # per-edge donor cap
-            ev = ev > 0.0 ? min(ev,  M.volume[cj] / M.donor_div) :
-                            max(ev, -M.volume[ci] / M.donor_div)
+            ev = ev > 0.0 ? min(ev,  T(M.volume[cj] / M.donor_div)) :
+                            max(ev, T(-M.volume[ci] / M.donor_div))
         end
         M.edge_vol[e] = ev
         if M.stats                             # D1b: which limiters bound (no effect on results)
-            hs = max(max(wse_ci, wse_cj) - M.sill[e], 1e-6)
+            hs = max(max(wse_ci, wse_cj) - sill, 1e-6)
             fl = LF_WET
             qmax = hs * sqrt(_G * hs) * FROUDE_LIMIT
             if VF
@@ -162,7 +193,7 @@ end
 
 # Launch over all edges with the options as compile-time constants (function
 # barrier: `opts` is concrete inside).
-function _face_flux_std_all!(opts::StdOpts, M, ne::Int, dt::Float64)
+function _face_flux_std_all!(opts::StdOpts, M, ne::Int, dt::Float64)   # CPU step: Float64
     @batch per=core for e in 1:ne
         _face_flux_std!(e, opts, M, dt)
     end

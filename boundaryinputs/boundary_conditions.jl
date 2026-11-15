@@ -136,12 +136,13 @@ Water surface elevation to assign to the virtual ghost cell.
 
   Closed        — returns -Inf (sentinel; caller skips the edge)
 """
-@inline function _ghost_wse(wse_ci   :: Float64,
-                              sill     :: Float64,
+@inline function _ghost_wse(wse_ci   :: T,
+                              sill     :: T,
                               bc       :: BCType,
-                              wse_nb   :: Float64 = NaN,
-                              L_ci_nb  :: Float64 = 0.0,
-                              L_ghost  :: Float64 = 0.0)::Float64
+                              wse_nb   :: T = convert(T, NaN),
+                              L_ci_nb  :: T = zero(T),
+                              L_ghost  :: T = zero(T))::T where {T<:AbstractFloat}
+    @fp T begin                       # 0.6.0: any float type (surfacewater/precision.jl)
     bc === Closed   && return -Inf
     bc === Critical && return sill + (2.0/3.0) * max(0.0, wse_ci - sill)
 
@@ -163,6 +164,7 @@ Water surface elevation to assign to the virtual ghost cell.
 
     # FixedWSE / FixedQ: caller must inject the correct value.
     return wse_ci   # safe fallback
+    end
 end
 
 # ---------------------------------------------------------------------------

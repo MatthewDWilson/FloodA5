@@ -62,11 +62,17 @@
 #   of the first-order scheme (C ≤ 1); `--courant` sets C. Any volume added
 #   by clamping a negative cell is counted (SWEWork.clamp_vol) and reported.
 # Data layout and the GPU-port rules: surfacewater/swe_types.jl.
+# 0.6.0: the kernel bodies are written for any float type (`@fp`, T from one
+# of the body's arrays) and for both level formulations (`_lev(a)`: AbsLevels,
+# the original arithmetic, or RelLevels, used by `--precision float32`: beds
+# relative to cell i's, from offsets differenced in Float64) —
+# surfacewater/precision.jl. The volume update is always in the volume's own
+# type (Float64).
 
 const SWE_HDRY = 1e-6      # m: below this a cell is dry (no momentum)
 const SWE_HVEL = 1e-3      # m: velocity desingularisation u = q·h / max(h², H²)
 
-@inline _swe_vel(q, h) = q * h / max(h * h, SWE_HVEL * SWE_HVEL)
+@inline _swe_vel(q::T, h::T) where {T<:AbstractFloat} = @fp T (q * h / max(h * h, SWE_HVEL * SWE_HVEL))
 
 # ── Geometry ────────────────────────────────────────────────────────────────
 
@@ -152,8 +158,8 @@ frame (Toro): two-rarefaction wave-speed estimates with the dry-bed limits,
 HLL for mass and normal momentum, the contact wave carrying the tangential
 velocity upwind.
 """
-@inline function _swe_hllc(hL::Float64, unL::Float64, utL::Float64,
-                           hR::Float64, unR::Float64, utR::Float64)
+@inline function _swe_hllc(hL::T, unL::T, utL::T, hR::T, unR::T, utR::T) where {T<:AbstractFloat}
+    @fp T begin
     wetL = hL > SWE_HDRY; wetR = hR > SWE_HDRY
     (wetL || wetR) || return (0.0, 0.0, 0.0)
     cL = sqrt(_G * hL); cR = sqrt(_G * hR)
@@ -176,6 +182,7 @@ velocity upwind.
     den = hR * (unR - sR) - hL * (unL - sL)
     ss = den != 0.0 ? (sL * hR * (unR - sR) - sR * hL * (unL - sL)) / den : 0.0
     return (f1, f2, f1 * (ss >= 0.0 ? utL : utR))
+    end
 end
 
 # ── Arrays ──────────────────────────────────────────────────────────────────
@@ -186,10 +193,18 @@ end
 Everything the SWE passes read or write: host arrays (references, not
 copies) and scalars. `to_device` adapts it to a GPU (WP5, surfacewater/backend.jl).
 """
-function _swe_args(state::FlowState)
+function _swe_args(state::FlowState; lev = AbsLevels())
     sw = state.swe; E = state.edges
     ws = _workspace!(state); cptr, cedge = _cell_csr!(state, ws)
-    return (V = state.volume, qx = state.qvec_u, qy = state.qvec_v, z = state.elevation,
+    rel = (;)
+    if lev isa RelLevels               # bed offsets, differenced in Float64 (precision.jl)
+        z = state.elevation; adj = state.adj_matrix
+        rel = (dzadj = [adj[s, i] > 0 ? z[adj[s, i]] - z[i] : 0.0 for s in 1:size(adj, 1), i in eachindex(z)],
+               dzji = [z[E.cell_j[e]] - z[E.cell_i[e]] for e in 1:E.n_edges],
+               dsill = [E.sill[e] - z[E.cell_i[e]] for e in 1:E.n_edges],
+               gdz = [sw.gz[k] - z[sw.gcell[k]] for k in eachindex(sw.gcell)])
+    end
+    return merge(rel, (lev = lev, V = state.volume, qx = state.qvec_u, qy = state.qvec_v, z = state.elevation,
             A = state.cell_area, nman = state.manning_n, d = state.water_depth,
             vu = state.vel_u, vv = state.vel_v, vel = state.velocity,
             ci = E.cell_i, cj = E.cell_j, w = E.width, L = E.L, sill = E.sill,
@@ -205,16 +220,27 @@ function _swe_args(state::FlowState)
             G1 = sw.G1, G2 = sw.G2, G3 = sw.G3, V0 = sw.V0, qx0 = sw.qx0, qy0 = sw.qy0,
             clamp = sw.clamp_vol,
             order = sw.order, ce = sw.visc_ce, open_in = sw.open_inflow,
-            n = length(state.volume), ne = E.n_edges, ng = length(sw.gcell))
+            n = length(state.volume), ne = E.n_edges, ng = length(sw.gcell)))
 end
+
+# η_j − η_i for the neighbour in slot s; the beds of a face's two cells and
+# its sill; a boundary cell's bed and its face's bed. RelLevels: relative to
+# cell i's (the cell's) bed.
+@inline _swe_deta(::AbsLevels, a, s, i, j) = @inbounds a.eta[j] - a.eta[i]
+@inline _swe_deta(::RelLevels, a, s, i, j) = @inbounds (a.h[j] - a.h[i]) + a.dzadj[s, i]
+@inline _swe_face_z(::AbsLevels, a, e, i, j) = @inbounds (a.z[i], a.z[j], a.sill[e])
+@inline _swe_face_z(::RelLevels, a, e, i, j) = @inbounds (zero(eltype(a.dzji)), a.dzji[e], a.dsill[e])
+@inline _swe_bnd_z(::AbsLevels, a, k, c) = @inbounds (a.z[c], a.gz[k])
+@inline _swe_bnd_z(::RelLevels, a, k, c) = @inbounds (zero(eltype(a.gdz)), a.gdz[k])
 
 # ── Stage passes (kernel bodies: one cell, face or boundary face each) ─────
 
 # primitives per cell: h, η, desingularised u, v; dry or NaN-bed cells inert
 @inline function _swe_prim_k!(i, a)
-    @inbounds begin
+    T = eltype(a.h)
+    @fp T @inbounds begin
         if isfinite(a.z[i]) && a.A[i] >= 1.0
-            hi = max(a.V[i], 0.0) / a.A[i]
+            hi = T(max(a.V[i], 0.0) / a.A[i])
             a.h[i] = hi; a.eta[i] = a.z[i] + hi
             if hi > SWE_HDRY
                 a.u[i] = _swe_vel(a.qx[i], hi); a.v[i] = _swe_vel(a.qy[i], hi)
@@ -230,7 +256,8 @@ end
 
 # Barth–Jespersen factor for one variable: the reconstruction at every face
 # midpoint of cell i stays within the range of cell i and its neighbours
-@inline function _bj(φi, φmin, φmax, gx, gy, i, a)
+@inline function _bj(φi::T, φmin::T, φmax::T, gx::T, gy::T, i, a) where {T<:AbstractFloat}
+    @fp T begin
     α = 1.0
     @inbounds begin
         for k in a.cptr[i]:a.cptr[i + 1] - 1
@@ -245,15 +272,19 @@ end
         end
     end
     return max(α, 0.0)
+    end
 end
 
 # limited WLSQ gradients of η, h, u, v (order 2); zero next to dry cells
+# (η's range is kept relative to η_i — the same numbers as max η − η_i, rounding
+# being monotone — so that no absolute level is needed)
 @inline function _swe_grad_k!(i, a)
-    @inbounds begin
-        h = a.h; u = a.u; v = a.v; eta = a.eta; adj = a.adj; W = a.W; nb = a.nb
+    T = eltype(a.h); lev = _lev(a)
+    @fp T @inbounds begin
+        h = a.h; u = a.u; v = a.v; adj = a.adj; W = a.W; nb = a.nb
         ok = h[i] > SWE_HDRY
         ex = 0.0; ey = 0.0; hx = 0.0; hy = 0.0; ux = 0.0; uy = 0.0; vx = 0.0; vy = 0.0
-        emin = eta[i]; emax = eta[i]; hmin = h[i]; hmax = h[i]
+        emin = 0.0; emax = 0.0; hmin = h[i]; hmax = h[i]
         umin = u[i]; umax = u[i]; vmin = v[i]; vmax = v[i]
         if ok
             for s in 1:nb
@@ -262,17 +293,17 @@ end
                     ok = false; break
                 end
                 wx = W[s, i]; wy = W[nb + s, i]
-                de = eta[j] - eta[i]; dh = h[j] - h[i]; du = u[j] - u[i]; dv = v[j] - v[i]
+                de = _swe_deta(lev, a, s, i, j); dh = h[j] - h[i]; du = u[j] - u[i]; dv = v[j] - v[i]
                 ex += wx * de; ey += wy * de; hx += wx * dh; hy += wy * dh
                 ux += wx * du; uy += wy * du; vx += wx * dv; vy += wy * dv
-                emin = min(emin, eta[j]); emax = max(emax, eta[j])
+                emin = min(emin, de); emax = max(emax, de)
                 hmin = min(hmin, h[j]); hmax = max(hmax, h[j])
                 umin = min(umin, u[j]); umax = max(umax, u[j])
                 vmin = min(vmin, v[j]); vmax = max(vmax, v[j])
             end
         end
         if ok
-            ae = _bj(eta[i], emin, emax, ex, ey, i, a)
+            ae = _bj(0.0, emin, emax, ex, ey, i, a)
             ah = _bj(h[i], hmin, hmax, hx, hy, i, a)
             au = _bj(u[i], umin, umax, ux, uy, i, a)
             av = _bj(v[i], vmin, vmax, vx, vy, i, a)
@@ -291,8 +322,9 @@ end
 # interior faces: reconstructed states, hydrostatic reconstruction, HLLC,
 # pressure corrections, optional viscous stress
 @inline function _swe_face_k!(e, a)
-    @inbounds begin
-        h = a.h; u = a.u; v = a.v; z = a.z
+    T = eltype(a.F1)
+    @fp T @inbounds begin
+        h = a.h; u = a.u; v = a.v
         i = a.ci[e]; j = a.cj[e]
         if !(h[i] > SWE_HDRY || h[j] > SWE_HDRY) || !isfinite(a.eta[i]) || !isfinite(a.eta[j])
             a.F1[e] = 0.0; a.F2[e] = 0.0; a.F3[e] = 0.0; a.PL[e] = 0.0; a.PR[e] = 0.0
@@ -306,9 +338,10 @@ end
             vL = v[i] + a.dvx[i] * ax + a.dvy[i] * ay;   vR = v[j] + a.dvx[j] * bx + a.dvy[j] * by
             hL = h[i] > SWE_HDRY ? max(h[i] + dhL, 0.0) : 0.0
             hR = h[j] > SWE_HDRY ? max(h[j] + dhR, 0.0) : 0.0
-            zL = z[i] + dzL; zR = z[j] + dzR
+            zi, zj, sill = _swe_face_z(_lev(a), a, e, i, j)
+            zL = zi + dzL; zR = zj + dzR
             zf = max(zL, zR)
-            a.sill[e] > max(z[i], z[j]) && (zf = max(zf, a.sill[e]))   # an obstacle on the face
+            sill > max(zi, zj) && (zf = max(zf, sill))                 # an obstacle on the face
             hLs = max(hL + zL - zf, 0.0); hRs = max(hR + zR - zf, 0.0)
             n1 = a.nx[e]; n2 = a.ny[e]
             unL = uL * n1 + vL * n2; utL = -uL * n2 + vL * n1
@@ -334,16 +367,18 @@ end
 
 # boundary faces: the ghost state from the BC code, fluxes out of the cell
 @inline function _swe_bnd_k!(k, a)
-    @inbounds begin
-        c = a.gcell[k]; h = a.h; z = a.z
+    T = eltype(a.G1)
+    @fp T @inbounds begin
+        c = a.gcell[k]; h = a.h
         if !(h[c] > SWE_HDRY) || !isfinite(a.eta[c])
             a.G1[k] = 0.0; a.G2[k] = 0.0; a.G3[k] = 0.0
         else
             ax = a.grx[k]; ay = a.gry[k]; n1 = a.gnx[k]; n2 = a.gny[k]
             dhL = a.dhx[c] * ax + a.dhy[c] * ay; dzL = a.dex[c] * ax + a.dey[c] * ay - dhL
             uL = a.u[c] + a.dux[c] * ax + a.duy[c] * ay; vL = a.v[c] + a.dvx[c] * ax + a.dvy[c] * ay
-            hL = max(h[c] + dhL, 0.0); zL = z[c] + dzL
-            zf = a.gz[k] > z[c] ? max(zL, a.gz[k]) : zL; hs = max(hL + zL - zf, 0.0)
+            zc, gz = _swe_bnd_z(_lev(a), a, k, c)
+            hL = max(h[c] + dhL, 0.0); zL = zc + dzL
+            zf = gz > zc ? max(zL, gz) : zL; hs = max(hL + zL - zf, 0.0)
             unL = uL * n1 + vL * n2; utL = -uL * n2 + vL * n1
             b = a.gbc[k]
             if b == SWE_BC_WALL || (b == SWE_BC_TRANSMISSIVE && unL <= 0.0 && !a.open_in)
@@ -360,12 +395,15 @@ end
     return nothing
 end
 
-# per-cell gather and update, semi-implicit Manning friction
+# per-cell gather and update, semi-implicit Manning friction. The mass change
+# is summed and applied in the volume's type with the Float64 Δt (each face's
+# flux enters its two cells as the same number); the momentum in T
 @inline function _swe_update_k!(i, a, dt)
-    @inbounds begin
+    T = eltype(a.qx); dtq = convert(T, dt)
+    @fp T @inbounds begin
         A = a.A; ci = a.ci; w = a.w
         (isfinite(a.z[i]) && A[i] >= 1.0) || return nothing
-        dm = 0.0; dx = 0.0; dy = 0.0
+        dm = zero(eltype(a.V)); dx = 0.0; dy = 0.0
         for k in a.cptr[i]:a.cptr[i + 1] - 1
             e = a.cedge[k]; we = w[e]
             if ci[e] == i                         # flux leaves i along n
@@ -384,13 +422,13 @@ end
         end
         Vn = a.V[i] + dt * dm
         if Vn < 0.0
-            a.clamp[i] -= Vn; Vn = 0.0
+            a.clamp[i] -= Vn; Vn = zero(Vn)
         end
-        hn = Vn / A[i]
-        qxn = a.qx[i] + dt * dx / A[i]; qyn = a.qy[i] + dt * dy / A[i]
+        hn = T(Vn / A[i])
+        qxn = a.qx[i] + dtq * dx / A[i]; qyn = a.qy[i] + dtq * dy / A[i]
         if hn > SWE_HDRY
             qm = hypot(a.qx[i], a.qy[i])          # |q| at the stage start (fixed point = Manning)
-            fr = 1.0 + dt * _G * a.nman[i]^2 * qm / hn^(7.0 / 3.0)
+            fr = 1.0 + dtq * _G * a.nman[i]^2 * qm / hn^(7.0 / 3.0)
             qxn /= fr; qyn /= fr
         else
             qxn = 0.0; qyn = 0.0
@@ -401,7 +439,8 @@ end
 end
 
 @inline function _swe_rk_avg_k!(i, a)
-    @inbounds begin
+    T = eltype(a.qx)
+    @fp T @inbounds begin
         a.V[i] = 0.5 * (a.V0[i] + a.V[i]); a.qx[i] = 0.5 * (a.qx0[i] + a.qx[i])
         a.qy[i] = 0.5 * (a.qy0[i] + a.qy[i])
     end
@@ -409,12 +448,13 @@ end
 end
 
 @inline function _swe_depth_k!(i, a)
-    @inbounds (a.A[i] >= 1.0) && (a.d[i] = a.V[i] / a.A[i])
+    @inbounds (a.A[i] >= one(eltype(a.A))) && (a.d[i] = a.V[i] / a.A[i])
     return nothing
 end
 
 @inline function _swe_vel_k!(i, a)
-    @inbounds begin
+    T = eltype(a.vu)
+    @fp T @inbounds begin
         h = a.d[i]
         if h > SWE_HDRY
             a.vu[i] = _swe_vel(a.qx[i], h); a.vv[i] = _swe_vel(a.qy[i], h)
@@ -429,15 +469,17 @@ end
 # CFL: per-cell signal speed into `u`, per-cell admissible step into `v`
 # (both are stage scratch, recomputed from the state at the next stage)
 @inline function _swe_speed_k!(i, a)
-    @inbounds begin
-        Ai = a.A[i]; h = Ai >= 1.0 && isfinite(a.z[i]) ? a.V[i] / Ai : 0.0
+    T = eltype(a.u)
+    @fp T @inbounds begin
+        Ai = a.A[i]; h = Ai >= 1.0 && isfinite(a.z[i]) ? T(a.V[i] / Ai) : 0.0
         a.u[i] = h > SWE_HDRY ? hypot(_swe_vel(a.qx[i], h), _swe_vel(a.qy[i], h)) + sqrt(_G * h) : 0.0
     end
     return nothing
 end
 
 @inline function _swe_dtcell_k!(i, a)
-    @inbounds begin
+    T = eltype(a.v)
+    @fp T @inbounds begin
         Ai = a.A[i]
         if !(Ai >= 1.0 && isfinite(a.z[i]))
             a.v[i] = Inf
@@ -451,7 +493,7 @@ end
             rate += a.gw[a.gface[k]] * sp[i]
         end
         if a.ce > 0.0
-            h = a.V[i] / Ai
+            h = T(a.V[i] / Ai)
             if h > SWE_HDRY
                 u = hypot(_swe_vel(a.qx[i], h), _swe_vel(a.qy[i], h))
                 ν = a.ce * h * sqrt(_G) * a.nman[i] * u / h^(1.0 / 6.0)
