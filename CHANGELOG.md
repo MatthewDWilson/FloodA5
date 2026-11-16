@@ -99,6 +99,48 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
 - `cases/expected/v0.6.0/`: the SGS metrics, table diagnostics and strip
   series of the scheme up to 0.6.0, for before/after comparison.
 
+SGS conveyance fix, Phase 0 (measurement; no model change).
+
+### Added
+- **Registry case `planar_wall`** (`cases/registry/planar_wall.jl`,
+  docs/TEST_CASES.md §2d): a 3 m wall with no notch across the planar slope —
+  40 m wide, and 4 m wide (narrower than a cell, placed inside the cells of
+  both meshes) — with an inflow that provably leaves the level-pool level
+  0.84–0.93 m below the crest (wedge storage). SGS and standard flow on A5
+  res 18 and Cartesian 20 m (8 runs). Checks state the correct behaviour (no
+  water downstream of the wall). Result (0.6.0): the 40 m wall holds in every
+  run; **SGS passes the 4 m wall as soon as the water reaches it** (A5: 722 s,
+  124 660 m³ = 58.5% of the inflow downstream at 6 h; Cartesian: 962 s,
+  136 972 m³ = 64.3%), 2.9 m below the crest, wherever the water touches the
+  wall. Those two checks are expected failures (`xfail`: SGS conveys through
+  faces from the DEM profile on the face line only; a barrier inside a cell
+  is not seen) until SGS connectivity (fix plan, Phase 3). Standard flow on
+  the thin wall is checked against the cell-mean ridge it sees (5.36 /
+  5.63 m), which it overtops early. Expected values:
+  `cases/expected/planar_wall.toml` (the six passing runs and the design).
+- `planar_embankment`: metrics (no new checks) of where water crosses the
+  embankment — the first-row cells downstream that hold water at the first
+  crossing and through time, by distance from the notch, cells on the
+  embankment's top, and downstream volume by band. Result: nothing crosses
+  the 40 m embankment away from the notch in either run. The 61 existing
+  expected values are unchanged; the new keys were added with `baseline`.
+- `test/test_cases.jl` C5: `planar_wall` is registered, well formed, its
+  design holds and its expected-failure marks are in place (no simulation).
+
+### Fixed
+- `generate_planar_embankment_dem.py --notch-width 0` now guarantees no
+  notch (the `|y − y_c| ≤ w/2` test would open a pixel row whose centre lies
+  on the centre line, i.e. with an odd number of rows). Output for existing
+  arguments is unchanged.
+
+### Known issues (found, not changed)
+- DEM sampling is registered half a pixel off: `_affine_to_pixel`
+  (`mesh/A5Grid.jl`) returns corner-based pixel coordinates and `_bilinear`
+  treats them as centre-based, so every DEM sample (cell means, SGS tables,
+  face profiles) is taken half a pixel east and south of its position
+  (docs/TEST_CASES.md §2d, "A wall on a face").
+
+
 ## [0.6.0] — 2026-11-15
 
 Float32 on the device backends and a benchmark suite (MINOR). Float64

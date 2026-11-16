@@ -24,7 +24,8 @@
 # Registry files (`cases/registry/*.jl`, included in name order) share this
 # module's namespace: prefix every helper with the case's abbreviation
 # (`_pt_` point spread, `_ps_` planar slope, `_pe_` planar embankment,
-# `_ch_` channel, `_carl_` Carlisle); `_planar_common.jl` holds shared ones.
+# `_pw_` planar wall, `_ch_` channel, `_carl_` Carlisle); `_planar_common.jl`
+# holds shared ones.
 
 module FloodA5Cases
 
