@@ -32,6 +32,7 @@ output records the same command line and completed; `--fresh` runs it again
 | `point_spread` | standard | 1, 5b | flat point source: A4/A6, sector ratio, circularity on A5 res 16/18 and Cartesian 25/12.5 m | ~8 min |
 | `planar_slope` | standard | 2b | N/S volume symmetry on a 0.1% plane, A5 res 16/18 and Cartesian 25 m | ~10 min |
 | `planar_embankment` | standard | 2a | SGS passes water through a sub-cell notch near its sill; standard only at the crest | ~6 min |
+| `planar_wall` | standard | 2d | a wall with no gap: no water may pass below the crest; SGS passes a wall narrower than a cell at once (8 runs; the two SGS thin-wall checks are expected failures until SGS is fixed) | ~20 min |
 | `sgs_strip` | standard | 2c | SGS against analytic normal flow, storage and arrival on a 4 km strip with a sub-cell channel (16 runs; several SGS checks fail by design: expected failures until SGS is fixed) | ~40 min |
 | `channel` | standard | 7 | straight channel, 22/11 m cells, 0°/45°, A5/Cartesian, SWE/LI (16 runs) | ~15 min |
 | `channel_series` | full | 7 | the full 224-run channel series | hours |
@@ -153,9 +154,9 @@ this residual anisotropy does not shrink with grid refinement.
 ## 2. Planar Slope — Directional-Bias and SGS Test Domains
 
 **Terrain generator:** `test/planar_embankment/generate_planar_embankment_dem.py`
-(a west→east plane with an optional N–S embankment and a notch through it;
+(a west→east plane with an optional N–S embankment and a notch through it — `--notch-width 0`: none;
 writes `planar_embankment_dem.tif`, `_params.json` and `_aoi.geojson` into
-`--out`). Both cases below are registry cases (`cases/registry/`): each
+`--out`). The planar cases below are registry cases (`cases/registry/`): each
 generates its own DEM and meshes in `test/case_runs/<case>/`, so they cannot
 disturb each other or the legacy fixture in `test/planar_embankment/`
 (an `--emb-height 0` DEM still used by older run scripts).
@@ -164,6 +165,7 @@ disturb each other or the legacy fixture in `test/planar_embankment/`
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl show planar_embankment   # the commands, to copy
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run planar_embankment -P 2 -T 2
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run planar_slope -P 3 -T 2
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run planar_wall -P 2
 ```
 
 ### 2a. SGS sub-cell routing through a notch (`planar_embankment`)
@@ -197,6 +199,24 @@ upstream WSE is ≥ 0.5 m below the crest and within 0.5 m of the sill; SGS has
 more water downstream at every output time before standard overtops (126 of
 them). Through the 4 m notch SGS conveys ≈ 3 m³/s at 1.1–1.2 m of head (5–6 h),
 so its upstream level keeps rising under 10 m³/s.
+
+**Where the water crosses** (metrics only, added with `planar_wall`, §2d; the
+downstream volume alone does not separate the notch from a crossing
+elsewhere). Cells by polygon: the first row of cells entirely east of the
+embankment (24), cells wholly on its top, and cells straddling its east face;
+"at the notch" = centre within 50 m of the notch's centre line, "away" =
+polygon more than 100 m from it. SGS (0.6.0): at the first downstream water
+(1 082 s) four row cells hold water, y = 213–316 m (the notch is at
+248–252 m), none away from the notch; the wet stretch of the row then widens
+continuously from the notch (y = 180–403 m at 2 h, 143–417 m at 6 h; the
+first row cell more than 100 m away at 4 202 s, 3 of 13 at 6 h) with levels
+4.8–5.0 m, below the ground at the upstream foot (5.1 m): water spreading
+along the downstream toe. Of the 12 cells wholly on the embankment's top away
+from the notch none ever holds water. **Nothing crosses the 40 m embankment
+away from the notch**; the same in the standard run (first water in 5 row
+cells at y = 190–293 m). Downstream volume by band (`v_down_notch_band_*`,
+`v_down_off_notch_*`: cell centres within / beyond 50 m of the notch line) is
+dominated by that spreading: SGS 7 100 / 31 800 m³ at 6 h.
 
 (Replaces `test_planar_embankment.jl`, which shared the `--emb-height 0` DEM,
 took the upstream WSE over dry cells and used a source too small to reach the
@@ -316,6 +336,104 @@ overbank level within 0.10 m and storage within 10% of 2-D, arrival within
 15% of the 2.5 m reference, A5 SGS in bank and against A5 LI overbank.
 Expected values are recorded only for the runs whose checks pass (and the
 analytic values), not the failing SGS runs or the table diagnostics.
+
+### 2d. A wall with no gap: is a barrier inside a cell a barrier? (`planar_wall`)
+
+SGS stores water with one hypsometric curve per cell (one level pool) and
+conveys it through each face with the DEM profile sampled **on the face
+line**; nothing between the faces is used. A wall that crosses the inside of
+a cell therefore lowers the cell's stored volume but cannot hold water back:
+water enters over the upstream faces, is stored at the cell's lowest ground
+(on a slope, the downstream side of the wall) and leaves through the
+downstream faces at natural ground (SGS conveyance fix plan §2.3; Phase 0,
+item 1). `planar_embankment` cannot show it, because water may use the notch.
+
+```bash
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run planar_wall -P 2     # ~20 min the first time
+```
+
+**Terrain**: the §2a plane (2 × 0.5 km, 0.5% west→east, 2 m DEM) with a 3 m
+wall across it and **no notch** (`--notch-width 0`), one DEM and four meshes
+per wall in `test/case_runs/planar_wall/{wide,thin}/`:
+
+| wall | extent | crest | against the mesh |
+|---|---|---|---|
+| `wide` | 40 m, x = 980–1020 m | 8.00 m | wider than a res-18 A5 cell (~22 m) and two Cartesian 20 m cells |
+| `thin` | 4 m (2 pixels), x = 988–992 m | 8.05 m | narrower than any cell; inside the Cartesian column x = 981.1–1001.1 m |
+
+**Design**: 10 m³/s (10-minute ramp) at x = 200 m on the centre line, closed
+boundaries, 6 h: 213 000 m³. As a level pool against the wall's upstream face
+that is a wedge, V(η) = 5·10⁴ (η − z_w)² m³, so the level ends 2.06 m above
+the ground at the face: 7.16 m (wide) and 7.12 m (thin), 0.84 and 0.93 m
+below the crests. In a correct model no water passes. Runs: SGS and standard
+flow, A5 res 18 and Cartesian 20 m, each wall (8; ~1 min each on 2 threads).
+
+**Metrics** per run (cells sorted by polygon: entirely west of the wall,
+entirely east, straddling): the volume east of the wall through time
+(`v_down_*h`, `v_down_end`, `frac_down_end`), the time it first exceeds 1 m³,
+the highest water level of the wet cells along the wall's upstream foot then
+and at the end (`wse_up_*`), the highest level at the wall then including the
+cells the wall crosses (`wse_wall_at_first_down`), and where the water
+crossed: the cells of the first row east of the wall that hold water at that
+time (`cross_n_cells`, `cross_y_min/max`), against the foot cells holding
+water then (`touch_*`: the stretch of wall the water has reached), and the
+fraction of the row holding water through time (`row_wet_frac_*`).
+
+Results (0.6.0; `cases/run.jl run planar_wall -P 2`):
+
+| run | downstream at 6 h | first downstream water | level at the wall then (crest) | upstream level at 6 h |
+|---|---|---|---|---|
+| SGS, A5, wide | 0 | never | — (8.00) | 6.57 m |
+| standard, A5, wide | 0 | never | — (8.00) | 7.06 m |
+| SGS, Cartesian, wide | 0 | never | — (8.00) | 6.64 m |
+| standard, Cartesian, wide | 0 | never | — (8.00) | 7.12 m |
+| **SGS, A5, thin** | **124 660 m³ (58.5%)** | **722 s** | 5.18 m (8.05) | 5.27 m |
+| standard, A5, thin | 180 756 m³ (84.9%) | 2 642 s | 5.44 m (8.05) | 5.61 m |
+| **SGS, Cartesian, thin** | **136 972 m³ (64.3%)** | **962 s** | 5.10 m (8.05) | 5.15 m |
+| standard, Cartesian, thin | 175 467 m³ (82.4%) | 3 842 s | 5.68 m (8.05) | 5.72 m |
+
+- **SGS passes the thin wall as soon as the water reaches it**, 2.9 m below
+  the crest and ≈ 0.1 m above the ground at its foot (5.06 m), on both meshes.
+  It crosses wherever the water touches the wall, not at particular cells: at
+  the first output with water downstream, 10 row cells hold water on A5
+  (y = 324–531 m; 13 foot cells hold water, y = 213–507 m — the plume has
+  drifted north on A5) and 7 on the Cartesian grid (y = 180–320 m; 9 foot
+  cells, y = 160–340 m, symmetric about the source row); within an hour 93%
+  (A5) and 100% (Cartesian) of the row holds water. The upstream level never
+  rises above 5.3 m: the wall is not there. These two checks are **expected
+  failures** until connectivity is added to SGS.
+- **The wide wall holds on both meshes and both models**: every route across
+  it passes a face that lies on the wall. (SGS reaches only 6.6 m at the wall
+  against 7.1 m in standard flow, because its conveyance defects, §2c, keep
+  water near the source: 5–8 m deep at x < 200 m. The wall is therefore
+  tested by SGS only up to that level.)
+- **Standard flow overtops the thin wall early**, at the level of the ridge
+  that the wall makes in the cell-mean beds (the lowest cell-mean route:
+  5.36 m on A5, 5.63 m Cartesian, against a crest of 8.05 m). That is the
+  known limit of cell-mean beds, not the SGS defect; the check for these two
+  runs says so (no water downstream until the upstream level reaches that
+  ridge).
+
+Checks: mass balance and stored volume; the design (level-pool level ≥ 0.5 m
+below the crest; the upstream level stays below the crest and the level-pool
+level in every run); no water downstream (< 1 m³ at 6 h) for the four wide
+runs and the two SGS thin runs (the latter XFAIL); the standard thin runs as
+above. Expected values are recorded for the six runs whose checks pass and
+the design values, not for the two failing SGS runs (as `sgs_strip`).
+
+**A wall on a face is a different test.** In a trial with the thin wall at
+x = 998–1002 m the Cartesian face at x = 1001.1 m lay on it, and the
+Cartesian SGS run held the water until the upstream level reached 6.31 m
+(16 442 s; 15 000 m³ downstream at 6 h), then passed it along the whole wall
+at once. 6.31 m is the lowest elevation of that face's profile as sampled:
+the DEM is sampled bilinearly (`_bilinear` in `mesh/A5Grid.jl`) with pixel
+values placed at pixel corners rather than centres (`_affine_to_pixel`
+returns corner-based coordinates and `_bilinear` treats them as
+centre-based), so the profile is taken half a pixel (1 m) east of the face,
+on the ramp that interpolation makes of the wall's east side (8.0 → 4.99 m
+over one pixel). Sampled at the face itself it would be 7.82 m. The
+half-pixel registration applies to every DEM sample (SGS tables, face
+profiles and cell-mean elevations); it is reported, not changed here.
 
 ---
 

@@ -53,8 +53,8 @@ Options:
     --emb-height M      Embankment height above local slope (default: 5.0)
     --emb-width M       Embankment width in metres (default: 20.0)
     --emb-pos X         Embankment x-position as fraction of domain (default: 0.5)
-    --notch-width M     Notch width in metres (default: 5.0)
-    --help              Print this message
+    --notch-width M     Notch width in metres (default: 5.0; 0 = no notch)
+    --help             Print this message
 
 Output files (in --out directory):
     planar_embankment_dem.tif        GeoTIFF DEM, EPSG:4326, Float32
@@ -141,6 +141,10 @@ def build_dem(domain_m_ew, domain_m_ns, pixel_m,
     #    Width is deliberately well below the res-18 cell scale (~22 m).
     y_centre  = 0.5 * Ly
     in_notch  = np.abs(yg - y_centre) <= 0.5 * notch_width
+    if notch_width <= 0.0:
+        # no notch: "<=" alone would still open a pixel row whose centre lies
+        # exactly on the centre line (an odd number of rows)
+        in_notch = np.zeros_like(in_notch)
     # Within the notch, restore the natural slope elevation (no embankment)
     z[in_notch & in_emb] = z_at_emb        # = natural slope at this x
 

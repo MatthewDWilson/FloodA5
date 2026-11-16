@@ -81,6 +81,83 @@ function _pe_bottleneck(z::AbstractVector, nb::AbstractMatrix, up::AbstractVecto
     return NaN
 end
 
+const _PE_CELL_V = 0.01                 # m³: a cell "holds water" (crossing metrics)
+const _PE_NOTCH_BAND = 50.0             # m: cells within this of the notch's centre line are "at the notch"
+const _PE_FAR = 100.0                   # m: cells further than this from it are "away from the notch"
+
+"""
+    _pe_crossing(r, p, xmin, xmax, up, down, cell, kf) -> Dict
+
+Where water crosses the embankment: at the notch or elsewhere. Metrics only
+(SGS conveyance fix plan §2.3). Cells by polygon: `row`, the first row of
+cells entirely east of the embankment; on the embankment, `interior` (wholly
+on its top) and `east` (straddling its east face only). By distance of the
+cell from the notch's centre line: at the notch (centre within
+$(_PE_NOTCH_BAND) m) or away from it (polygon further than $(_PE_FAR) m).
+`kf`: the first frame with water downstream (or nothing).
+"""
+function _pe_crossing(r, p, xmin, xmax, up, down, cell, kf)
+    mesh = r.mesh
+    xw = Float64(p["emb_x_m"]) - Float64(p["emb_width_m"]) / 2
+    xe = Float64(p["emb_x_m"]) + Float64(p["emb_width_m"]) / 2
+    yn = Float64(p["notch_y_centre_m"])
+    ymin, ymax = _planar_yrange(mesh, p)
+    yc = (ymin .+ ymax) ./ 2
+    dist = [max(ymin[i] - yn, yn - ymax[i], 0.0) for i in eachindex(yc)]   # polygon to the notch line
+    near = abs.(yc .- yn) .<= _PE_NOTCH_BAND
+    far = dist .> _PE_FAR
+    row = down .& (xmin .<= xe + cell)
+    interior = (xmin .>= xw) .& (xmax .<= xe)
+    east = (xmin .>= xw) .& (xmax .> xe) .& .!down
+    n = FA.nframes(r)
+    fin(V, i) = isfinite(V[i]) ? V[i] : 0.0
+    held(V, I) = count(i -> fin(V, i) > _PE_CELL_V, I)
+    Irow_far, Irow_near = findall(row .& far), findall(row .& near)
+    Iint_far, Ieast_far = findall(interior .& far), findall(east .& far)
+    Idn_near, Idn_off = findall(down .& near), findall(down .& .!near)
+    t_row_far = Inf; t_row_near = Inf; t_int_far = Inf; t_east_far = Inf
+    vn = zeros(n); vo = zeros(n); nrf = zeros(n)
+    for k in 1:n
+        V = FA.volume(r, k)
+        vn[k] = sum(fin(V, i) for i in Idn_near; init = 0.0)
+        vo[k] = sum(fin(V, i) for i in Idn_off; init = 0.0)
+        nrf[k] = held(V, Irow_far)
+        t_row_near == Inf && held(V, Irow_near) > 0 && (t_row_near = r.t[k])
+        t_row_far == Inf && nrf[k] > 0 && (t_row_far = r.t[k])
+        t_int_far == Inf && held(V, Iint_far) > 0 && (t_int_far = r.t[k])
+        t_east_far == Inf && held(V, Ieast_far) > 0 && (t_east_far = r.t[k])
+    end
+    V = FA.volume(r, n)
+    d = Dict{String,Float64}(
+        "n_row" => count(row), "n_row_far" => length(Irow_far), "n_row_near" => length(Irow_near),
+        "n_emb_interior_far" => length(Iint_far), "n_emb_east_far" => length(Ieast_far),
+        "t_first_row_near_notch" => t_row_near, "t_first_row_far" => t_row_far,
+        "t_first_emb_interior_far" => t_int_far, "t_first_emb_east_far" => t_east_far,
+        "n_row_far_wet_end" => nrf[n],
+        "n_emb_interior_far_wet_end" => held(V, Iint_far),
+        "n_emb_east_far_wet_end" => held(V, Ieast_far),
+        "v_emb_interior_far_end" => sum(fin(V, i) for i in Iint_far; init = 0.0),
+        "v_emb_east_far_end" => sum(fin(V, i) for i in Ieast_far; init = 0.0))
+    for th in 1:6
+        k = FA.frame_at(r, 3600.0 * th; tol = 30.0)
+        d["v_down_notch_band_$(th)h"] = vn[k]
+        d["v_down_off_notch_$(th)h"] = vo[k]
+        d["n_row_far_wet_$(th)h"] = nrf[k]
+    end
+    if kf !== nothing
+        Vf = FA.volume(r, kf)
+        cross = [i for i in findall(row) if fin(Vf, i) > _PE_CELL_V]
+        d["cross_n_cells"] = length(cross)
+        d["cross_y_min"] = isempty(cross) ? NaN : minimum(ymin[cross])
+        d["cross_y_max"] = isempty(cross) ? NaN : maximum(ymax[cross])
+        d["cross_max_dist_notch"] = isempty(cross) ? NaN : maximum(dist[cross])
+        d["cross_n_far"] = count(i -> far[i], cross)
+        d["v_down_notch_band_at_first_down"] = vn[kf]
+        d["v_down_off_notch_at_first_down"] = vo[kf]
+    end
+    return d
+end
+
 function _planar_embankment_metrics(ctx)
     p = _planar_params(ctx.dir)
     crest, sill = Float64(p["emb_crest_z"]), Float64(p["notch_sill_z"])
@@ -125,6 +202,7 @@ function _planar_embankment_metrics(ctx)
             d["wse_up_$(th)h"] = wse_up[k]
             d["v_down_$(th)h"] = v_down[k]
         end
+        merge!(d, _pe_crossing(r, p, xmin, xmax, up, down, cell, kf))
         out[name] = d
         series[name] = (; t = r.t, wse_up, v_down)
     end
