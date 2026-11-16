@@ -219,12 +219,25 @@ function load_parquet(path::String)
         df[!, col] = [mat[:, i] for i in 1:n]
     end
 
-    # Edge R-A curves: stored as (n_bins*5 × n_cells); expose as flat Vector per row
-    for (col, key) in [(:sgs_edge_area_curve, "sgs_edge_area_curve"),
-                       (:sgs_edge_perim_curve, "sgs_edge_perim_curve")]
-        haskey(mesh.array_vars, key) || continue
-        mat = mesh.array_vars[key]
-        df[!, col] = [mat[:, i] for i in 1:n]
+    # Face flow area and wetted width per slot on the cell's own levels, flat
+    # (n_bins*5) per row — the form the figures below were written for. Since
+    # 0.7.0 (layout 3) the mesh holds one table per face on the face's own
+    # levels (sgs_face_A/P/K): evaluate it at the cell's levels with the
+    # model's own lookup (A5Grid.face_apk).
+    if haskey(mesh.array_vars, "sgs_face_A")
+        nb = size(mesh.array_vars["sgs_elev_bins"], 1)
+        ea = Vector{Vector{Float64}}(undef, n); ep = Vector{Vector{Float64}}(undef, n)
+        for i in 1:n
+            tbl = A5Grid.sgs_table(mesh, i)
+            a = zeros(nb, 5); p = zeros(nb, 5)
+            for s in 1:min(5, length(tbl.face_z0)), k in 1:nb
+                isfinite(tbl.elev_bins[k]) || continue
+                a[k, s], p[k, s], _ = A5Grid.face_apk(tbl, s, tbl.elev_bins[k])
+            end
+            ea[i] = vec(a); ep[i] = vec(p)
+        end
+        df[!, :sgs_edge_area_curve] = ea
+        df[!, :sgs_edge_perim_curve] = ep
     end
 
     return df, idx, adj, has_sgs

@@ -41,33 +41,44 @@ downstream of load is identical. Extension: `.parquet`.
 |---|---|---|---|
 | `elevation` | float64 | `--dem` | Mean cell bed elevation (m). `NaN` if outside DEM extent. |
 | `sgs_cell_area` | float64 | SGS build | Geodetic plan area of cell polygon (m²) |
-| `sgs_z_min` | float64 | SGS build | Minimum DEM sample within cell (m) |
-| `sgs_z_max` | float64 | SGS build | Maximum DEM sample within cell (m) |
-| `sgs_n_bins` | float64 | SGS build | Number of hypsometric bins (same for all cells) |
+| `sgs_z_min` | float64 | SGS build | Lowest ground of the cell: over its working grid and the profiles of its sides (m) |
+| `sgs_z_max` | float64 | SGS build | Highest ground of the cell, likewise (m) |
+| `sgs_n_bins` | float64 | SGS build | Number of hypsometric levels (same for all cells) |
+| `sgs_layout` | float64 | SGS build | Table layout: **3** since 0.7.0 (one table per face). Layouts 1–2 (≤ 0.6.0) are refused: rebuild the tables |
+| `sgs_connectivity` | float64 | SGS build | 1: face activation levels from connectivity (`--sgs-connectivity on`, the default); 0: off |
+| `sgs_n_grid` | float64 | SGS build | Working-grid points used for the cell |
 | `cell_size_m` | float64 | Cartesian generator | Nominal cell edge length (m) used to generate the mesh — present only on Cartesian meshes. Constant across all cells in a given mesh, stored per-cell for consistency with how every other per-cell scalar is stored. |
 
-### SGS array columns
+### SGS array columns (layout 3, since 0.7.0)
 
-Stored as Apache Arrow list columns (variable-length arrays). Each row contains a
-1-D array. Length notation: `n_bins` = number of elevation bins (default 100);
-`max_nb` = 5 (maximum neighbours per cell). **SGS is currently A5-only** —
-`build_sgs_tables!` still hardcodes `max_nb = 5` in three places and has not
-yet been generalised to a mesh-derived neighbour ceiling the way the
-standard-flow path has (see `FlowState.max_neighbours` in `ARCHITECTURE.md`).
-A Cartesian mesh should therefore be treated as **unsupported** with
-`--flow-model sgs` — not tested, and the hardcoded 5-slot matrices would not
-match a 4-neighbour mesh. (There is currently no explicit guard blocking the
-combination; it isn't prevented, just not expected to work.) See the
-Development Roadmap in `README.md`.
+Stored as Apache Arrow list columns, one 1-D array per row (cell). `n_bins`:
+hypsometric levels (default 100). `n_slots`: the longest neighbour list of
+the mesh (5 on A5, 4 on Cartesian, 6 on hex…); slot k of a cell is the k-th
+entry of its neighbour list, and its boundary sides take the slots without a
+mesh neighbour, in polygon-side order. `NF` = 64 levels per face table.
+Built by `build_sgs_tables!` (`mesh/A5Grid.jl`); formulation in
+`HYDRAULICS.md` §9.
 
 | Column | Length | Description |
 |---|---|---|
-| `sgs_elev_bins` | n_bins | Elevation bin knot points (m), quantile-spaced from z_min to z_max |
-| `sgs_vol_curve` | n_bins | Cumulative stored volume at each bin edge (m³) |
-| `sgs_area_curve` | n_bins | Wetted plan area at each bin elevation (m²) |
-| `sgs_edge_sills` | max_nb | Minimum DEM elevation along the shared edge to each neighbour (m), indexed by adjacency slot |
-| `sgs_edge_area_curve` | n_bins × max_nb | Cross-sectional flow area at each elevation knot, per adjacency slot (m²). Stored as a flat array of length n_bins × 5; reshape to (n_bins, 5) on load. |
-| `sgs_edge_perim_curve` | n_bins × max_nb | Wetted perimeter at each elevation knot, per adjacency slot (m). Same layout as `sgs_edge_area_curve`. |
+| `sgs_elev_bins` | n_bins | Levels of the cell's curves (m), uniform from `sgs_z_min` to `sgs_z_max` |
+| `sgs_vol_curve` | n_bins | Stored volume at each level (m³), level pool over the whole cell |
+| `sgs_area_curve` | n_bins | Wetted plan area at each level (m²) |
+| `sgs_wet_cx`, `sgs_wet_cy` | n_bins | Centroid of the wetted area at each level, m east / north of the cell centre (of the ground connected to the cell's main basin) |
+| `sgs_edge_sills` | n_slots | Sill of the face in each slot (m): the lowest level of its table, i.e. its lowest activation level. NaN: no face |
+| `sgs_face_zr` | n_slots | Height of the tabulated range above the sill (m) |
+| `sgs_face_A` | NF × n_slots | Flow area of the face (m²) at level `sill + zr·((k−1)/(NF−1))²`, k = 1…NF; flat, level fastest |
+| `sgs_face_P` | NF × n_slots | Wetted width of the face (m), same layout |
+| `sgs_face_K` | NF × n_slots | Conveyance integral Σ dx·h^(5/3) of the face (m^(8/3)), same layout |
+| `sgs_face_raise` | n_slots | Sill minus the lowest point of the face's profile (m): what connectivity added (0 with `--sgs-connectivity off`) |
+
+The two cells of a face hold the same table. Above the top level the lookup
+(`A5Grid.face_apk`) continues A with the full width `sgs_face_P[NF]`, and K as
+`P·(d + c)^(5/3)` with `c = (K[NF]/P[NF])^(3/5)`.
+
+Until 0.6.0 (layout 2) the face geometry was two per-cell columns,
+`sgs_edge_area_curve` and `sgs_edge_perim_curve`, on the cell's own levels;
+they are no longer written or read.
 
 ### Cell-ID scheme metadata (WP-M1)
 

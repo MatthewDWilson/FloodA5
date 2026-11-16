@@ -110,10 +110,11 @@ const _CARL_CHECKS = [
     Check("SWE arrival (50 000 m³ out) = recorded (A5 6 688, Cartesian 5 736 s) ± 2%",
           m -> abs(m["a5_swe"]["arrival_s"] / 6688 - 1) <= 0.02 && abs(m["cart_swe"]["arrival_s"] / 5736 - 1) <= 0.02;
           detail = m -> _carl_list(m, "arrival_s", ("a5_swe", "cart_swe"))),
-    # SGS has no reference: the recorded 0.3.0 run (§15.11, 4.299 Mm³; Σ volume
-    # at 21 600 s 4.300). ±2%, as the local-inertial time-step sensitivity.
-    Check("SGS 6 h storage = recorded 4.30 Mm³ ± 2%",
-          m -> abs(m["a5_sgs"]["storage_m3"] / 4.30e6 - 1) <= 0.02;
+    # SGS has no reference here: a regression pin on the recorded 0.7.0 run,
+    # ±2% as the local-inertial time-step sensitivity. (Until 0.6.0: 4.30 Mm³,
+    # 1.6× the SWE reference — conveyance held back; cases/expected/v0.6.0/.)
+    Check("SGS 6 h storage = recorded 1.755 Mm³ ± 2%",
+          m -> abs(m["a5_sgs"]["storage_m3"] / 1.755e6 - 1) <= 0.02;
           detail = m -> _carl_list(m, "storage_m3", ("a5_sgs",))),
     # The 10 mm/h rain is a test forcing: early in the event (inflow 100–230 m³/s)
     # the river alone wets little more than its channels, so most of the 6 h
@@ -330,7 +331,12 @@ let
                                             "(LI $(round(m["a5_li"]["storage_ratio_$w"]; digits = 3))), rms Δη " *
                                             "$(round(m["a5_sgs"]["rms_dh_$w"]; digits = 3)) m (LI $(round(m["a5_li"]["rms_dh_$w"]; digits = 3))), " *
                                             "CSI $(round(m["a5_sgs"]["csi_$w"]; digits = 3)) (LI $(round(m["a5_li"]["csi_$w"]; digits = 3)))"
-                                            for w in ("w0", "wmid", "w1")), "; "))],
+                                            for w in ("w0", "wmid", "w1")), "; "),
+                        xfail = "0.7.0: SGS is stable and smooth but conveys more than local-inertial, which already " *
+                                "conveys more than SWE here (storage 0.52–0.57 of SWE against 0.74–0.76; water surface " *
+                                "a median 0.9 m below SWE against 0.5 m). The reference is SWE on cell-mean beds at the " *
+                                "same 22 m resolution, which cannot say whether the sub-grid conveyance or the smoothed " *
+                                "bed is nearer the truth: needs a fine-grid (5 m) reference (PROJECT_STATE)")],
         # (the SGS bar, agreed 2026-11-16, is the last check below. Until 0.7.0
         # SGS stored 2.5× SWE here, the Eden ~3 m high: cases/expected/v0.6.0/)
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),

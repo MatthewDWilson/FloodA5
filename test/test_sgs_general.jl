@@ -178,4 +178,35 @@ end
     @test minimum(st.volume) >= 0.0
 end
 
+@testset "S6 — SGS open boundary: the normal-depth slope is the local valley floor's (0.7.0)" begin
+    st = _quiet(() -> initialise_flow_model(MESH, SGSFlow(); open_boundary = :normal))
+    G = st.ghost_edges
+    @test all(g -> isnan(g.slope) || g.slope >= 1e-4, G)
+    @test count(g -> isfinite(g.slope), G) > 0.9 * length(G)
+    # the DEM rises 0.2% to the east: the ground leading to the west edge falls
+    # towards it at about that slope (the 1 m ridge on the way steepens the fit);
+    # on the east edge it falls away from the boundary: the floor, 1e-4
+    lon = [st.cell_lons[g.cell_index] for g in G]
+    west = [g.slope for (g, l) in zip(G, lon) if l < 0.0004 && isfinite(g.slope)]
+    east = [g.slope for (g, l) in zip(G, lon) if l > 0.0026 && isfinite(g.slope)]
+    @test length(west) >= 5 && length(east) >= 5
+    @test all(s -> 0.001 <= s <= 0.008, west)
+    @test all(==(1e-4), east)
+    # the sides of one boundary cell share its slope; standard flow has none
+    for g in G, h in G
+        g.cell_index == h.cell_index && @test isequal(g.slope, h.slope)
+    end
+    st2 = _quiet(() -> initialise_flow_model(MESH, StandardFlow(); open_boundary = :normal))
+    @test all(g -> isnan(g.slope), st2.ghost_edges)
+    # the outflow follows it: a flooded mesh drains through the west edge, not the east
+    for i in eachindex(st.volume)
+        t = st.sgs_tables[i]
+        st.volume[i] = isnan(t.z_min) ? 0.0 : t.vol_curve[end] + t.cell_area * max(0.0, 3.5 - t.z_max)
+    end
+    v0 = sum(st.volume)
+    for _ in 1:100; step_sgs!(st, 0.5); end
+    @test st.vol_removed > 0.0
+    @test isapprox(sum(st.volume) + st.vol_removed, v0; rtol = 1e-10)
+end
+
 println("\nGeneral-mesh SGS tests complete.")

@@ -94,8 +94,15 @@ end
         isnan(wse_ci) && return nothing
         nb = a.g_nb[k]
         wse_nb = nb > 0 && nb <= a.n ? wse_from_volume(_tab(a.tables, nb), a.volume[nb]) : NaN
-        a.obnormal && nb > 0 && (wse_nb = _open_nb_wse(wse_ci, a.elevation[ci], a.elevation[nb]))
-        wse_ghost = _ghost_wse(wse_ci, a.g_sill[k], bc, wse_nb, a.g_nbL[k], a.g_L[k])
+        nbL = a.g_nbL[k]
+        if a.obnormal
+            if isfinite(a.g_slope[k])          # the valley floor's slope (0.7.0)
+                wse_nb = wse_ci + a.g_slope[k] * a.g_L[k]; nbL = a.g_L[k]
+            elseif nb > 0
+                wse_nb = _open_nb_wse(wse_ci, a.elevation[ci], a.elevation[nb])
+            end
+        end
+        wse_ghost = _ghost_wse(wse_ci, a.g_sill[k], bc, wse_nb, nbL, a.g_L[k])
         wse_ghost == -Inf && return nothing
         if a.g_isQ[k]
             A_ge, R_ge = _sgs_ghost_area_radius(tbl, a.g_slot[k], wse_ci, a.g_sill[k], a.g_width[k], a.k2d)
@@ -164,6 +171,7 @@ function _sgs_device_args(state::FlowState)
         g_cell = [g.cell_index for g in G], g_width = [g.width for g in G], g_L = [g.L for g in G],
         g_sill = [g.sill for g in G], g_fprev = [g.flux_prev for g in G],
         g_slot = [g.slot for g in G], k2d = SGS_CONVEYANCE[] === :twod,
+        g_slope = [g.slope for g in G],
         g_isQ = [g.is_Q_flux for g in G],
         g_nb = [g.interior_nb_idx for g in G], g_nbL = [g.interior_nb_L for g in G],
         g_bc = BCType[b for b in state.ghost_cell_bc], removed = [state.vol_removed],

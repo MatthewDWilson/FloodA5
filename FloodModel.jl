@@ -449,13 +449,21 @@ mutable struct GhostEdge
     # 0.7.0 (SGS): the cell's face-table slot of this boundary side
     # (A5Grid.boundary_side_slots), 0 if it has no table (rectangle fallback)
     slot             :: Int
+    # 0.7.0 (SGS, --open-boundary normal): the bed slope of the normal-depth
+    # outflow through this side: the slope of the valley floor leading to the
+    # boundary cell (_thalweg_slope), ≥ 1e-4; NaN: not available (the slope to
+    # the inward neighbour's mean elevation is used, as standard flow does)
+    slope            :: Float64
 end
 GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L) =
     GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
-              0.0, 0.0, 0.0, 0.0, 0)
+              0.0, 0.0, 0.0, 0.0, 0, NaN)
 GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L, nx, ny, rx, ry) =
     GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
-              nx, ny, rx, ry, 0)
+              nx, ny, rx, ry, 0, NaN)
+GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L, nx, ny, rx, ry, slot) =
+    GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
+              nx, ny, rx, ry, slot, NaN)
 
 # InjectionPoint and RainPoint are defined here (before FlowState and before the
 # boundaryinputs includes) because sources.jl dispatches apply_source! on these
@@ -2976,10 +2984,19 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         else
             NaN
         end
-        state.open_boundary === :normal && nb_idx > 0 &&
-            (wse_nb = _open_nb_wse(wse_ci, state.elevation[ci], state.elevation[nb_idx]))
+        nb_L = ge.interior_nb_L
+        if state.open_boundary === :normal
+            if isfinite(ge.slope)
+                # the valley floor's slope (0.7.0, _thalweg_slope): the slope
+                # between two cells' mean elevations is dominated by sub-grid
+                # relief (a bank cell beside a channel cell: tens of per cent)
+                wse_nb = wse_ci + ge.slope * ge.L; nb_L = ge.L
+            elseif nb_idx > 0
+                wse_nb = _open_nb_wse(wse_ci, state.elevation[ci], state.elevation[nb_idx])
+            end
+        end
 
-        wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, ge.interior_nb_L, ge.L)
+        wse_ghost = _ghost_wse(wse_ci, ge.sill, bc, wse_nb, nb_L, ge.L)
         wse_ghost == -Inf && continue
 
         Q_out    = 0.0
@@ -4958,7 +4975,9 @@ Flow model options:
   --sim-duration S   Simulation duration in seconds (default: 3600).
   --dt-max S         Maximum adaptive timestep in seconds (default: 60).
   --courant C        Courant number of the adaptive timestep, in (0, 1]
-                     (default: 0.7, the LISFLOOD-FP/CAESAR value).
+                     (default: 0.7, the LISFLOOD-FP/CAESAR value; 0.5 with
+                     --flow-model sgs, which is not stable at 0.7 in deep
+                     channel flow).
   --limiter-stats    (diagnostic, D1b) Record how often each limiter and switch
                      binds — Froude cap, volume limiter, donor cap, positivity,
                      diamond wet/dry fallback — by flow-depth band, with an hourly
@@ -5729,7 +5748,12 @@ function main(args=String[])
 
     sim_duration  = sim_dur_val  !== nothing ? parse(Float64, sim_dur_val)  : 3600.0
     dt_max        = dt_max_val   !== nothing ? parse(Float64, dt_max_val)   : 60.0
-    courant       = courant_val  !== nothing ? parse(Float64, courant_val)  : 0.7
+    # 0.7.0: SGS defaults to 0.5. At 0.7 its water surface in deep, fast
+    # channel flow breaks into cell-scale oscillations (Carlisle at the Eden's
+    # peak: levels metres apart between neighbouring reaches); 0.5 and 0.35
+    # give the same, smooth answer. Standard flow has the η filter for this.
+    courant       = courant_val  !== nothing ? parse(Float64, courant_val)  :
+                    (flow_method === :sgs ? SGS_DEFAULT_COURANT : 0.7)
     (0.0 < courant <= 1.0) ||
         (println("ERROR: --courant must be in (0, 1]\n"); print_help(1))
     cell_order = cell_order_val === nothing ? :spatial :

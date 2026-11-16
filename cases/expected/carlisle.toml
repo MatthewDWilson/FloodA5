@@ -28,15 +28,15 @@ vol_removed_m3 = 3.0504554e6
 wet_area_0p1_km2 = 1.2536794942987188
 
 [a5_sgs]
-arrival_s = 7717.450148179509
-input_error_rel = -2.127962998682142e-5
-mass_balance_log_rel = 2.1279729463818767e-5
-mass_balance_rel = 1.612611418670844e-14
-storage_m3 = 4.299972724089067e6
+arrival_s = 3470.7636274884335
+input_error_rel = -1.2267941407914549e-5
+mass_balance_log_rel = 1.2283159456316528e-5
+mass_balance_rel = 6.379590608097912e-14
+storage_m3 = 1.7551887935419546e6
 t = 21600.0
-vol_added_m3 = 5.9164286e6
-vol_removed_m3 = 1.6177271e6
-wet_area_0p1_km2 = 5.262006512339385
+vol_added_m3 = 5.9023902e6
+vol_removed_m3 = 4.1489685e6
+wet_area_0p1_km2 = 4.955115121856204
 
 [a5_swe]
 arrival_s = 6684.701450109334
@@ -92,4 +92,4 @@ flooda5_version = "0.4.3"
 git_commit = "2dc1095ec17ffd5f1f9a2cca246658308a7814ee"
 git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-11T09:13:56Z"
+recorded_utc = "2026-11-16T17:11:51Z"

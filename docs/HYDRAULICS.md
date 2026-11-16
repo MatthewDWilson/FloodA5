@@ -43,7 +43,7 @@ checked against).
 
 The SGS solver (`step_sgs!`) uses the same equation with a different `z_sill`
 source and a `h_flow` cap (§9) but is otherwise the same formulation, unless
-the R-A flux kernel is active (§9.3).
+the R-A flux kernel is active (§9.2).
 
 ---
 
@@ -90,13 +90,11 @@ water cannot cross into a lower cell until the sending cell's WSE exceeds
 the *higher* of the two bed elevations. Matches Bates (2010) literature
 convention.
 
-**SGS flow:** `z_sill = min(DEM elevation along the shared cell boundary)`,
-pre-computed once in `build_sgs_tables!` and stored as `sgs_edge_sills`.
-This is what allows the SGS solver to detect sub-cell channels (a notch or
-ditch narrower than a cell) that the standard solver's cell-mean elevation
-cannot see. See §9 for the full SGS formulation, including a `h_flow` cap
-applied on top of this sill to suppress dry-cell spurious flux (a bug found
-and fixed early in SGS development).
+**SGS flow:** `z_sill` is the sill of the face's table (`sgs_edge_sills`):
+the lowest point of the DEM profile along the shared side that is connected,
+below the water, to the main basins of both cells (§9.1, §9.3). This is what
+lets the SGS solver see a channel, notch or ditch narrower than a cell, which
+a cell-mean elevation cannot — and, since 0.7.0, a wall narrower than a cell.
 
 ---
 
@@ -112,11 +110,10 @@ dt = C * dx_min / sqrt(g * h_cfl)     # C = 0.7 (Courant number)
 - `h_cfl` = the 99th-percentile wet-cell depth (not the absolute maximum —
   a single overfull SGS cell should not dictate the timestep for the whole
   domain)
-- SGS solver additionally caps `water_depth` used for this calculation at
-  the cell's terrain range (`z_max - z_min`), since `wse_from_volume` can
-  legitimately extrapolate WSE far above `z_max` for an overfull cell
-  (§9.2) — that extrapolated head is correct for driving flux but is not a
-  physical water column depth for CFL purposes
+- SGS (since 0.7.0): the depth is the hydraulic depth V/A_wet, and a second
+  limit follows from the faces' flow areas against the wetted area (§9.4).
+  Until 0.6.0 the depth was capped at the cell's terrain range
+  (`z_max - z_min`), which ignored all water above a cell's highest ground
 - Floor: `dt = max(dt, 0.1)`; fallback if the whole domain is dry: `dt = dt_max`
 
 This replaced an earlier diffusive-wave formula (`dt <= 0.5*dx^2/(2D)`),
@@ -189,7 +186,7 @@ standard solver. **Correction (WP0, 2026-10):** earlier versions of this
 document said none of them affect the SGS solver. In fact `step_sgs!` does
 apply Correction 1 (WLSQ + V̂, with `--gradient-correction-alpha`) when
 `--gradient-correction on` is set, and honours `--q-centre-theta`; only the
-diamond method and cell-vector momentum are ignored under SGS. See §9.4.
+diamond method and cell-vector momentum are ignored under SGS. See §9.5.
 
 ### 7.1 Correction 1 — WLSQ gradient + skewness term (`--face-flux-method legacy`)
 
@@ -383,64 +380,139 @@ production default.
 
 ## 9. SGS (Sub-Grid Sampling) Solver
 
-### 9.1 Hypsometric tables
+Rewritten for 0.7.0. The scheme up to 0.6.0 (per-cell edge curves, averaged
+between the two cells; legacy donor cap; relief-capped time step) is
+described in the 0.6.0 version of this file; its results are in
+`cases/expected/v0.6.0/` and its defects in §15.13.
 
-The SGS approach replaces a single mean bed elevation per cell with a
-hypsometric curve — a pre-computed lookup table relating WSE to stored
-volume and wetted plan area, built from Halton-sampled LiDAR DEM points
-within each cell polygon (`build_sgs_tables!`). `wse_from_volume` performs
-the runtime inverse lookup.
+### 9.1 What a cell and a face know
 
-**Overfull-cell extrapolation:** when a cell's volume exceeds its
-hypsometric table range (fully submerged), WSE is extrapolated linearly
-above `z_max` (`WSE = z_max + (V - vol_curve[end]) / cell_area`) rather
-than clamped. Clamping was an earlier bug that silently stranded volume in
-any scenario where an upstream basin filled above its terrain ceiling — a
-real physics-correctness issue, not just a test artefact.
+`build_sgs_tables!` (`mesh/A5Grid.jl`) covers every cell with a regular
+**working grid** in a local metric frame — spacing
+min(DEM pixel, √(bounding box / `--sgs-samples`)), default 1600 points — and
+samples the DEM (bilinear) at the grid points inside the polygon. Everything
+below is built from that grid and from the DEM profile along each polygon
+side (sampled at half a pixel), so a cell and its faces describe one surface.
 
-### 9.2 SGS-specific stability handling
+**Cell: storage.** A hypsometric curve: stored volume V(η) and wetted area at
+100 levels between the cell's lowest and highest ground (the extremes taken
+over the grid and the side profiles). `wse_from_volume` inverts it; above
+the highest ground the level rises with the full cell area. Storage is a
+**level pool**: all ground below η holds water, connected or not.
 
-The SGS solver has its own dry-cell and h_flow-cap handling, independent of
-§6's standard-flow limiters:
+**Cell: where the water is.** The centroid of the wetted area at each level
+(`wet_centroid`): the lowest point of the main basin for a dry cell, the
+polygon's centroid for a submerged one.
 
-- **Dry-cell effective WSE:** a dry cell's raw `wse_from_volume(V=0)`
-  returns `z_min`, which can be well above a low channel sill and drive
-  spurious flux. The effective WSE used in the flux kernel is
-  `max(z_sill, tbl.z_min)`.
-- **`h_flow` cap:** capped at `max(depth_ci, depth_cj)` rather than the raw
-  WSE difference, since an edge sill far below both cells' mean elevation
-  (a genuine sub-cell channel) would otherwise give an `h_flow` far larger
-  than the actual water column.
-- **Froude and volume limiters** equivalent to §6's Fix A/B are applied
-  inline in `step_sgs!` Phase A, using the capped `h_flow` above; the
-  `DONOR_EDGE_DIVISOR` cap (§11) remains the primary volume-based
-  last-resort guard, since cell-mean `water_depth` is a poor proxy for
-  actually-available sub-cell volume.
+**Face: conveyance.** One table per face, held identically by both cells
+(`face_table_from_profile`, `face_apk`). From the profile z_p of the face
+(points of width dx) and an activation level a_p ≥ z_p per point (§9.3):
 
-### 9.3 R-A (hydraulic radius) flux kernel, `flux_Q`
+    A(η) = Σ dx·(η − z_p)⁺·[η ≥ a_p]          flow area
+    P(η) = Σ dx·[η ≥ a_p]                      wetted width
+    K(η) = Σ dx·((η − z_p)⁺)^(5/3)·[η ≥ a_p]   conveyance integral
 
-An alternative SGS flux formulation using cross-sectional flow area `A` and
-hydraulic radius `R = A/P` (Manning form, `Q ~ R^(4/3)*A` in the
-denominator) rather than the wide-channel `h^(10/3)` approximation. Requires
-extended per-edge hypsometric curves (`sgs_edge_area_curve`,
-`sgs_edge_perim_curve` — new mesh parquet columns; **meshes generated before
-this feature must be regenerated to use it**, older meshes fall back to the
-Bates SGS kernel automatically with a warning). Self-stabilising by
-construction (friction grows with `|Q|` without an explicit Froude cap), so
-Fix A/B above are inert once this kernel is active. Selected automatically
-whenever the extended parquet columns are present in the loaded mesh.
+at 64 levels from the face's sill (its lowest activation level) to above its
+highest point, spaced quadratically (dense near the sill, looked up without a
+search). Above the top level every point is wet: A grows with the full width
+W, P = W, and K = W·(d + c)^(5/3), d the height above the top level and c
+fixed by K there. Nothing stops growing with stage. Polygon sides on the
+mesh boundary have the same table, used by the open-boundary outflow.
 
-### 9.4 Interaction with §7/§8
+### 9.2 The face flux
 
-**Only Correction 1 (WLSQ + V̂) reaches the SGS solver, and it is
-unvalidated there**; the diamond method and cell-vector momentum do not
-apply to SGS (corrected WP0, 2026-10 — this section previously said none
-apply). This is a scope boundary, not an oversight: the
-directional-bias-reformulation work was deliberately staged to validate on
-the standard solver first. Extending it to `step_sgs!` — including
-resolving how the corrected gradient interacts with the dry-cell WSE clamp
-in §9.2, flagged as an open risk in prior sessions but not yet tested
-against the synthetic-DEM regression suite — remains future work.
+The R–A form of the local-inertial momentum equation (LISFLOOD-FP sub-grid
+channel form), for the discharge Q through the face:
+
+    Q ← (Q − g·A·Δt·Δη/L) / (1 + g·Δt·n²·|Q| / (R^(4/3)·A))
+
+with A and R evaluated at the higher of the two cells' levels.
+
+**Conveyance form** (`--sgs-conveyance`, `_sgs_radius`). `2d` (default):
+R = (K/A)^(3/2), so the steady flux is K·√S/n with K = Σ dx·h^(5/3) — every
+strip of the face carries its own Manning flow. This is the uniform-flow
+limit of the 2-D equations, i.e. what a grid that resolves the face
+converges to. `lumped`: R = A/P, one hydraulic radius for the whole face;
+overbank this gives the level of a cell-mean bed (strip: +0.04 m, +8%
+storage) and is kept for the record.
+
+**Flow-path geometry** (`--sgs-path`, `_sgs_path`). The head difference
+Δη is between the water bodies of the two cells. For partly wet cells those
+are around their wetted-area centroids, not the cell centres: a channel that
+crosses the mesh obliquely has its water on a line u shorter than the line
+through the centres, and faces cut it obliquely, wider than it is. For flow
+along u through a face with normal n̂ the kernel uses
+
+    A·|n̂·û|   and   L = |u|.
+
+Fully wet cells keep the kernel's own geometry (A; L projected on the face
+normal); the two are blended by the mean wetted fraction w of the two cells,
+s = clamp(2w − 1, 0, 1), so cells less than half wet are treated as channels.
+On the A5 strip in bank this takes the level from 0.054 m above the analytic
+one to 0.009 m below it (§15.13).
+
+**Dry cells.** A dry cell's level for the flux is max(sill, its lowest
+ground): water must clear the face and reach the cell's floor.
+
+### 9.3 Connectivity: activation levels
+
+Storage is a level pool, so by itself a barrier *inside* a cell only removes
+volume: a face on either side of it has its own profile at natural ground,
+and water crosses the cell without meeting the barrier (the "hop"; a wall
+narrower than a cell passed water 2.9 m below its crest in case
+`planar_wall`).
+
+`_cell_connectivity` finds, on the working grid, the cell's **main basin**:
+the first region of ground below a rising level (4-connected) that reaches
+two different sides of the cell — the lowest route through it — and for
+every grid point the lowest level at which it is connected to that basin
+through ground below that level. A face point's activation level is the
+larger of its own elevation and that connection level in *both* cells, so it
+conveys only when the water at it is connected to the water bodies of the
+two cells it joins. Consequences:
+
+- a barrier inside a cell closes the faces on the side cut off from the main
+  basin, up to the level at which water gets over or round it; its position
+  is moved by at most one cell;
+- a gap through the barrier is found by the search and conveys at its own
+  sill (case `planar_embankment`);
+- a hollow cut by a face that leads nowhere does not convey.
+
+`--sgs-connectivity off` (mesh generation) gives every point its own
+elevation. `sgs_face_raise` in the mesh records by how much each face's sill
+was raised.
+
+**Limit.** One storage per cell is one basin per cell. Where a cell holds two
+basins of comparable importance (a river and a parallel side channel behind
+a levee), the second is merged in storage and closed in conveyance until the
+levee level. 5–8% of Carlisle res-18 cells (5 m DEM; a lower bound) have a
+second basin over 5% of the cell and deeper than 0.25 m (Phase 0 audit,
+`docs/notes/SGS_Phase0_Audit_2026-11.md`). Splitting such cells into one
+storage per basin is the next step.
+
+### 9.4 Limiter and time step
+
+- **Limiter:** positivity (one scale factor per donor cell, applied only when
+  the cell's outflow would exceed its volume), in the interior and at open
+  boundaries, under `--scheme recommended`. The legacy donor cap, V/(2N) per
+  face per step, makes a channel cell carry Q only once it holds 2N·Q·Δt and
+  so holds in-bank channels brim-full; `--limiter legacy` still selects it.
+- **Time step** (`_cfl_dt_local`): two limits. (i) The hydraulic depth
+  V/A_wet in the usual ℓ/√(g h) form (`_sgs_cfl_depth`). (ii) From the faces
+  (`_sgs_face_rate`): a level change of a cell changes its net inflow in
+  proportion to Σ A_f/L_f over its faces, so its level oscillates at
+  ω = √(g·Σ(A_f/L_f)/A_wet) and the limit is Δt ≤ 2·courant/ω. For a fully
+  wet square cell (ii) is (i). For a cell that holds only a sliver of a
+  channel its faces convey, (ii) is shorter by √(cell length / sliver
+  length); without it such cells oscillate and hold the channel up (0.5 m
+  between neighbouring cells on the A5 strip). The wetted area is floored at
+  2% of the cell so that a wetting front does not set the step.
+
+### 9.5 Interaction with §7/§8
+
+Only Correction 1 (WLSQ + V̂) reaches the SGS solver, and it is unvalidated
+there (off under `--scheme recommended`); the diamond method and cell-vector
+momentum do not apply. Vector friction and the local time step do.
 
 ---
 
@@ -487,12 +559,12 @@ accumulates ghost-edge outflow (see `boundaryinputs/boundary_conditions.jl`).
 | | `step_standard!` | `step_sgs!` |
 |---|---|---|
 | WSE from | `elevation + volume/cell_area` | Hypsometric inverse interpolation |
-| Sill | `max(elev_i, elev_j)` | Pre-computed edge-minimum DEM (`sgs_edge_sills`) |
+| Sill | `max(elev_i, elev_j)` | The face's lowest activation level (`sgs_edge_sills`; §9.1, §9.3) |
 | Water-depth pre-sync needed | Yes | No |
 | Requires SGS tables | No | Yes (`build_sgs_tables!` at mesh-build time) |
-| Stability limiters | Fix A/B/C (§6) | SGS-specific dry-cell + h_flow-cap equivalents (§9.2), or self-stabilising R-A (§9.3) |
-| `--gradient-correction` | **Yes** | Legacy WLSQ + V̂ only, **unvalidated** (§9.4) |
-| `--face-flux-method`, `--momentum-model` | **Yes** | **No effect** (§7, §9.4) |
+| Stability limiters | Fix A/B/C (§6) | Positivity scaling; dry-cell level; the face-area time-step limit (§9.2, §9.4) |
+| `--gradient-correction` | **Yes** | Legacy WLSQ + V̂ only, **unvalidated** (§9.5) |
+| `--face-flux-method`, `--momentum-model` | **Yes** | **No effect** (§7, §9.5) |
 | Ghost-edge (open boundary) flux | Uncorrected kernel regardless of flags (§8 item 2) | Uncorrected kernel |
 
 ---
@@ -716,7 +788,7 @@ SGS results obtained before then should be treated as affected.
 local WSE extrema / rms WSE residual at the end): default 1.4% / 188 mm;
 vector 1.1% / 189 mm; **vector + local CFL 1.2% / 147 mm**; + hybrid 1.2% /
 130 mm; + gradient correction 4.6% (noisier — the legacy WLSQ correction is
-unvalidated under SGS, §9.4); hybrid alone spiked (velocity 4 m/s) — under SGS
+unvalidated under SGS, §9.5); hybrid alone spiked (velocity 4 m/s) — under SGS
 it is positivity-only scaling, as the R–A kernel has no per-edge volume
 limiter. Planar slope under 20 mm/h rain (open boundaries, 6 h): plume
 deflection −2.3° (default) vs −0.2° (vector + local), extrema 0.11% vs 0.09%.

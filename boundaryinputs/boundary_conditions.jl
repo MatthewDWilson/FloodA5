@@ -215,6 +215,82 @@ Called once from initialise_flow_model after _build_edge_list.
 # an inward neighbour must lie within acos(INWARD_NB_COS) of the inward normal
 const INWARD_NB_COS = 0.5
 
+"""
+    _thalweg_slope(i, cells, zlow, adj, id_idx; nsteps = 20) → Float64
+
+The bed slope of the lowest ground leading to boundary cell i (m/m, ≥ 0: 0
+where it falls away from the boundary; NaN if it cannot be found): from i,
+step `nsteps` times to the neighbour with the lowest ground (`zlow`: the
+cells' lowest elevations) among those farther from i than the current cell,
+and fit a line to that ground against the distance from i.
+"""
+function _thalweg_slope(i::Int, cells, zlow::Vector{Float64}, adj, id_idx; nsteps::Int = 20)
+    isfinite(zlow[i]) || return NaN
+    lon0 = cells[i].center_lon; lat0 = cells[i].center_lat
+    dist(j) = A5Grid._haversine_m(lon0, lat0, cells[j].center_lon, cells[j].center_lat)
+    ds = Float64[0.0]; zs = Float64[zlow[i]]
+    cur = i; dcur = 0.0
+    for _ in 1:nsteps
+        best = 0; zb = Inf; db = 0.0
+        for nb_id in get(adj, _norm_cell_id(cells[cur].id), String[])
+            j = get(id_idx, nb_id, 0)
+            (j == 0 || !isfinite(zlow[j])) && continue
+            d = dist(j)
+            d > dcur + 1e-6 || continue
+            zlow[j] < zb && (best = j; zb = zlow[j]; db = d)
+        end
+        best == 0 && break
+        cur = best; dcur = db
+        push!(ds, db); push!(zs, zb)
+    end
+    n = length(ds)
+    n >= 5 || return NaN
+    dm = sum(ds) / n; zm = sum(zs) / n
+    den = sum((d - dm)^2 for d in ds)
+    den > 0.0 || return NaN
+    return max(0.0, sum((ds[k] - dm) * (zs[k] - zm) for k in 1:n) / den)
+end
+
+"""
+    _sgs_boundary_slopes(cells, boundary_mask, zlow, adj, id_idx) → Vector{Float64}
+
+The bed slope of the SGS normal-depth outflow of each boundary cell (NaN for
+other cells and where none is found), 0.7.0.
+
+The outflow needs a bed slope. The difference of two neighbouring cells'
+mean elevations — what standard flow uses — is dominated by sub-grid relief
+where the terrain has any: a channel cell and the bank cell behind it differ
+by metres over 20 m (21% at the Eden's outlet from the Carlisle domain), and
+SGS, which conveys the channel's true depth, turns such a slope into a
+drawdown of metres. Instead: water leaves along the local valley floor. Each
+boundary cell takes the slope of the lowest ground leading to
+(`_thalweg_slope`) the lowest boundary cell within five cell sizes of it —
+at a river's outlet, the river's own slope for the river cells and for the
+bank cells beside them. At least 1e-4.
+"""
+function _sgs_boundary_slopes(cells, boundary_mask, zlow::Vector{Float64}, adj, id_idx)
+    n = length(cells)
+    own = fill(NaN, n)
+    bidx = [i for i in 1:n if boundary_mask[i] && isfinite(zlow[i])]
+    for i in bidx
+        own[i] = _thalweg_slope(i, cells, zlow, adj, id_idx)
+    end
+    out = fill(NaN, n)
+    d2m = A5Grid._EARTH_R * π / 180.0
+    for i in bidx
+        r = 5.0 * sqrt(max(A5Grid._polygon_area_m2(cells[i].boundary), 1.0))
+        lat0 = cells[i].center_lat; lon0 = cells[i].center_lon; mx = d2m * cosd(lat0)
+        best = 0; zb = Inf
+        for j in bidx
+            isfinite(own[j]) || continue
+            hypot((cells[j].center_lon - lon0) * mx, (cells[j].center_lat - lat0) * d2m) <= r || continue
+            zlow[j] < zb && (best = j; zb = zlow[j])
+        end
+        best == 0 || (out[i] = max(own[best], 1e-4))
+    end
+    return out
+end
+
 function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                               adj         :: Dict{String,Vector{String}},
                               id_idx      :: Dict{String,Int},
@@ -227,6 +303,7 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                               )::Tuple{BitVector, Vector{GhostEdge}, Vector{BCType}}
     n             = length(cells)
     use_sgs       = !isempty(sgs_tables)
+    zlow_sgs      = use_sgs ? Float64[t === nothing ? NaN : t.z_min for t in sgs_tables] : Float64[]
     # _norm_cell_id (FloodModel.jl) falls back to the raw ID for any backend
     # whose cell IDs aren't hex-parseable A5 IDs — see its docstring.
     _norm(id)     = _norm_cell_id(id)
@@ -250,6 +327,7 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                                  c.boundary[nv][2] ≈ c.boundary[1][2] ? nv - 1 : nv)
     boundary_mask = BitVector(n_neighbours[i] < _poly_sides(cells[i]) for i in 1:n)
     n_boundary    = count(boundary_mask)
+    sgs_slopes    = use_sgs ? _sgs_boundary_slopes(cells, boundary_mask, zlow_sgs, adj, id_idx) : Float64[]
     n_boundary == 0 && @info "No boundary cells found (fully enclosed domain)."
     n_boundary  > 0 && @info "Boundary cells: $n_boundary / $n ($(round(100n_boundary/n, digits=1))%)"
 
@@ -288,6 +366,7 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             A5Grid.boundary_side_slots(length(sgs_tables[i].face_z0),
                                        Bool[get(id_idx, nb, 0) != 0 for nb in nbr_ids]) : Int[]
         n_bside    = 0
+        reg = use_sgs ? sgs_slopes[i] : NaN        # SGS: the local valley floor's slope
         nv         = length(bnd)
         n_actual   = length(bnd) - (nv >= 2 &&
                                     bnd[nv][1] ≈ bnd[1][1] &&
@@ -412,8 +491,9 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             gnx, gny = ty / tl, -tx / tl
             rx  = deg2rad(mid_lon - cell_lon) * Rm * cos_lat; ry = deg2rad(mid_lat - cell_lat) * Rm
             gnx * rx + gny * ry < 0.0 && (gnx = -gnx; gny = -gny)
+            g_slope = reg
             push!(ghost_edges,   GhostEdge(i, width, L, sill, 0.0, use_sgs,
-                                            best_nb_idx, best_nb_L, gnx, gny, rx, ry, g_slot))
+                                            best_nb_idx, best_nb_L, gnx, gny, rx, ry, g_slot, g_slope))
             push!(ghost_cell_bc, default_bc)
         end
     end

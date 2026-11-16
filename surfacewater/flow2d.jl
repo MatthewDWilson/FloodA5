@@ -665,6 +665,9 @@ gives the level of a cell-mean bed overbank).
     return P < 1e-6 ? 0.0 : A / P
 end
 
+"The command line's Courant number for `--flow-model sgs` when `--courant` is not given (see FloodModel.jl `main`)."
+const SGS_DEFAULT_COURANT = 0.5
+
 """
     SGS_PATH[]
 
