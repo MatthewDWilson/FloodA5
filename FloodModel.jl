@@ -87,7 +87,7 @@ end
 
 using .A5Grid
 using .A5Grid: SGSTable, wse_from_volume, wetted_area_from_wse,
-               flow_area_from_wse, wetted_perim_from_wse, hydraulic_radius_from_wse,
+               face_apk, face_table_from_profile,
                sgs_table, build_sgs_tables!,
                grid_disk_neighbours, grid_disk_neighbours_batch,
                _polygon_area_m2, _shared_edge, _haversine_m
@@ -384,6 +384,9 @@ mutable struct StepWorkspace
     m_u       :: Vector{Float64}   # face velocity (ne)
     m_w       :: Vector{Float64}   # face wetness weight (ne)
     m_h       :: Vector{Float64}   # face flow depth (ne)
+    # SGS (0.7.0): flow area of each face at the last step (ne), for the
+    # time-step limit of partly wet cells (_sgs_face_rate)
+    face_A    :: Vector{Float64}
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Float64[], Bool[], Int[], Int[],
@@ -391,7 +394,7 @@ StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Floa
                                 Int[], UInt32[],
                                 zeros(0, 0), zeros(0, 0), Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Int[], Int[], Float64[], falses(0),
-                                Float64[], Float64[], Float64[], Float64[])
+                                Float64[], Float64[], Float64[], Float64[], Float64[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
 # They are defined here rather than in boundary_conditions.jl so that FlowState can
@@ -434,10 +437,16 @@ mutable struct GhostEdge
     ny               :: Float64
     rx               :: Float64  # side midpoint − cell centre (m, local frame)
     ry               :: Float64
+    # 0.7.0 (SGS): the cell's face-table slot of this boundary side
+    # (A5Grid.boundary_side_slots), 0 if it has no table (rectangle fallback)
+    slot             :: Int
 end
 GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L) =
     GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
-              0.0, 0.0, 0.0, 0.0)
+              0.0, 0.0, 0.0, 0.0, 0)
+GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L, nx, ny, rx, ry) =
+    GhostEdge(cell_index, width, L, sill, flux_prev, is_Q_flux, interior_nb_idx, interior_nb_L,
+              nx, ny, rx, ry, 0)
 
 # InjectionPoint and RainPoint are defined here (before FlowState and before the
 # boundaryinputs includes) because sources.jl dispatches apply_source! on these
@@ -910,6 +919,7 @@ function _workspace!(state::FlowState)::StepWorkspace
     end
     if length(ws.edge_vol) != ne
         resize!(ws.edge_vol, ne); resize!(ws.flux_prev, ne)
+        resize!(ws.face_A, ne); fill!(ws.face_A, 0.0)
         empty!(ws.slot_i); empty!(ws.slot_j)
         ws.ready = false                     # active set must start from a full pass
     end
@@ -2517,18 +2527,16 @@ function initialise_flow_model(mesh::A5Mesh,
         # WP3 (2026-10): tables built before the fix store edge curves and
         # sills in grid_disk order, which does not match the neighbour list
         # for most cells (wrong neighbour's sill/R-A curve). Refuse them.
-        if !haskey(mesh.static_vars, "sgs_layout")
-            msg = "This mesh's SGS tables use the pre-2026-10 slot layout: edge " *
-                  "sills and R-A curves were stored in grid_disk order, which " *
-                  "differs from the neighbour list for most cells, so most edges " *
-                  "would use another neighbour's values. Rebuild the SGS tables " *
-                  "(--meshgen ... --flow-model sgs, or build_sgs_tables!) or repair " *
-                  "them with mesh/repair_sgs_slot_order.py."
-            if get(ENV, "FLOODA5_ALLOW_OLD_SGS_LAYOUT", "") == "1"
-                @warn msg * " (continuing: FLOODA5_ALLOW_OLD_SGS_LAYOUT=1)"
-            else
-                error(msg)
-            end
+        # Layout 3 (0.7.0): one face table per face (flow area, wetted width,
+        # conveyance integral on the face's own levels). Older tables hold
+        # per-cell edge curves that stop at the cell's highest DEM sample
+        # (layout 2) or are in the wrong slot order (no layout): refused.
+        layout = haskey(mesh.static_vars, "sgs_layout") ? Float64(first(mesh.static_vars["sgs_layout"])) : 1.0
+        if layout < 3 || !haskey(mesh.array_vars, "sgs_face_A")
+            error("This mesh's SGS tables are layout $(round(Int, layout)); FloodA5 ≥ 0.7.0 " *
+                  "needs layout 3 (face tables). Rebuild the SGS tables: " *
+                  "--meshgen … --flow-model sgs --mesh-only (or build_sgs_tables!). " *
+                  "Results of the old tables: tag v0.6.0, cases/expected/v0.6.0/.")
         end
         sgs_tables = [sgs_table(mesh, i) for i in 1:n]
 
@@ -2567,7 +2575,7 @@ function initialise_flow_model(mesh::A5Mesh,
     # return slot 1 silently when a neighbour was not found. Fail loudly here
     # instead of computing with the wrong curve at run time.
     if method isa SGSFlow && !isempty(sgs_tables)
-        n_slot_cols = size(sgs_tables[1].edge_area_curves, 2)
+        n_slot_cols = length(sgs_tables[1].face_z0)
         if max_nb > n_slot_cols
             error("SGS tables have $n_slot_cols edge-slot columns but this mesh " *
                   "has cells with up to $max_nb neighbours. SGS is not yet " *
@@ -2957,22 +2965,13 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
         q_stored = 0.0
 
         if ge.is_Q_flux
-            # Ghost edges face outside the domain — no DEM data exists for an
-            # exterior-facing slot, so the SGS edge_area_curves have no valid
-            # entry for this opening.  Use a rectangular cross-section
-            # approximation: A = width × h_flow, R = A / (width + 2·h_flow).
-            # This is physically consistent with what _bates_ghost_flux implies
-            # for the standard flow path and is correct for any ghost opening
-            # regardless of interior sub-grid channel geometry.
-            h_flow_ge = max(0.0, wse_ci - ge.sill)
-            if h_flow_ge > HFLOW_THRESHOLD
-                A_ge = ge.width * h_flow_ge
-                P_ge = ge.width + 2.0 * h_flow_ge
-                R_ge = A_ge / P_ge
-            else
-                A_ge = 0.0
-                R_ge = 0.0
-            end
+            # 0.7.0: the boundary side's own face table (the DEM profile along
+            # the side, as for an interior face) when the mesh has one.
+            # Otherwise (the DEM does not reach the side) a rectangle of the
+            # side's full width above the cell's lowest ground, as before:
+            # A = width × h_flow, R = A / (width + 2·h_flow).
+            A_ge, R_ge = _sgs_ghost_area_radius(tbl, ge.slot, wse_ci, ge.sill, ge.width,
+                                                SGS_CONVEYANCE[] === :twod)
             Q_out, q_stored = _manning_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
                 A_ge, R_ge, ge.L, state.manning_n[ci], dt)
@@ -3944,8 +3943,9 @@ boundary limiter comes from `scheme_boundary_limiter`.
                 to the full shallow-water reference on A5 and Cartesian
                 meshes, and resolution-convergent (HYDRAULICS.md
                 §15.10–15.11).
-      sgs       as :v02 (no reference yet: the SWE solver has no sub-grid
-                representation), except the open boundaries
+      sgs       as :v02, except the open boundaries and (0.7.0) positivity
+                limiting in the interior and at the boundary: the legacy
+                donor cap holds in-bank channels brim-full (case sgs_strip)
       both      open boundaries are normal-depth free outflows
                 (open_boundary = :normal: the bed slope from the inward
                 neighbour at the cell's own depth; before 0.3.0 the water
@@ -3980,8 +3980,12 @@ function scheme_options(scheme::Symbol, flow_method::Symbol)
     scheme in (:recommended, :v02, :legacy) ||
         throw(ArgumentError("scheme must be :recommended, :v02 or :legacy (got :$scheme)"))
     (scheme === :legacy || flow_method === :swe) && return legacy
+    # 0.7.0: positivity limiting under :recommended (the legacy donor cap,
+    # V/(2N) per face per step, sets the level of in-bank channel flow —
+    # case sgs_strip, HYDRAULICS §15.13).
     flow_method === :sgs &&
         return merge(legacy, (friction_model = :vector, cfl_mode = :local, q_centre_theta = 1.0,
+                              limiter = scheme === :recommended ? :positivity : :legacy,
                               open_boundary = scheme === :recommended ? :normal : :legacy))
     v02 = merge(legacy, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                          friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
@@ -3995,10 +3999,11 @@ end
     scheme_boundary_limiter(scheme, flow_method) → Symbol
 
 The open-boundary limiter (`--boundary-limiter`, D1b) of a scheme:
-`:positivity` for standard flow under `:recommended` (0.3.0), else `:legacy`.
+`:positivity` for standard flow (0.3.0) and SGS (0.7.0) under `:recommended`,
+else `:legacy`.
 """
 scheme_boundary_limiter(scheme::Symbol, flow_method::Symbol) =
-    scheme === :recommended && flow_method === :standard ? :positivity : :legacy
+    scheme === :recommended && flow_method in (:standard, :sgs) ? :positivity : :legacy
 
 """
     _check_precision(precision, backend, flow_method) → Float64 | Float32
@@ -4056,6 +4061,7 @@ function run_flood_model(;
     limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
     # D1b/D4/D6′ (0.3.0): `nothing` takes the scheme's value
     boundary_limiter  :: Union{Symbol,Nothing}  = nothing,  # :legacy | :positivity
+    sgs_conveyance    :: Symbol  = :twod,     # :twod | :lumped (0.7.0; SGS face conveyance)
     eta_filter        :: Union{Float64,Nothing} = nothing,  # η filter C_s (0 = off)
     momentum_damping  :: Union{Float64,Nothing} = nothing,  # momentum damping C_m (0 = off)
     momentum_damping_scale :: Union{Symbol,Nothing} = nothing, # :wave | :flow
@@ -4539,6 +4545,7 @@ function run_flood_model(;
             "eta_filter" => eta_filter, "momentum_damping" => momentum_damping,
             "momentum_damping_scale" => momentum_damping_scale,
             "open_boundary" => open_boundary, "boundary_limiter" => boundary_limiter,
+            "sgs_conveyance" => sgs_conveyance,
             "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
             "manning_n" => manning_n, "friction" => friction_source,
             "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
@@ -4575,6 +4582,9 @@ function run_flood_model(;
     boundary_limiter in (:legacy, :positivity) ||
         throw(ArgumentError("boundary_limiter must be :legacy or :positivity"))
     BOUNDARY_POSITIVITY[] = boundary_limiter === :positivity
+    sgs_conveyance in (:twod, :lumped) ||
+        throw(ArgumentError("sgs_conveyance must be :twod or :lumped"))
+    SGS_CONVEYANCE[] = sgs_conveyance
     limiter_stats && _lstats_reset!(flow_state.edges.n_edges)
     tl.source_setup = time() - t0_src
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  courant=$(courant)  " *
@@ -4917,8 +4927,15 @@ Flow model options:
                      (D1b) legacy: boundary outflow keeps the volume limiter
                      and the per-step donor cap, both of which scale with 1/Δt.
                      positivity: only "no more than the boundary cell holds".
-                     Default: from --scheme (positivity for standard flow,
-                     legacy otherwise and under v0.2/legacy).
+                     Default: from --scheme (positivity for standard flow
+                     and SGS, legacy under v0.2/legacy).
+  --sgs-conveyance 2d|lumped
+                     (SGS) How a face turns its DEM profile into conveyance.
+                     2d (default): K = Σ h^(5/3) over the profile — every strip
+                     of the face carries its own Manning flow, the uniform-flow
+                     limit of the 2-D equations. lumped: one hydraulic radius
+                     A/P for the whole face (kept for the record: overbank it
+                     gives the level of a cell-mean bed).
   --eta-filter C_S   (D4; standard flow) Conservative free-surface
                      high-pass filter: water is exchanged across wet faces in
                      proportion to the jump in the WSE residual from a local
@@ -5630,6 +5647,15 @@ function main(args=String[])
     boundary_lim_val, args = _pop_flag(args, "--boundary-limiter")
     # nothing: from --scheme (resolved in run_flood_model, 0.3.0)
     boundary_limiter = boundary_lim_val === nothing ? nothing : Symbol(boundary_lim_val)
+    sgs_conv_val, args = _pop_flag(args, "--sgs-conveyance")
+    sgs_conveyance = if sgs_conv_val === nothing || sgs_conv_val == "2d"
+        :twod
+    elseif sgs_conv_val == "lumped"
+        :lumped
+    else
+        println("ERROR: --sgs-conveyance requires '2d' or 'lumped' (got '$sgs_conv_val')\n")
+        print_help(1)
+    end
     eta_filter_val, args = _pop_flag(args, "--eta-filter")
     eta_filter = eta_filter_val === nothing ? nothing : parse(Float64, eta_filter_val)
     mom_damp_val, args = _pop_flag(args, "--momentum-damping")
@@ -5816,6 +5842,7 @@ function main(args=String[])
         cell_order      = cell_order,
         limiter_stats   = limiter_stats,
         boundary_limiter = boundary_limiter,
+        sgs_conveyance  = sgs_conveyance,
         eta_filter      = eta_filter,
         momentum_damping = momentum_damping,
         momentum_damping_scale = momentum_damping_scale,

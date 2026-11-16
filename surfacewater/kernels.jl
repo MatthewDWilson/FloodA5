@@ -209,17 +209,19 @@ function _face_flux_std_list!(opts::StdOpts, M, act::Vector{Int}, n_act::Int, dt
 end
 
 """
-    SGSOpts{GC, QCC, VF, POS}
+    SGSOpts{GC, QCC, VF, POS, K2D}
 
 SGS (R–A kernel) options as type parameters: gradient correction (Bool),
 consistent Q-centring (Bool; otherwise `_q_centred` with whatever partner
-signs the edge list holds), vector friction (Bool), positivity limiting (Bool).
+signs the edge list holds), vector friction (Bool), positivity limiting (Bool),
+2-D conveyance (Bool; `SGS_CONVEYANCE[]`, see `_sgs_radius`).
 """
-struct SGSOpts{GC, QCC, VF, POS} end
+struct SGSOpts{GC, QCC, VF, POS, K2D} end
 
 SGSOpts(state::FlowState) =
     SGSOpts{state.gradient_correction, state.q_centre_mode === :consistent,
-            state.friction_model === :vector, state.limiter !== :legacy}()
+            state.friction_model === :vector, state.limiter !== :legacy,
+            SGS_CONVEYANCE[] === :twod}()
 
 function _sgs_arrays(state::FlowState, ws::StepWorkspace)
     E = state.edges
@@ -230,6 +232,7 @@ function _sgs_arrays(state::FlowState, ws::StepWorkspace)
             qvec_u = state.qvec_u, qvec_v = state.qvec_v, grad_wse = state.grad_wse,
             tables = state.sgs_tables, slot_i = ws.slot_i, slot_j = ws.slot_j, wse = ws.wse,
             flux_Q = E.flux_Q, flux_Q_prev = ws.flux_prev, edge_vol = ws.edge_vol,
+            face_A = ws.face_A,
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
             donor_div = _donor_edge_divisor(state),
             stats = LIMITER_STATS[], lflag = _lf_flag(), lhf = _lf_hf())   # D1b (--limiter-stats)
@@ -242,10 +245,11 @@ Phase A of `step_sgs!` for edge `e` (R–A kernel; Q in M.flux_Q[e], edge volume
 after the donor cap with Fix C back-propagation in M.edge_vol[e]). Transcribed
 from the stage-1 loop body; bit-identical to it.
 """
-@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS}, M,
-                                 dt::Float64) where {GC, QCC, VF, POS}
+@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS, K2D}, M,
+                                 dt::Float64) where {GC, QCC, VF, POS, K2D}
     @inbounds begin
         ci = M.ci[e]; cj = M.cj[e]
+        M.face_A[e] = 0.0                      # set below if the face is wet
         if isnan(M.elevation[ci]) || isnan(M.elevation[cj])
             M.edge_vol[e] = 0.0                # flux_Q left as is (as before)
             M.stats && (M.lflag[e] = 0x00)
@@ -269,10 +273,10 @@ from the stage-1 loop body; bit-identical to it.
             return nothing
         end
         wse_flow = max(wse_ci_eff, wse_cj_eff)
-        A_i, R_i = A5Grid.edge_area_radius(ti, M.slot_i[e], wse_flow)
-        A_j, R_j = A5Grid.edge_area_radius(tj, M.slot_j[e], wse_flow)
-        A_edge = 0.5 * (A_i + A_j)
-        R_edge = 0.5 * (R_i + R_j)
+        # One table per face (layout 3); both cells hold the same one.
+        A_edge, P_edge, K_edge = A5Grid.face_apk(ti, M.slot_i[e], wse_flow)
+        R_edge = _sgs_radius(A_edge, P_edge, K_edge, K2D)
+        M.face_A[e] = wse_flow - z_sill > HFLOW_THRESHOLD ? A_edge : 0.0
         Q_prev_eff = QCC ?
             _q_centred_consistent(M.flux_Q_prev, e, M.edges, M.qvec_u, M.qvec_v, M.theta;
                                   volumetric = true) :

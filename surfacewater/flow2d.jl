@@ -636,6 +636,106 @@ end
 
 
 # ---------------------------------------------------------------------------
+# SGS face conveyance form and time-step depth (0.7.0)
+# ---------------------------------------------------------------------------
+
+"""
+    SGS_CONVEYANCE[]
+
+`:twod` (default) or `:lumped` (`--sgs-conveyance`): how an SGS face turns its
+table into a hydraulic radius — see `_sgs_radius`.
+"""
+const SGS_CONVEYANCE = Ref(:twod)
+
+"""
+    _sgs_radius(A, P, K, twod) → Float64
+
+The hydraulic radius the R–A kernel uses for a face with flow area `A`, wetted
+width `P` and conveyance integral `K = Σ dx·h^(5/3)` (`A5Grid.face_apk`).
+
+`twod`: R = (K/A)^(3/2), so that A·R^(2/3) = K — every strip of the face
+carries its own Manning flow, the uniform-flow limit of the 2-D equations
+(what a grid that resolves the face converges to). Otherwise the single
+radius R = A/P (compound-section "lumped" form, kept for the record: it
+gives the level of a cell-mean bed overbank).
+"""
+@inline function _sgs_radius(A::Float64, P::Float64, K::Float64, twod::Bool)::Float64
+    A > 1e-6 || return 0.0
+    twod && return sqrt(K / A)^3
+    return P < 1e-6 ? 0.0 : A / P
+end
+
+"""
+    _sgs_ghost_area_radius(table, slot, wse, sill, width, twod) → (A, R)
+
+Flow area and hydraulic radius of an SGS open-boundary side at the boundary
+cell's level `wse`: from the side's face table (`slot` > 0, `sill` its lowest
+point) or, without one, a rectangle of the side's `width` above `sill` (the
+cell's lowest ground).
+"""
+@inline function _sgs_ghost_area_radius(t, slot::Int, wse::Float64, sill::Float64, width::Float64,
+                                        twod::Bool)::Tuple{Float64,Float64}
+    wse - sill > HFLOW_THRESHOLD || return 0.0, 0.0
+    if slot > 0
+        A, P, K = A5Grid.face_apk(t, slot, wse)
+        return A, _sgs_radius(A, P, K, twod)
+    end
+    h = wse - sill
+    A = width * h
+    return A, A / (width + 2.0 * h)
+end
+
+"""
+    _sgs_cfl_depth(table, V, h) → Float64
+
+Depth for the SGS time-step limit of a cell holding volume `V`, `h` its depth
+above the lowest ground (η − z_min): the hydraulic depth V / A_wet, the depth
+whose √(g·depth) is the long-wave speed of a partly wet cell (A_wet from the
+hypsometric table at η; the full cell area once η ≥ z_max, so a submerged
+cell has its mean depth, as a cell-mean bed would). Never more than `h`.
+
+Before 0.7.0 the depth was capped at the cell's relief z_max − z_min, which
+ignored all water above the highest ground of a cell.
+"""
+@inline function _sgs_cfl_depth(t, V::Float64, h::Float64)::Float64
+    aw = wetted_area_from_wse(t, t.z_min + h)
+    aw > 0.0 || return h
+    return min(h, V / aw)
+end
+
+"""
+    SGS_CFL_AREA_FLOOR
+
+Smallest wetted fraction of a cell assumed by `_sgs_face_rate` (a cell that is
+just wetting has almost no wetted area for a few steps; without a floor every
+wetting front would set the time step of the whole domain).
+"""
+const SGS_CFL_AREA_FLOOR = 0.02
+
+"""
+    _sgs_face_rate(i, cptr, cedge, face_A, L, a_wet) → Float64
+
+Time-step rate (s⁻¹; Δt = courant / rate) of SGS cell i from its faces: with
+flow areas A_f over centre distances L_f and a wetted plan area `a_wet`, a
+level change δη of the cell changes its net inflow by g·Δt·δη·Σ A_f/L_f, so
+its levels oscillate at ω = √(g·Σ(A_f/L_f)/a_wet); the rate is ω/2. For a
+fully wet square cell of uniform depth h this is √(g h)/Δx, the usual
+local-inertial limit; for a cell of which only a sliver is wet but whose
+faces carry a channel (a cell that clips a channel) it is larger, by
+√(cell length / sliver length). `cptr`/`cedge`: the cell → edge CSR.
+"""
+@inline function _sgs_face_rate(i::Int, cptr::AbstractVector, cedge::AbstractVector,
+                                face_A::AbstractVector, L::AbstractVector, a_wet::Float64)::Float64
+    s = 0.0
+    @inbounds for k in cptr[i]:cptr[i + 1] - 1
+        e = cedge[k]
+        Le = L[e]
+        Le > 0.0 && (s += face_A[e] / Le)     # NaN lengths fail the test
+    end
+    return a_wet > 0.0 ? 0.5 * sqrt(_G * s / a_wet) : 0.0
+end
+
+# ---------------------------------------------------------------------------
 # CFL timestep
 # ---------------------------------------------------------------------------
 
@@ -700,9 +800,7 @@ function _cfl_dt(state::FlowState, method::FlowMethod; courant::Float64=0.7)::Fl
         h <= 1e-4 && continue
         if is_sgs && !isempty(state.sgs_tables)
             tbl = state.sgs_tables[i]
-            if !isnan(tbl.z_min)
-                h = min(h, max(0.0, tbl.z_max - tbl.z_min))
-            end
+            isnan(tbl.z_min) || (h = _sgs_cfl_depth(tbl, state.volume[i], h))
         end
         h > 1e-4 && push!(wet_depths, h)
     end
@@ -728,12 +826,22 @@ function _cfl_dt_local(state::FlowState, method::FlowMethod, courant::Float64)::
     is_sgs   = method isa SGSFlow && !isempty(state.sgs_tables)
     has_len  = length(state.cell_length) == length(state.cell_ids)
     rate_max = 0.0                            # max √(g h_i)/ℓ_i  (s⁻¹)
+    ws = state.ws                             # SGS: face areas of the last step, once a step has run
+    faces = is_sgs && length(ws.face_A) == state.edges.n_edges &&
+            length(ws.cptr) == length(state.cell_ids) + 1
     for i in eachindex(state.cell_ids)
         h = state.water_depth[i]
         h > 1e-4 || continue                  # also skips NaN
         if is_sgs
             tbl = state.sgs_tables[i]
-            isnan(tbl.z_min) || (h = min(h, max(0.0, tbl.z_max - tbl.z_min)))
+            if !isnan(tbl.z_min)
+                if faces
+                    aw = max(wetted_area_from_wse(tbl, tbl.z_min + h), SGS_CFL_AREA_FLOOR * tbl.cell_area)
+                    r = _sgs_face_rate(i, ws.cptr, ws.cedge, ws.face_A, state.edges.L, aw)
+                    r > rate_max && (rate_max = r)
+                end
+                h = _sgs_cfl_depth(tbl, state.volume[i], h)
+            end
             h > 1e-4 || continue
         end
         ℓ = has_len ? state.cell_length[i] : sqrt(state.cell_area[i])

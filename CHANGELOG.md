@@ -33,6 +33,72 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+SGS conveyance (plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`).
+**Breaking for SGS meshes**: tables are layout 3; SGS meshes must be rebuilt
+(`--meshgen … --flow-model sgs --mesh-only`). Standard flow and SWE are
+unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
+(and tag `v0.6.0`).
+
+### Changed
+- ⚠ **SGS face tables (layout 3).** Each face has one table, built from the
+  DEM profile along the face on the face's own levels and held identically by
+  both cells: flow area A, wetted width P and the conveyance integral
+  K = Σ dx·h^(5/3) at 64 levels (denser near the sill) that reach above the
+  highest point of the profile, continued analytically above them with the
+  full face width (`A5Grid.face_table_from_profile`, `face_apk`; mesh columns
+  `sgs_face_A/P/K`, `sgs_face_zr`, with `sgs_edge_sills` their lowest level).
+  They replace the per-cell edge curves (`sgs_edge_area_curve`,
+  `sgs_edge_perim_curve`), which were tabulated on each cell's own levels and
+  stopped growing at the cell's highest DEM sample, and the ½(A_i + A_j),
+  ½(R_i + R_j) average in the kernel (case `sgs_strip`: faces carried 39% and
+  2.5% of their flow area 0.4 m above the floodplain). `edge_area_radius`,
+  `flow_area_from_wse`, `wetted_perim_from_wse`, `hydraulic_radius_from_wse`
+  are removed. Layout ≤ 2 meshes are refused (`FLOODA5_ALLOW_OLD_SGS_LAYOUT`
+  is gone); `--rerun` of an SGS output written by ≤ 0.6.0 stops with that
+  message. The SGS loop of the frozen `surfacewater/reference_steps.jl` reads
+  the face tables too (a deliberate change of that file).
+- ⚠ **SGS conveyance form**: `--sgs-conveyance 2d` (default) uses
+  R = (K/A)^(3/2), i.e. A·R^(2/3) = Σ h^(5/3) over the face profile — the
+  uniform-flow limit of the 2-D equations. `lumped` keeps one hydraulic radius
+  A/P per face (for the record: overbank it gives the level of a cell-mean
+  grid, +0.04 m on the strip).
+- ⚠ **SGS limiter**: `--scheme recommended` gives SGS `--limiter positivity`
+  and `--boundary-limiter positivity` (were `legacy`). The legacy donor cap,
+  V/(2N) per face per step, held in-bank channels brim-full.
+- ⚠ **SGS time step**: the depth of an SGS cell for the time-step limit is
+  the hydraulic depth V/A_wet (was: capped at the cell's relief
+  z_max − z_min, which ignored all water above a cell's highest ground), and
+  a second limit follows from the faces: rate ½√(g·Σ(A_f/L_f)/A_wet)
+  (`_sgs_face_rate`), which for a fully wet square cell is the usual
+  √(g h)/Δx and is larger for a cell that holds only a sliver of a channel
+  its faces convey. Without it such cells oscillated and held the channel up
+  by up to 0.5 m on the A5 strip. The wetted area is floored at 2% of the
+  cell (`SGS_CFL_AREA_FLOOR`). The A5 strip runs take 1.6–2.2× the steps.
+
+### Results (case `sgs_strip`, 8 h; analytic 2-D level δ −0.267 / +0.372 m)
+- Cartesian 20 m: in bank δ −0.265 m, storage 3.57 m²/m (analytic 3.57);
+  overbank δ +0.366 m, storage 26.9 (27.3); steady; arrival within 1% in bank
+  and 8–14% early overbank against the 2.5 m reference. 0.6.0: −0.008 m
+  (brim-full) and +4.75 m, still filling.
+- A5 res 18: in bank δ −0.213 m, steady, floodplain dry (0.6.0: out of bank,
+  still filling); overbank +0.341 m (local-inertial on the same mesh +0.390,
+  2-D for its mean width +0.290).
+- Seven of the eight expected failures of `sgs_strip` now pass and are
+  ordinary checks again. One remains (A5 in bank, 0.054 m high against a
+  0.05 m tolerance): on A5 the channel zig-zags through the cells and the
+  kernel takes the slope over the centroid distance.
+- The `sgs_strip` checks changed where they referred to the old scheme: the
+  default run is compared with the 2-D analytic (was: the lumped one), with
+  tolerances tightened to 0.03 m / 5% overbank (were 0.10 m / 10%); the
+  `--limiter positivity` jobs are replaced by `--sgs-conveyance lumped` jobs
+  checked against the lumped analytic; the A5 overbank check compares SGS and
+  local-inertial with the 2-D answer for the strip's own width (was: SGS
+  within 10% of local-inertial). Expected values re-recorded.
+
+### Added
+- `cases/expected/v0.6.0/`: the SGS metrics, table diagnostics and strip
+  series of the scheme up to 0.6.0, for before/after comparison.
+
 ## [0.6.0] — 2026-11-15
 
 Float32 on the device backends and a benchmark suite (MINOR). Float64

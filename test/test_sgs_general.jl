@@ -53,16 +53,20 @@ const MESH = _quiet() do
 end
 
 @testset "S1 — layout" begin
-    @test MESH.static_vars["sgs_layout"][1] == 2.0
+    @test MESH.static_vars["sgs_layout"][1] == 3.0          # face tables (0.7.0)
     @test size(MESH.array_vars["sgs_edge_sills"], 1) == 6
-    @test size(MESH.array_vars["sgs_edge_area_curve"], 1) == 40 * 6
+    @test size(MESH.array_vars["sgs_face_zr"], 1) == 6
+    for k in ("sgs_face_A", "sgs_face_P", "sgs_face_K")
+        @test size(MESH.array_vars[k], 1) == A5Grid.SGS_FACE_LEVELS * 6
+    end
+    @test !haskey(MESH.array_vars, "sgs_edge_area_curve")   # the per-cell edge curves are gone
 end
 
 @testset "S2 — slot k is the k-th neighbour" begin
     idx   = Dict(c.id => i for (i, c) in enumerate(MESH.cells))
     sills = MESH.array_vars["sgs_edge_sills"]
     tbl(i) = A5Grid.sgs_table(MESH, i)
-    n_pairs = 0; n_sym = 0; n_perim_ok = 0; n_perim = 0
+    n_pairs = 0; n_sym = 0; n_perim_ok = 0; n_perim = 0; n_same = 0
     for (i, c) in enumerate(MESH.cells)
         nbrs = MESH.adjacency[c.id]
         for (k, nb) in enumerate(nbrs)
@@ -73,13 +77,18 @@ end
             isapprox(sills[k, i], sills[kj, j]; atol = 1e-6) && (n_sym += 1)
             edge = A5Grid._shared_edge(c.boundary, MESH.cells[j].boundary)
             W = A5Grid._haversine_m(edge...)
-            P = tbl(i).edge_perim_curves[end, k]
+            ti, tj = tbl(i), tbl(j)
+            P = ti.face_P[end, k]
             n_perim += 1
             P <= W * (1 + 1e-6) && (n_perim_ok += 1)
+            # one table per face: both cells hold the same numbers
+            (ti.face_z0[k] == tj.face_z0[kj] && ti.face_zr[k] == tj.face_zr[kj] &&
+             ti.face_A[:, k] == tj.face_A[:, kj] && ti.face_K[:, k] == tj.face_K[:, kj]) && (n_same += 1)
         end
     end
     @test n_pairs > 100
     @test n_sym == n_pairs              # every edge's sill agrees from both sides
+    @test n_same == n_pairs             # … and its face table is the same table (0.7.0)
     @test n_perim_ok == n_perim         # no curve longer than its own edge
 end
 
@@ -117,14 +126,56 @@ end
     @test minimum(st2.volume) >= 0.0
 end
 
-@testset "S4 — pre-fix SGS layout is refused" begin
+@testset "S4 — SGS tables older than layout 3 are refused" begin
     old = deepcopy(MESH)
-    delete!(old.static_vars, "sgs_layout")
+    delete!(old.static_vars, "sgs_layout")                   # pre-2026-10: wrong slot order
     @test_throws ErrorException _quiet(() -> initialise_flow_model(old, SGSFlow()))
-    st = withenv("FLOODA5_ALLOW_OLD_SGS_LAYOUT" => "1") do
-        _quiet(() -> initialise_flow_model(old, SGSFlow()))
+    old2 = deepcopy(MESH)
+    old2.static_vars["sgs_layout"] .= 2.0                    # 0.2–0.6: per-cell edge curves
+    @test_throws ErrorException _quiet(() -> initialise_flow_model(old2, SGSFlow()))
+    old3 = deepcopy(MESH)
+    delete!(old3.array_vars, "sgs_face_A")
+    @test_throws ErrorException _quiet(() -> initialise_flow_model(old3, SGSFlow()))
+    @test length(_quiet(() -> initialise_flow_model(MESH, SGSFlow())).sgs_tables) == length(MESH.cells)
+end
+
+@testset "S5 — boundary sides have face tables; open-boundary outflow uses them (0.7.0)" begin
+    @test A5Grid.boundary_side_slots(5, Bool[true, false, true]) == [2, 4, 5]
+    @test A5Grid.boundary_side_slots(4, Bool[true, true, true, true]) == Int[]
+    st = _quiet(() -> initialise_flow_model(MESH, SGSFlow()))
+    G = st.ghost_edges
+    @test !isempty(G)
+    with_tab = [g for g in G if g.slot > 0]
+    @test length(with_tab) > 0.8 * length(G)        # the DEM covers (nearly) every boundary side
+    idx = Dict(c.id => i for (i, c) in enumerate(MESH.cells))
+    for g in with_tab
+        t = st.sgs_tables[g.cell_index]
+        nb = MESH.adjacency[MESH.cells[g.cell_index].id]
+        @test g.slot > length(nb) || !haskey(idx, nb[g.slot])   # a slot without a mesh neighbour
+        @test g.sill == t.face_z0[g.slot]                        # the side's own lowest point
+        @test t.face_P[end, g.slot] <= g.width * (1 + 1e-6)
+        @test t.face_P[end, g.slot] > 0.5 * g.width
     end
-    @test length(st.sgs_tables) == length(old.cells)
+    # area and radius of a side: the table, not the rectangle above the cell's lowest ground
+    g = with_tab[argmax([st.sgs_tables[x.cell_index].face_zr[x.slot] for x in with_tab])]
+    t = st.sgs_tables[g.cell_index]; η = g.sill + 0.3
+    A, R = _sgs_ghost_area_radius(t, g.slot, η, g.sill, g.width, true)
+    a, p, k = A5Grid.face_apk(t, g.slot, η)
+    @test A == a && R == _sgs_radius(a, p, k, true)
+    @test A < g.width * 0.3                                      # less than the full-width rectangle
+    Ar, Rr = _sgs_ghost_area_radius(t, 0, η, g.sill, g.width, true)
+    @test Ar ≈ g.width * 0.3 && Rr ≈ Ar / (g.width + 0.6)
+    @test _sgs_ghost_area_radius(t, g.slot, g.sill, g.sill, g.width, true) == (0.0, 0.0)
+    # open boundaries drain a flooded mesh; volume leaves only through the ghost edges
+    for i in eachindex(st.volume)
+        tt = st.sgs_tables[i]
+        st.volume[i] = isnan(tt.z_min) ? 0.0 : tt.vol_curve[end] + tt.cell_area * 0.5
+    end
+    v0 = sum(st.volume)
+    for _ in 1:200; step_sgs!(st, 0.5); end
+    @test sum(st.volume) < v0
+    @test isapprox(sum(st.volume) + st.vol_removed, v0; rtol = 1e-10)
+    @test minimum(st.volume) >= 0.0
 end
 
 println("\nGeneral-mesh SGS tests complete.")

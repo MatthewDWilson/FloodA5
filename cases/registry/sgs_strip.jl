@@ -31,7 +31,9 @@
 #   cells     rows of 20 m with their mean bed (a standard 20 m grid):
 #             δ = +0.045 / +0.409 m
 #   lumped    rows of 20 m with their true section, A^(5/3)/P_w^(2/3) — the
-#             SGS R–A edge formula with exact edge tables: δ = −0.254 / +0.409
+#             SGS face formula with one hydraulic radius (--sgs-conveyance
+#             lumped): δ = −0.254 / +0.409. The default (2d) sums h^(5/3)
+#             over the face profile and should give the 2-D level.
 #   storage   per metre of strip, true water volume at δ; above the cell-mean
 #             bed it is the same once δ ≥ 0 (the bed's mean is only moved
 #             below the floodplain by the channel's own volume)
@@ -165,6 +167,7 @@ end
 function _ss_table_metrics(t)
     v(s, δ, stat) = Float64(get(t[s][string(Float64(δ))], stat, NaN))
     e(c, δ, stat) = Float64(get(t["edge_area_ratio"][c][string(Float64(δ))], stat, NaN))
+    k(c, δ, stat) = Float64(get(t["edge_conveyance_ratio"][c][string(Float64(δ))], stat, NaN))
     d = Dict{String,Float64}(
         "volume_err_max" => maximum(v("volume_rel_err", δ, "max_abs") for δ in t["levels"]),
         "volume_err_median_max" => maximum(abs(v("volume_rel_err", δ, "median")) for δ in t["levels"]),
@@ -172,7 +175,11 @@ function _ss_table_metrics(t)
         "edge_A_ratio_channel_overbank" => e("channel", 0.4, "median"),
         "edge_A_ratio_floodplain_overbank" => e("floodplain", 0.4, "median"),
         "edge_A_ratio_channel_1m" => e("channel", 1.0, "median"),
-        "edge_A_ratio_floodplain_1m" => e("floodplain", 1.0, "median"))
+        "edge_A_ratio_floodplain_1m" => e("floodplain", 1.0, "median"),
+        "edge_K_ratio_channel_inbank" => k("channel", -0.25, "median"),
+        "edge_K_ratio_channel_overbank" => k("channel", 0.4, "median"),
+        "edge_K_ratio_floodplain_overbank" => k("floodplain", 0.4, "median"),
+        "edge_K_ratio_channel_1m" => k("channel", 1.0, "median"))
     u = t["uniform_flow"]
     u === nothing || (d["uniform_Q_max"] = Float64(u["Q_max"]); d["uniform_delta_at_Q_max"] = Float64(u["delta_at_Q_max"]))
     return d
@@ -216,22 +223,16 @@ _ss_fmt_t(t) = isfinite(t) ? string(round(Int, t)) : "never"
 _ss_arrive_detail(m, job, ref, q) = "$job: " * join(("x=$(round(Int, xs)) $(_ss_fmt_t(_ss_t(m, job, q, xs))) s " *
     "($ref $(_ss_fmt_t(_ss_t(m, ref, q, xs))))" for xs in _SS_STATIONS), ", ")
 
-# Checks of the correct SGS behaviour that the model fails today (0.5.1): kept
-# unweakened and marked as expected failures until SGS is fixed (PROJECT_STATE,
-# "SGS strip findings"). Matched by name prefix.
-const _SS_XF_TABLES = "SGS edge curves are tabulated only up to the cell's own highest DEM sample " *
-    "(build_sgs_tables!, edge_area_radius), so face flow areas stop growing overbank"
-const _SS_XF_DONOR = "SGS's default (legacy) donor cap passes at most V/(2N) per face per step, " *
-    "so channel cells run brim-full in bank (--limiter positivity gives the analytic level)"
+# Checks of the correct SGS behaviour that the model still fails: kept
+# unweakened and marked as expected failures (matched by name prefix). Until
+# 0.7.0 there were eight (frozen overbank face tables, the legacy donor cap:
+# cases/expected/v0.6.0/); the face tables, positivity limiting and the
+# face-area time-step limit of 0.7.0 fixed them.
+const _SS_XF_PATH = "on A5 the channel zig-zags through the cells: the kernel takes the slope over the " *
+    "centroid distance, which is longer than the channel's own length between cells, and oblique faces " *
+    "cut it wider than it is (plan §2.2 C5; Phase 3, flow-path geometry)"
 const _SS_XFAIL = [
-    "SGS tables, Cartesian 20 m: overbank" => _SS_XF_TABLES,
-    "SGS tables, A5 res 18: overbank"      => _SS_XF_TABLES,
-    "SGS tables, Cartesian 20 m: at the bed slope they convey" => _SS_XF_TABLES,
-    "SGS Cartesian 20 m, in bank: steady"  => _SS_XF_DONOR,
-    "SGS Cartesian 20 m, overbank"         => _SS_XF_TABLES,
-    "SGS Cartesian 20 m: arrival"          => _SS_XF_TABLES * "; and " * _SS_XF_DONOR,
-    "SGS A5 res 18, in bank"               => _SS_XF_DONOR,
-    "SGS A5 res 18, overbank"              => _SS_XF_TABLES,
+    "SGS A5 res 18, in bank" => _SS_XF_PATH,
 ]
 function _ss_mark_xfail(chs)
     map(chs) do ch
@@ -274,6 +275,14 @@ function _ss_checks_all()
                 abs(_ss(m, "tables_a5r18", "edge_A_ratio_floodplain_overbank") - 1) <= 0.1;
            detail = m -> "A_edge/A: channel faces $(_ss_r(_ss(m, "tables_a5r18", "edge_A_ratio_channel_overbank"))), " *
                          "floodplain faces $(_ss_r(_ss(m, "tables_a5r18", "edge_A_ratio_floodplain_overbank")))"),
+     Check("SGS tables, Cartesian 20 m: face conveyance Σ h^(5/3) within 5% of the face's analytic value in bank, " *
+           "overbank (δ = +0.4 m) and at δ = +1 m (above the tabulated profile: the continuation)",
+           m -> all(abs(_ss(m, "tables_cart20", "edge_K_ratio_$c") - 1) <= 0.05
+                    for c in ("channel_inbank", "channel_overbank", "floodplain_overbank", "channel_1m"));
+           detail = m -> "K/K_analytic: channel faces $(_ss_r(_ss(m, "tables_cart20", "edge_K_ratio_channel_inbank"))) in bank, " *
+                         "$(_ss_r(_ss(m, "tables_cart20", "edge_K_ratio_channel_overbank"))) overbank, " *
+                         "$(_ss_r(_ss(m, "tables_cart20", "edge_K_ratio_channel_1m"))) at +1 m; floodplain faces " *
+                         "$(_ss_r(_ss(m, "tables_cart20", "edge_K_ratio_floodplain_overbank")))"),
      Check("SGS tables, Cartesian 20 m: at the bed slope they convey 20 m³/s (uniform flow through one cross-section)",
            m -> _ss(m, "tables_cart20", "uniform_Q_max") >= 20.0;
            detail = m -> "at most $(_ss_r(_ss(m, "tables_cart20", "uniform_Q_max"); d = 2)) m³/s " *
@@ -294,19 +303,20 @@ function _ss_checks_all()
                     for s in ("std", "swe"), q in (q3, q20));
            detail = m -> join((_ss_level_detail(m, "cart20_$(s)_$q", "cells20_$q") for s in ("std", "swe"), q in (q3, q20)), "; ")),
      # — SGS: the correct behaviour —
-     Check("SGS Cartesian 20 m, in bank: steady, channel level within 0.03 m of the lumped (exact-table) analytic " *
-           "and storage within 5% of the true volume (default limiter)",
-           m -> _ss_steady(m, "cart20_sgs_$q3") && _ss_level_ok(m, "cart20_sgs_$q3", "lumped20_$q3"; tol = 0.03, rtol = 0.05);
-           detail = m -> _ss_level_detail(m, "cart20_sgs_$q3", "lumped20_$q3")),
-     Check("SGS Cartesian 20 m, in bank, --limiter positivity: as above",
-           m -> _ss_steady(m, "cart20_sgspos_$q3") && _ss_level_ok(m, "cart20_sgspos_$q3", "lumped20_$q3"; tol = 0.03, rtol = 0.05);
-           detail = m -> _ss_level_detail(m, "cart20_sgspos_$q3", "lumped20_$q3")),
-     Check("SGS Cartesian 20 m, overbank: steady, level within 0.10 m of the 2-D analytic and storage within 10% " *
-           "(the lumped formula is +0.04 m, +8%), both limiters",
-           m -> all(_ss_steady(m, j) && _ss_level_ok(m, j, "2d_$q20"; tol = 0.10, rtol = 0.10)
-                    for j in ("cart20_sgs_$q20", "cart20_sgspos_$q20"));
-           detail = m -> join((_ss_level_detail(m, j, "2d_$q20") * ", dS/dt/Q $(_ss_r(_ss(m, j, "dSdt_rel_end")))"
-                               for j in ("cart20_sgs_$q20", "cart20_sgspos_$q20")), "; ")),
+     Check("SGS Cartesian 20 m, in bank: steady, channel level within 0.03 m of the 2-D analytic " *
+           "and storage within 5% of the true volume",
+           m -> _ss_steady(m, "cart20_sgs_$q3") && _ss_level_ok(m, "cart20_sgs_$q3", "2d_$q3"; tol = 0.03, rtol = 0.05);
+           detail = m -> _ss_level_detail(m, "cart20_sgs_$q3", "2d_$q3")),
+     Check("SGS Cartesian 20 m, overbank: steady, level within 0.03 m of the 2-D analytic and storage within 5%",
+           m -> _ss_steady(m, "cart20_sgs_$q20") && _ss_level_ok(m, "cart20_sgs_$q20", "2d_$q20"; tol = 0.03, rtol = 0.05);
+           detail = m -> _ss_level_detail(m, "cart20_sgs_$q20", "2d_$q20") *
+                         ", dS/dt/Q $(_ss_r(_ss(m, "cart20_sgs_$q20", "dSdt_rel_end")))"),
+     Check("SGS Cartesian 20 m, --sgs-conveyance lumped (one hydraulic radius per face): steady, level within 0.03 m " *
+           "and storage within 5% of the lumped analytic at both discharges (overbank +0.04 m, +8% against 2-D: " *
+           "the level of a cell-mean grid)",
+           m -> all(_ss_steady(m, "cart20_sgslumped_$q") &&
+                    _ss_level_ok(m, "cart20_sgslumped_$q", "lumped20_$q"; tol = 0.03, rtol = 0.05) for q in (q3, q20));
+           detail = m -> join((_ss_level_detail(m, "cart20_sgslumped_$q", "lumped20_$q") for q in (q3, q20)), "; ")),
      Check("SGS Cartesian 20 m: arrival at x = 1000 and 2000 m within 15% of the 2.5 m local-inertial reference (both discharges)",
            m -> all(_ss_arrive_ok(m, "cart20_sgs_$q", "fine_std_$q", q) for q in (q3, q20));
            detail = m -> join((_ss_arrive_detail(m, "cart20_sgs_$q", "fine_std_$q", q) for q in (q3, q20)), "; ")),
@@ -319,20 +329,24 @@ function _ss_checks_all()
      Check("SGS A5 res 18, in bank: steady, channel level within 0.05 m of the 2-D analytic and storage within 10%",
            m -> _ss_steady(m, "a5r18_sgs_$q3") && _ss_level_ok(m, "a5r18_sgs_$q3", "2d_$q3"; tol = 0.05, rtol = 0.10);
            detail = m -> _ss_level_detail(m, "a5r18_sgs_$q3", "2d_$q3") * ", dS/dt/Q $(_ss_r(_ss(m, "a5r18_sgs_$q3", "dSdt_rel_end")))"),
-     Check("SGS A5 res 18, overbank: steady, level within 0.10 m and storage within 10% of local-inertial on the same mesh",
+     Check("SGS A5 res 18, overbank: steady; level and storage no further from the 2-D analytic for the A5 strip's " *
+           "mean width than local-inertial on the same mesh (its ragged edges hold slack water in both)",
            m -> _ss_steady(m, "a5r18_sgs_$q20") &&
-                abs(_ss(m, "a5r18_sgs_$q20", "delta_channel") - _ss(m, "a5r18_std_$q20", "delta_channel")) <= 0.10 &&
-                abs(_ss(m, "a5r18_sgs_$q20", "store_per_m") / _ss(m, "a5r18_std_$q20", "store_per_m") - 1) <= 0.10;
+                abs(_ss(m, "a5r18_sgs_$q20", "delta_channel") - _ss(m, "analytic", "delta_a5w_$q20")) <=
+                    abs(_ss(m, "a5r18_std_$q20", "delta_channel") - _ss(m, "analytic", "delta_a5w_$q20")) &&
+                abs(_ss(m, "a5r18_sgs_$q20", "store_per_m") - _ss(m, "analytic", "store_a5w_$q20")) <=
+                    abs(_ss(m, "a5r18_std_$q20", "store_per_m") - _ss(m, "analytic", "store_a5w_$q20"));
            detail = m -> "SGS δ $(_ss_r(_ss(m, "a5r18_sgs_$q20", "delta_channel"))) m, storage $(_ss_r(_ss(m, "a5r18_sgs_$q20", "store_per_m"); d = 2)) m²/m, " *
                          "dS/dt/Q $(_ss_r(_ss(m, "a5r18_sgs_$q20", "dSdt_rel_end"))); LI δ $(_ss_r(_ss(m, "a5r18_std_$q20", "delta_channel"))) m, " *
-                         "storage $(_ss_r(_ss(m, "a5r18_std_$q20", "store_per_m"); d = 2)) m²/m"),
+                         "storage $(_ss_r(_ss(m, "a5r18_std_$q20", "store_per_m"); d = 2)) m²/m; analytic " *
+                         "$(_ss_r(_ss(m, "analytic", "delta_a5w_$q20"))) m, $(_ss_r(_ss(m, "analytic", "store_a5w_$q20"); d = 2)) m²/m"),
      # — the storage measurement question —
      Check("measurement: overbank, the volume above the cell-mean bed equals the water volume (within 1%) — " *
            "SGS and the 2.5 m reference",
            m -> all(abs(_ss(m, j, "store_above_mean_per_m") / _ss(m, j, "store_per_m") - 1) <= 0.01
-                    for j in ("cart20_sgs_$q20", "cart20_sgspos_$q20", "fine_std_$q20"));
+                    for j in ("cart20_sgs_$q20", "cart20_sgslumped_$q20", "fine_std_$q20"));
            detail = m -> join(("$j $(_ss_r(_ss(m, j, "store_above_mean_per_m"); d = 2))/$(_ss_r(_ss(m, j, "store_per_m"); d = 2)) m²/m"
-                               for j in ("cart20_sgs_$q20", "cart20_sgspos_$q20", "fine_std_$q20")), ", ")),
+                               for j in ("cart20_sgs_$q20", "cart20_sgslumped_$q20", "fine_std_$q20")), ", ")),
     ]
 end
 
@@ -370,8 +384,8 @@ let
     for Q in _SS_Q
         q = _ss_qtag(Q)
         push!(jobs, Job("cart20_sgs_$q", args("cart20_sgs", "sgs", Q, _SS_T); threads = 2, mesh = "cart20", model = "sgs", Q),
-                    Job("cart20_sgspos_$q", args("cart20_sgs", "sgs", Q, _SS_T; extra = ["--limiter", "positivity"]);
-                        threads = 2, mesh = "cart20", model = "sgs", limiter = "positivity", Q),
+                    Job("cart20_sgslumped_$q", args("cart20_sgs", "sgs", Q, _SS_T; extra = ["--sgs-conveyance", "lumped"]);
+                        threads = 2, mesh = "cart20", model = "sgs", conveyance = "lumped", Q),
                     Job("cart20_std_$q", args("cart20_standard", "standard", Q, _SS_T); threads = 2, mesh = "cart20", model = "standard", Q),
                     Job("cart20_swe_$q", args("cart20_standard", "swe", Q, _SS_T); threads = 2, mesh = "cart20", model = "swe", Q),
                     Job("a5r18_sgs_$q", args("a5r18_sgs", "sgs", Q, _SS_T); threads = 2, mesh = "a5r18", model = "sgs", Q),
@@ -391,7 +405,7 @@ let
         the upstream end. Meshes: Cartesian 20 m (3 rows; the channel a quarter
         of a cell) with SGS tables or cell-mean beds, A5 res 18 likewise, and a
         Cartesian 2.5 m reference with the channel two cells wide. Runs: SGS
-        (default limiter and --limiter positivity), local-inertial and SWE on
+        (default, and --sgs-conveyance lumped), local-inertial and SWE on
         20 m; SGS and local-inertial on A5; local-inertial and SWE on 2.5 m — 8 h
         (2.5 m: 4 h), output every 5 min. Analytic answers (file header of
         cases/registry/sgs_strip.jl): the 2-D normal level (δ above the
@@ -402,10 +416,10 @@ let
         the last frame: channel level δ, its spread and slope, storage per
         metre (water, and above the cell-mean bed), steadiness (storage change
         over the last hour / Q), arrival times at x = 1000 and 2000 m. The
-        SGS checks state the correct behaviour; several fail (0.4.4: SGS
-        conveyance is capped where the water rises above a cell's highest DEM
-        sample, and the legacy donor cap limits in-bank discharge) and are kept
-        as expected failures until fixed. Preparation ~5 min; runs ~1 min each
+        SGS checks state the correct behaviour. Until 0.7.0 eight of them
+        failed (frozen overbank face tables, the legacy donor cap; record in
+        cases/expected/v0.6.0/); one still does (A5 in bank, 0.05 m high:
+        flow-path geometry) and is kept as an expected failure. Preparation ~5 min; runs ~1 min each
         on 2 threads at 20 m and A5, 1.5–25 min on 4 threads at 2.5 m (SWE at
         20 m³/s the longest); ~35 min with -P 2.""",
         prep = prep, jobs = jobs,

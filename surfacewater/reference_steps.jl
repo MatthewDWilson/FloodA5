@@ -442,10 +442,11 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
         wse_flow = max(wse_ci_eff, wse_cj_eff)
 
         # (WP4: slots precomputed once; one bracket search per side.)
-        A_i, R_i = A5Grid.edge_area_radius(state.sgs_tables[ci], slot_ia[e], wse_flow)
-        A_j, R_j = A5Grid.edge_area_radius(state.sgs_tables[cj], slot_ja[e], wse_flow)
-        A_edge = 0.5 * (A_i + A_j)
-        R_edge = 0.5 * (R_i + R_j)
+        # (0.7.0, layout 3: one table per face — a deliberate change of this
+        # frozen loop; the per-cell edge curves it read no longer exist.)
+        A_edge, P_edge, K_edge = A5Grid.face_apk(state.sgs_tables[ci], slot_ia[e], wse_flow)
+        R_edge = _sgs_radius(A_edge, P_edge, K_edge, SGS_CONVEYANCE[] === :twod)
+        ws.face_A[e] = wse_flow - z_sill > HFLOW_THRESHOLD ? A_edge : 0.0
 
         # Q-centred smoothing on flux_Q (volumetric momentum for R-A kernel).
         # Same collinear lookup as standard flow — the checkerboard mode exists

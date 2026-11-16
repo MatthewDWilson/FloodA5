@@ -85,7 +85,7 @@ export mesh_to_geojson_string
 export sample_dem!, sample_dem_centroid!, sample_dem_mean!, check_dem_coverage
 export build_sgs_tables!, SGSTable
 export wse_from_volume, wetted_area_from_wse, sgs_table
-export flow_area_from_wse, wetted_perim_from_wse, hydraulic_radius_from_wse
+export face_apk, face_table_from_profile, SGS_FACE_LEVELS, boundary_side_slots
 export cell_to_boundary, cell_to_lonlat, lonlat_to_cell
 export cell_to_children, cell_to_parent, get_resolution, grid_disk_neighbours
 export load_aoi, mesh_summary
@@ -1765,21 +1765,138 @@ struct SGSTable
     cell_area        :: Float64           # total cell plan area m²
     z_min            :: Float64           # minimum terrain elevation m
     z_max            :: Float64           # maximum terrain elevation m
-    # Per-edge hydraulic geometry for the R-A flux kernel.
-    # Rows = n_bins elevation knots (same as elev_bins).
-    # Cols = adjacency slots 1..n_slots, where slot k is the k-th entry of the
-    # cell's neighbour list (mesh.adjacency — the order FloodModel's adj_matrix
-    # uses); n_slots = the mesh's longest neighbour list (5 on A5, 6 on hex…).
-    # Unused slots hold zeros. (WP3, 2026-10: was a fixed 5 in grid_disk order,
-    # which did not match the neighbour list — see build_sgs_tables!.)
-    # edge_area_curves[k, s]  = cross-sectional flow area (m²) through slot-s edge
-    #                           at WSE = elev_bins[k].
-    # edge_perim_curves[k, s] = wetted perimeter (m) at same WSE.
-    # Both are zero when the mesh was built without R-A tables (legacy parquet).
-    # The R-A flux kernel (_manning_flux_ra) requires these; falls back to Bates
-    # form if they are all zero.
-    edge_area_curves :: Matrix{Float64}   # (n_bins × n_slots)
-    edge_perim_curves:: Matrix{Float64}   # (n_bins × n_slots)
+    # Face tables (layout 3, 2026-11): the conveyance geometry of each face,
+    # from the DEM profile sampled along the face line. Column s = adjacency
+    # slot s (the s-th entry of the cell's neighbour list; unused slots hold
+    # NaN / zeros). The two cells of a face hold the same table. Row k is the
+    # level  face_z0[s] + face_zr[s]·((k−1)/(NF−1))²  (denser near the sill);
+    # the levels reach above the highest point of the profile (see
+    # `face_table_from_profile`), so the top level has the whole face wet:
+    #   face_A[k, s]  flow area            Σ dx·max(η − z_p, 0)         (m²)
+    #   face_P[k, s]  wetted width         Σ dx·[z_p ≤ η]               (m)
+    #   face_K[k, s]  conveyance integral  Σ dx·max(η − z_p, 0)^(5/3)   (m^(8/3))
+    # Above the top level `face_apk` continues them analytically with the
+    # full width face_P[NF, s].
+    face_z0 :: Vector{Float64}   # (n_slots) lowest point of the face = its sill (m)
+    face_zr :: Vector{Float64}   # (n_slots) height of the tabulated range (m)
+    face_A  :: Matrix{Float64}   # (NF × n_slots)
+    face_P  :: Matrix{Float64}   # (NF × n_slots)
+    face_K  :: Matrix{Float64}   # (NF × n_slots)
+end
+
+"Levels per face table (see `SGSTable`)."
+const SGS_FACE_LEVELS = 64
+
+"Relative height (0–1) of face-table level k of nf."
+@inline _face_level(k::Int, nf::Int) = ((k - 1) / (nf - 1))^2
+
+"""
+    face_table_from_profile(z, dx; nf = SGS_FACE_LEVELS) → (z0, zr, A, P, K)
+
+The face table of a profile: elevations `z` (m) of points that each stand for
+a width `dx` (m) of the face. `A`, `P`, `K` are the flow area, wetted width
+and conveyance integral Σ dx·h^(5/3) at the `nf` levels
+z0 + zr·((k−1)/(nf−1))². z0 is the lowest point; the range zr is the relief
+of the profile plus max(2·relief, 0.5 m), so that the tabulated part covers
+the levels at which the shape of the profile still matters to K (a channel in
+a floodplain: K is not a function of the mean depth until the floodplain is
+several channel depths under water) and `face_apk`'s one-term continuation
+above it is accurate (≈ 1% for a channel a quarter of the face wide).
+With `act` (same length as `z`) a point conveys only at levels ≥ act[p]
+(≥ z[p]): its activation level (connectivity, Phase 3); z0 and the relief are
+then taken over the activation levels.
+"""
+function face_table_from_profile(z::AbstractVector{<:Real}, dx::Real;
+                                 act::AbstractVector{<:Real} = z, nf::Int = SGS_FACE_LEVELS)
+    A = zeros(nf); P = zeros(nf); K = zeros(nf)
+    isempty(z) && return NaN, 0.0, A, P, K
+    z0 = Float64(minimum(act)); relief = Float64(maximum(act)) - z0
+    zr = relief + max(2.0 * relief, 0.5)
+    for k in 1:nf
+        η = k == nf ? z0 + zr : z0 + zr * _face_level(k, nf)
+        a = 0.0; w = 0.0; c = 0.0
+        for i in eachindex(z)
+            act[i] <= η || continue
+            h = η - Float64(z[i])
+            w += 1.0
+            h > 0.0 && (a += h; c += h^(5 / 3))
+        end
+        A[k] = a * dx; P[k] = w * dx; K[k] = c * dx
+    end
+    return z0, zr, A, P, K
+end
+
+"""
+    face_apk(table, slot, wse) → (A, P, K)
+
+Flow area (m²), wetted width (m) and conveyance integral Σ dx·h^(5/3) of the
+face in adjacency `slot` at water level `wse`, from the face table: linear
+between levels; above the top level A grows with the full width W = P_top,
+P = W, and K = W·(d + c)^(5/3) with d the height above the top level and c
+set by K at the top level (exact there and in the deep limit). Zeros at or
+below the sill and for a slot without a table.
+"""
+@inline function face_apk(t, slot::Int, wse::Float64)::Tuple{Float64,Float64,Float64}   # SGSTable or a view
+    @inbounds z0 = t.face_z0[slot]
+    d = wse - z0
+    d > 0.0 || return 0.0, 0.0, 0.0           # also a NaN sill (no table)
+    fA = t.face_A; fP = t.face_P; fK = t.face_K
+    nf = size(fA, 1)
+    @inbounds zr = t.face_zr[slot]
+    @inbounds Pt = fP[nf, slot]
+    Pt > 0.0 || return 0.0, 0.0, 0.0
+    if d >= zr
+        dd = d - zr
+        @inbounds At = fA[nf, slot]
+        @inbounds Kt = fK[nf, slot]
+        c = (Kt / Pt)^0.6
+        return At + Pt * dd, Pt, Pt * (dd + c)^(5 / 3)
+    end
+    u  = sqrt(d / zr) * (nf - 1)
+    lo = min(unsafe_trunc(Int, u), nf - 2)    # level index − 1 below wse
+    r0 = (lo / (nf - 1))^2; r1 = ((lo + 1) / (nf - 1))^2
+    f  = (d / zr - r0) / (r1 - r0)
+    f  = f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f)
+    @inbounds begin
+        A = fA[lo + 1, slot] + f * (fA[lo + 2, slot] - fA[lo + 1, slot])
+        P = fP[lo + 1, slot] + f * (fP[lo + 2, slot] - fP[lo + 1, slot])
+        K = fK[lo + 1, slot] + f * (fK[lo + 2, slot] - fK[lo + 1, slot])
+    end
+    return A, P, K
+end
+
+"""
+    SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max,
+             edge_area_curves, edge_perim_curves)
+
+Test-fixture form (the pre-layout-3 fields): per-slot flow area and wetted
+width tabulated on the cell's own levels (n_bins × n_slots). They are
+resampled to face tables; with no profile to integrate, K is the
+single-radius conveyance A^(5/3)/P^(2/3). The sill of a slot is the highest
+level at which its area is still zero.
+"""
+function SGSTable(elev_bins::Vector{Float64}, vol_curve::Vector{Float64}, area_curve::Vector{Float64},
+                  cell_area::Real, z_min::Real, z_max::Real,
+                  edge_area_curves::AbstractMatrix{<:Real}, edge_perim_curves::AbstractMatrix{<:Real})
+    nb, ns = size(edge_area_curves); nf = SGS_FACE_LEVELS
+    z0 = fill(NaN, ns); zr = zeros(ns)
+    A = zeros(nf, ns); P = zeros(nf, ns); K = zeros(nf, ns)
+    for s in 1:ns
+        edge_area_curves[nb, s] > 0 || continue
+        k0 = something(findlast(k -> edge_area_curves[k, s] <= 0, 1:nb), 1)
+        z0[s] = elev_bins[k0]; zr[s] = elev_bins[nb] - z0[s]
+        for k in 1:nf
+            η = k == nf ? elev_bins[nb] : z0[s] + zr[s] * _face_level(k, nf)
+            lo = clamp(searchsortedlast(elev_bins, η), 1, nb - 1)
+            f = clamp((η - elev_bins[lo]) / (elev_bins[lo+1] - elev_bins[lo] + 1e-15), 0.0, 1.0)
+            a = edge_area_curves[lo, s] + f * (edge_area_curves[lo+1, s] - edge_area_curves[lo, s])
+            w = edge_perim_curves[lo, s] + f * (edge_perim_curves[lo+1, s] - edge_perim_curves[lo, s])
+            A[k, s] = a; P[k, s] = w
+            K[k, s] = w > 1e-9 ? a^(5 / 3) / w^(2 / 3) : 0.0
+        end
+    end
+    return SGSTable(elev_bins, vol_curve, area_curve, Float64(cell_area), Float64(z_min), Float64(z_max),
+                    z0, zr, A, P, K)
 end
 
 """
@@ -1824,93 +1941,6 @@ Return the wetted plan area (m²) at a given WSE by interpolating area_curve.
     end
     frac = (wse - t.elev_bins[lo]) / (t.elev_bins[hi] - t.elev_bins[lo] + 1e-15)
     return t.area_curve[lo] + frac * (t.area_curve[hi] - t.area_curve[lo])
-end
-
-"""
-    flow_area_from_wse(table, slot, wse) → Float64
-
-Cross-sectional flow area (m²) at the shared edge in adjacency `slot` (1–5) at
-water surface elevation `wse`, interpolated from the pre-computed edge_area_curves.
-
-Returns 0.0 for dry edges (wse at or below the edge sill elevation, detected as
-zero area in the curve) or for legacy meshes without R-A tables (all zeros).
-"""
-@inline function flow_area_from_wse(t::SGSTable, slot::Int, wse::Float64)::Float64
-    col = view(t.edge_area_curves, :, slot)
-    # If tables not built (legacy mesh), col is all zeros
-    col[end] <= 0.0 && return 0.0
-    wse <= t.elev_bins[1]   && return 0.0
-    wse >= t.elev_bins[end] && return col[end]
-    lo, hi = 1, length(t.elev_bins)
-    while hi - lo > 1
-        mid = (lo + hi) >>> 1
-        t.elev_bins[mid] <= wse ? lo = mid : hi = mid
-    end
-    frac = (wse - t.elev_bins[lo]) / (t.elev_bins[hi] - t.elev_bins[lo] + 1e-15)
-    return col[lo] + frac * (col[hi] - col[lo])
-end
-
-"""
-    wetted_perim_from_wse(table, slot, wse) → Float64
-
-Wetted perimeter (m) at the shared edge in adjacency `slot` (1–5) at WSE `wse`,
-interpolated from the pre-computed edge_perim_curves.
-"""
-@inline function wetted_perim_from_wse(t::SGSTable, slot::Int, wse::Float64)::Float64
-    col = view(t.edge_perim_curves, :, slot)
-    col[end] <= 0.0 && return 0.0
-    wse <= t.elev_bins[1]   && return 0.0
-    wse >= t.elev_bins[end] && return col[end]
-    lo, hi = 1, length(t.elev_bins)
-    while hi - lo > 1
-        mid = (lo + hi) >>> 1
-        t.elev_bins[mid] <= wse ? lo = mid : hi = mid
-    end
-    frac = (wse - t.elev_bins[lo]) / (t.elev_bins[hi] - t.elev_bins[lo] + 1e-15)
-    return col[lo] + frac * (col[hi] - col[lo])
-end
-
-"""
-    edge_area_radius(table, slot, wse) → (A, R)
-
-`(flow_area_from_wse(t, slot, wse), hydraulic_radius_from_wse(t, slot, wse))`
-with one bracket search instead of three (WP4, 2026-10). Bit-identical to the
-separate calls: same bracket, same interpolation weights, same edge cases.
-"""
-@inline function edge_area_radius(t, slot::Int, wse::Float64)::Tuple{Float64,Float64}   # SGSTable or a view
-    eb = t.elev_bins; ca = t.edge_area_curves; cp = t.edge_perim_curves
-    nb = length(eb)
-    a_end = ca[nb, slot]; p_end = cp[nb, slot]
-    if wse <= eb[1]
-        A = 0.0; Pw = 0.0
-    elseif wse >= eb[nb]
-        A  = a_end <= 0.0 ? 0.0 : a_end
-        Pw = p_end <= 0.0 ? 0.0 : p_end
-    else
-        lo, hi = 1, nb
-        @inbounds while hi - lo > 1
-            mid = (lo + hi) >>> 1
-            eb[mid] <= wse ? lo = mid : hi = mid
-        end
-        @inbounds frac = (wse - eb[lo]) / (eb[hi] - eb[lo] + 1e-15)
-        @inbounds A  = a_end <= 0.0 ? 0.0 : ca[lo, slot] + frac * (ca[hi, slot] - ca[lo, slot])
-        @inbounds Pw = p_end <= 0.0 ? 0.0 : cp[lo, slot] + frac * (cp[hi, slot] - cp[lo, slot])
-    end
-    return A, (Pw < 1e-6 ? 0.0 : A / Pw)
-end
-
-"""
-    hydraulic_radius_from_wse(table, slot, wse) → Float64
-
-Hydraulic radius R = A/P (m) at the shared edge in adjacency `slot` at WSE `wse`.
-Returns 0.0 when the edge is dry (P < 1e-6 m).
-"""
-@inline function hydraulic_radius_from_wse(t::SGSTable, slot::Int,
-                                            wse::Float64)::Float64
-    A = flow_area_from_wse(t, slot, wse)
-    P = wetted_perim_from_wse(t, slot, wse)
-    P < 1e-6 && return 0.0
-    return A / P
 end
 
 # ---------------------------------------------------------------------------
@@ -2170,6 +2200,40 @@ function _edge_geometry(bnd_i  :: Vector{Vector{Float64}},
 end
 
 # ---------------------------------------------------------------------------
+# Boundary sides of a cell and their table slots (0.7.0)
+# ---------------------------------------------------------------------------
+
+"The sides of a cell polygon as vertex pairs, in polygon order (a closing vertex is dropped)."
+function _polygon_sides(boundary)
+    nv = length(boundary)
+    n  = (nv >= 2 && boundary[nv][1] ≈ boundary[1][1] && boundary[nv][2] ≈ boundary[1][2]) ? nv - 1 : nv
+    return [(boundary[k], boundary[mod1(k + 1, n)]) for k in 1:n]
+end
+
+"Whether the side va–vb is one of the `shared` edges (lon1, lat1, lon2, lat2), in either direction."
+function _side_is_shared(va, vb, shared)
+    near(a, b) = abs(a - b) < 1e-8
+    for sp in shared
+        (near(sp[1], va[1]) && near(sp[2], va[2]) && near(sp[3], vb[1]) && near(sp[4], vb[2])) && return true
+        (near(sp[1], vb[1]) && near(sp[2], vb[2]) && near(sp[3], va[1]) && near(sp[4], va[2])) && return true
+    end
+    return false
+end
+
+"""
+    boundary_side_slots(n_slots, in_mesh) → Vector{Int}
+
+The table slots of a cell that hold no face: slots of neighbour-list entries
+that are not in the mesh (`in_mesh[s] == false`) and slots beyond the list.
+The cell's boundary sides (polygon sides shared with no mesh neighbour) take
+them in polygon-side order: the b-th boundary side has slot
+`boundary_side_slots(…)[b]`, in `build_sgs_tables!` and in the ghost-edge
+builder alike. A boundary side beyond the free slots has no table.
+"""
+boundary_side_slots(n_slots::Int, in_mesh::AbstractVector{Bool}) =
+    [s for s in 1:n_slots if s > length(in_mesh) || !in_mesh[s]]
+
+# ---------------------------------------------------------------------------
 # SGS pre-processing — build_sgs_tables!
 # ---------------------------------------------------------------------------
 
@@ -2204,8 +2268,11 @@ Output arrays in `mesh.array_vars`:
   "sgs_vol_curve"   — (n_bins × n_cells)  cumulative volume (m³)
   "sgs_area_curve"  — (n_bins × n_cells)  cumulative wetted area (m²)
   "sgs_edge_sills"  — (n_slots × n_cells) sill elevation per neighbour slot
-  "sgs_edge_area_curve", "sgs_edge_perim_curve" — (n_bins·n_slots × n_cells)
-                      R-A edge curves, column-major (bin fastest)
+  "sgs_face_zr"     — (n_slots × n_cells) face profile range, highest − lowest (m)
+  "sgs_face_A", "sgs_face_P", "sgs_face_K" — (NF·n_slots × n_cells) face tables
+                      (flow area, wetted width, conveyance integral; see
+                      `SGSTable`), column-major (level fastest), NF =
+                      `SGS_FACE_LEVELS`; "sgs_edge_sills" is their lowest level
 
 Slot k of a cell is the k-th entry of its neighbour list `mesh.adjacency[id]`
 — the same order `initialise_flow_model` uses for `adj_matrix`, including
@@ -2218,7 +2285,8 @@ WP3 fix (2026-10): slots used to follow `grid_disk_neighbours` order, which
 differs from the stored neighbour list for ~95% of A5 cells (and counted
 out-of-mesh `grid_disk` cells), so the SGS sill and R-A curves of most edges
 belonged to a different neighbour. Tables built by this version carry
-`static_vars["sgs_layout"] = 2`; `initialise_flow_model` refuses older ones
+`static_vars["sgs_layout"] = 2`. Layout 3 (2026-11) replaces the per-cell edge
+curves by one face table per face; `initialise_flow_model` refuses older ones
 (see mesh/repair_sgs_slot_order.py).
 
 Output scalars in `mesh.static_vars`:
@@ -2226,7 +2294,7 @@ Output scalars in `mesh.static_vars`:
   "sgs_z_min"       — minimum DEM elevation in cell
   "sgs_z_max"       — maximum DEM elevation in cell
   "sgs_n_bins"      — n_bins (stored as Float64 for parquet compatibility)
-  "sgs_layout"      — 2 (neighbour-list slot order, any valence)
+  "sgs_layout"      — 3 (face tables; neighbour-list slot order, any valence)
 
 The arrays are automatically persisted when you call `save_mesh_geoparquet`.
 """
@@ -2282,8 +2350,11 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     edge_sills_mat = fill(NaN, n_slots, n)
     # R-A flux tables: cross-sectional flow area and wetted perimeter per edge slot
     # Shape: (n_bins, n_slots, n_cells) — stored flat as (n_bins×n_slots, n_cells)
-    edge_area_mat  = zeros(Float64, n_bins, n_slots, n)   # m²
-    edge_perim_mat = zeros(Float64, n_bins, n_slots, n)   # m
+    nf = SGS_FACE_LEVELS
+    face_zr_mat = zeros(Float64, n_slots, n)
+    face_A_mat  = zeros(Float64, nf, n_slots, n)          # m²
+    face_P_mat  = zeros(Float64, nf, n_slots, n)          # m
+    face_K_mat  = zeros(Float64, nf, n_slots, n)          # m^(8/3)
     cell_areas     = Vector{Float64}(undef, n)
     z_mins         = Vector{Float64}(undef, n)
     z_maxs         = Vector{Float64}(undef, n)
@@ -2419,12 +2490,39 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     # EXCEPTION_ACCESS_VIOLATION in PyObject_ClearWeakRefs (Bug 57, same root cause
     # as Bug 50 in _shared_edge).  The hypsometric curve build (Step 1) dominates
     # wall time; the edge sill loop is fast even serially at res 18 (29,902 cells).
+    # Valid DEM elevations along the arc (lon1, lat1)–(lon2, lat2), sampled every `spacing`.
+    function _edge_profile(lon1, lat1, lon2, lat2)
+        e_lons, e_lats = _arc_sample_lons_lats(lon1, lat1, lon2, lat2, spacing)
+        n_ep = length(e_lons)
+        native_xs, native_ys = if isempty(raster.proj)
+            e_lons, e_lats
+        else
+            xs = copy(e_lons);  ys = copy(e_lats);  zs = zeros(n_ep)
+            wgs84   = _crs_gis(4326)
+            dem_crs = _crs_gis(raster.proj)
+            ArchGDAL.createcoordtrans(wgs84, dem_crs) do xform
+                ArchGDAL.transform!(xs, ys, zs, xform)
+            end
+            xs, ys
+        end
+        elevs = Float64[]
+        for j in 1:n_ep
+            col_f, row_f = _affine_to_pixel(native_xs[j], native_ys[j], raster.gt)
+            v = _bilinear(raster.band, col_f, row_f, raster.nx, raster.ny, raster.nodata_val)
+            isfinite(v) && push!(elevs, v)
+        end
+        return elevs
+    end
+
     for ci in 1:n
         cell_i = mesh.cells[ci]
         nbrs   = _nbrs(cell_i)
+        shared = NTuple{4,Float64}[]           # this cell's sides that are faces
+        in_mesh = falses(length(nbrs))
         for (slot, nb_id) in enumerate(nbrs)   # slot = position in the neighbour list
             ci_nb = get(id_to_idx, nb_id, get(id_to_idx, _to_hex_safe(nb_id), 0))
             ci_nb == 0 && continue
+            in_mesh[slot] = true
 
             cell_j  = mesh.cells[ci_nb]
             edge    = _shared_edge(cell_i.boundary, cell_j.boundary)
@@ -2437,73 +2535,64 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
             end
 
             lon1, lat1, lon2, lat2 = edge
+            push!(shared, (lon1, lat1, lon2, lat2))
 
-            # Sample DEM along the edge arc
-            e_lons, e_lats = _arc_sample_lons_lats(lon1, lat1, lon2, lat2, spacing)
-            n_ep = length(e_lons)
+            valid_edge_elevs = _edge_profile(lon1, lat1, lon2, lat2)
+            edge_sills_mat[slot, ci] = isempty(valid_edge_elevs) ? NaN : minimum(valid_edge_elevs)
 
-            native_xs, native_ys = if isempty(raster.proj)
-                e_lons, e_lats
-            else
-                xs = copy(e_lons);  ys = copy(e_lats);  zs = zeros(n_ep)
-                wgs84   = _crs_gis(4326)
-                dem_crs = _crs_gis(raster.proj)
-                ArchGDAL.createcoordtrans(wgs84, dem_crs) do xform
-                    ArchGDAL.transform!(xs, ys, zs, xform)
-                end
-                xs, ys
-            end
-
-            sill = Inf
-            valid_edge_elevs = Float64[]
-            for j in 1:n_ep
-                col_f, row_f = _affine_to_pixel(native_xs[j], native_ys[j], raster.gt)
-                v = _bilinear(raster.band, col_f, row_f,
-                              raster.nx, raster.ny, raster.nodata_val)
-                if isfinite(v)
-                    v < sill && (sill = v)
-                    push!(valid_edge_elevs, v)
-                end
-            end
-            edge_sills_mat[slot, ci] = isfinite(sill) ? sill : NaN
-
-            # ── R-A edge hydraulic curves ──────────────────────────────────
-            # Build cumulative flow area A(wse) and wetted perimeter P(wse)
-            # from the sorted edge elevation profile.  Uses the same n_bins
-            # elevation knots as the cell hypsometric curve (elev_bins_mat[:, ci]).
-            # This keeps A/P lookups at runtime cheap (same binary-search grid).
-            if length(valid_edge_elevs) >= 2 && !isnan(z_mins[ci])
-                sort!(valid_edge_elevs)
-                # Physical edge length and width element per sample
+            # ── Face table (layout 3) ───────────────────────────────────────
+            # Flow area, wetted width and conveyance integral of the face's
+            # own profile on the face's own levels (face_table_from_profile).
+            # One table per face: computed from the lower-index cell and
+            # copied to the neighbour's slot, so both cells hold the same
+            # numbers (and the same sill).
+            if length(valid_edge_elevs) >= 2
                 W  = _haversine_m(lon1, lat1, lon2, lat2)
                 dx = W / length(valid_edge_elevs)
-
-                bins     = view(elev_bins_mat, :, ci)
-                cum_A    = 0.0
-                cum_P    = 0.0
-                ptr      = 1
-                n_wet    = 0
-                prev_wse = valid_edge_elevs[1]   # sill elevation
-                ne_pts   = length(valid_edge_elevs)
-
-                for k in 1:n_bins
-                    wse_k = bins[k]
-                    # depth increase for already-wet arc segments
-                    cum_A += n_wet * dx * (wse_k - prev_wse)
-                    # bring in newly wet arc segments
-                    while ptr <= ne_pts && valid_edge_elevs[ptr] <= wse_k
-                        cum_A += dx * (wse_k - valid_edge_elevs[ptr])
-                        cum_P += dx
-                        n_wet += 1
-                        ptr   += 1
-                    end
-                    edge_area_mat[k,  slot, ci] = cum_A
-                    edge_perim_mat[k, slot, ci] = cum_P
-                    prev_wse = wse_k
+                slot_nb = findfirst(id -> get(id_to_idx, id, get(id_to_idx, _to_hex_safe(id), 0)) == ci,
+                                    _nbrs(cell_j))
+                if ci > ci_nb && slot_nb !== nothing && face_P_mat[nf, slot_nb, ci_nb] > 0.0
+                    edge_sills_mat[slot, ci] = edge_sills_mat[slot_nb, ci_nb]
+                    face_zr_mat[slot, ci]    = face_zr_mat[slot_nb, ci_nb]
+                    face_A_mat[:, slot, ci] .= view(face_A_mat, :, slot_nb, ci_nb)
+                    face_P_mat[:, slot, ci] .= view(face_P_mat, :, slot_nb, ci_nb)
+                    face_K_mat[:, slot, ci] .= view(face_K_mat, :, slot_nb, ci_nb)
+                else
+                    z0, zr, fa, fp, fk = face_table_from_profile(valid_edge_elevs, dx; nf = nf)
+                    edge_sills_mat[slot, ci] = z0
+                    face_zr_mat[slot, ci]    = zr
+                    face_A_mat[:, slot, ci] .= fa
+                    face_P_mat[:, slot, ci] .= fp
+                    face_K_mat[:, slot, ci] .= fk
                 end
             end
-            # If valid_edge_elevs is empty or z_min is NaN, edge_area_mat and
-            # edge_perim_mat remain zero for this slot (dry / no-data edge).
+            # With fewer than two valid points the slot keeps zeros (no table).
+        end
+
+        # ── Boundary sides (0.7.0) ──────────────────────────────────────────
+        # A polygon side that is not a face gets a face table too, for the
+        # open-boundary outflow (which until 0.7.0 took a rectangle of the full
+        # side width above the cell's lowest ground). They go in the slots
+        # without an in-mesh neighbour, in polygon-side order
+        # (`boundary_side_slots`; the ghost-edge builder assigns the same).
+        free = boundary_side_slots(n_slots, in_mesh)
+        if !isempty(free)
+            b = 0
+            for (va, vb) in _polygon_sides(cell_i.boundary)
+                _side_is_shared(va, vb, shared) && continue
+                b += 1
+                b > length(free) && break
+                elevs = _edge_profile(Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2]))
+                length(elevs) >= 2 || continue
+                W  = _haversine_m(Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2]))
+                z0, zr, fa, fp, fk = face_table_from_profile(elevs, W / length(elevs); nf = nf)
+                slot = free[b]
+                edge_sills_mat[slot, ci] = z0
+                face_zr_mat[slot, ci]    = zr
+                face_A_mat[:, slot, ci] .= fa
+                face_P_mat[:, slot, ci] .= fp
+                face_K_mat[:, slot, ci] .= fk
+            end
         end
     end
 
@@ -2514,14 +2603,16 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     mesh.array_vars["sgs_edge_sills"]      = edge_sills_mat
 
     # R-A flux tables: reshape (n_bins, n_slots, n) → (n_bins×n_slots, n) for parquet
-    mesh.array_vars["sgs_edge_area_curve"]  = reshape(edge_area_mat,  n_bins*n_slots, n)
-    mesh.array_vars["sgs_edge_perim_curve"] = reshape(edge_perim_mat, n_bins*n_slots, n)
+    mesh.array_vars["sgs_face_zr"] = face_zr_mat
+    mesh.array_vars["sgs_face_A"]  = reshape(face_A_mat, nf*n_slots, n)
+    mesh.array_vars["sgs_face_P"]  = reshape(face_P_mat, nf*n_slots, n)
+    mesh.array_vars["sgs_face_K"]  = reshape(face_K_mat, nf*n_slots, n)
 
     mesh.static_vars["sgs_cell_area"] = cell_areas
     mesh.static_vars["sgs_z_min"]     = z_mins
     mesh.static_vars["sgs_z_max"]     = z_maxs
     mesh.static_vars["sgs_n_bins"]    = fill(Float64(n_bins), n)
-    mesh.static_vars["sgs_layout"]    = fill(2.0, n)   # neighbour-list slot order
+    mesh.static_vars["sgs_layout"]    = fill(3.0, n)   # 3: face tables (2: per-cell edge curves)
 
     n_ok = count(isfinite, z_mins)
     @info "SGS tables built in $(round(time()-t0, digits=1))s: " *
@@ -2544,19 +2635,12 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         error("SGS tables not built — call build_sgs_tables! first.")
     n_bins = size(mesh.array_vars["sgs_elev_bins"], 1)
 
-    # R-A edge hydraulic curves: stored as (n_bins×5, n_cells) in parquet,
-    # reshaped to (n_bins, 5) per cell.
-    # Backward compatibility: meshes built before the R-A tables were added
-    # (pre sgs_ra_flux branch) lack these columns.  Fill with zeros and warn
-    # once — the R-A kernel will detect all-zero curves and fall back to Bates.
-    if haskey(mesh.array_vars, "sgs_edge_area_curve")
-        n_slots    = size(mesh.array_vars["sgs_edge_area_curve"], 1) ÷ n_bins
-        edge_area  = reshape(mesh.array_vars["sgs_edge_area_curve"][:,  i], n_bins, n_slots)
-        edge_perim = reshape(mesh.array_vars["sgs_edge_perim_curve"][:, i], n_bins, n_slots)
-    else
-        edge_area  = zeros(Float64, n_bins, 5)
-        edge_perim = zeros(Float64, n_bins, 5)
-    end
+    haskey(mesh.array_vars, "sgs_face_A") ||
+        error("This mesh's SGS tables are older than layout 3 (no face tables). " *
+              "Rebuild them: --meshgen … --flow-model sgs, or build_sgs_tables!.")
+    n_slots = size(mesh.array_vars["sgs_edge_sills"], 1)
+    nf      = size(mesh.array_vars["sgs_face_A"], 1) ÷ n_slots
+    fcol(key) = reshape(mesh.array_vars[key][:, i], nf, n_slots)
 
     # WP0 fix (2026-10): the previous `get(dict, key, fill(NaN, n))[i]` form
     # evaluated the `fill` default EAGERLY on every call, i.e. three length-n
@@ -2571,8 +2655,9 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         _sv("sgs_cell_area"),
         _sv("sgs_z_min"),
         _sv("sgs_z_max"),
-        edge_area,
-        edge_perim,
+        mesh.array_vars["sgs_edge_sills"][:, i],
+        mesh.array_vars["sgs_face_zr"][:, i],
+        fcol("sgs_face_A"), fcol("sgs_face_P"), fcol("sgs_face_K"),
     )
 end
 

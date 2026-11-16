@@ -20,18 +20,32 @@ using Test, Logging, Random
 
 Random.seed!(20261022)
 
-@testset "P1 — edge_area_radius matches the separate lookups" begin
-    nb = 12
-    elev = sort(rand(nb)) .* 3.0
-    area = cumsum(rand(nb, 6); dims = 1)
-    perim = cumsum(rand(nb, 6); dims = 1)
-    area[:, 6] .= 0.0; perim[:, 6] .= 0.0                 # slot without tables
-    perim[:, 5] .= 1e-7                                    # tiny perimeter → R = 0
-    t = SGSTable(elev, cumsum(rand(nb)), cumsum(rand(nb)), 100.0, elev[1], elev[end], area, perim)
-    for slot in 1:6, wse in vcat(elev, elev .+ 1e-9, [elev[1] - 1, elev[end] + 1], rand(50) .* 4 .- 0.5)
-        A, R = A5Grid.edge_area_radius(t, slot, wse)
-        @test A === A5Grid.flow_area_from_wse(t, slot, wse)
-        @test R === A5Grid.hydraulic_radius_from_wse(t, slot, wse)
+@testset "P1 — face_apk: one lookup, exact at its levels, continuous, dry slots" begin
+    # (Until 0.7.0 P1 pinned edge_area_radius to the separate per-cell lookups
+    # it replaced; those are gone with the per-cell edge curves.)
+    nf = A5Grid.SGS_FACE_LEVELS
+    z0 = fill(NaN, 6); zr = zeros(6); A = zeros(nf, 6); P = zeros(nf, 6); K = zeros(nf, 6)
+    profs = [sort(rand(40)) .* 3.0 .+ s for s in 1:5]      # slot 6 has no table
+    for s in 1:5
+        z0[s], zr[s], A[:, s], P[:, s], K[:, s] = A5Grid.face_table_from_profile(profs[s], 0.5)
+    end
+    t = SGSTable([0.0, 1.0], [0.0, 1.0], [0.0, 1.0], 100.0, 0.0, 1.0, z0, zr, A, P, K)
+    for s in 1:5
+        for k in 1:nf                                       # the stored value at each level
+            η = k == nf ? z0[s] + zr[s] : z0[s] + zr[s] * ((k - 1) / (nf - 1))^2
+            a, p, c = A5Grid.face_apk(t, s, η)
+            @test a ≈ A[k, s] atol = 1e-9 * (1 + A[nf, s])
+            @test c ≈ K[k, s] atol = 1e-9 * (1 + K[nf, s])
+        end
+        top = z0[s] + zr[s]                                 # continuous across the top level
+        a1, _, c1 = A5Grid.face_apk(t, s, top - 1e-9); a2, _, c2 = A5Grid.face_apk(t, s, top + 1e-9)
+        @test a1 ≈ a2 rtol = 1e-6
+        @test c1 ≈ c2 rtol = 1e-6
+        @test A5Grid.face_apk(t, s, z0[s]) == (0.0, 0.0, 0.0)
+        @test A5Grid.face_apk(t, s, z0[s] - 1.0) == (0.0, 0.0, 0.0)
+    end
+    for wse in (-1.0, 0.5, 100.0)
+        @test A5Grid.face_apk(t, 6, wse) == (0.0, 0.0, 0.0)
     end
 end
 

@@ -11,7 +11,7 @@
 # padded arrays (bins × cells, bins × slots × cells), and `_tab(tables, i)`
 # returns cell i's table — the SGSTable itself on the CPU, a NamedTuple of
 # views with the same field names on a device — so the A5Grid lookups
-# (wse_from_volume, edge_area_radius) and the face kernel run unchanged.
+# (wse_from_volume, face_apk) and the face kernel run unchanged.
 
 _tab(T::AbstractVector, i) = @inbounds T[i]
 @inline function _tab(T::NamedTuple, i)
@@ -19,25 +19,31 @@ _tab(T::AbstractVector, i) = @inbounds T[i]
     return (elev_bins = view(T.elev, 1:nb, i), vol_curve = view(T.vol, 1:nb, i),
             area_curve = view(T.area, 1:nb, i), cell_area = (@inbounds T.ca[i]),
             z_min = (@inbounds T.zmin[i]), z_max = (@inbounds T.zmax[i]),
-            edge_area_curves = view(T.eac, 1:nb, :, i), edge_perim_curves = view(T.epc, 1:nb, :, i))
+            face_z0 = view(T.fz0, :, i), face_zr = view(T.fzr, :, i),
+            face_A = view(T.fA, :, :, i), face_P = view(T.fP, :, :, i), face_K = view(T.fK, :, :, i))
 end
 
 "Pack the SGS tables into padded arrays (see the file header)."
 function _sgs_flat(tables)
     n = length(tables)
     nb = maximum((length(t.elev_bins) for t in tables); init = 0)
-    ns = maximum((size(t.edge_area_curves, 2) for t in tables); init = 0)
+    ns = maximum((length(t.face_z0) for t in tables); init = 0)
+    nf = maximum((size(t.face_A, 1) for t in tables); init = 0)
     elev = zeros(nb, n); vol = zeros(nb, n); area = zeros(nb, n)
-    eac = zeros(nb, ns, n); epc = zeros(nb, ns, n)
+    fz0 = fill(NaN, ns, n); fzr = zeros(ns, n)
+    fA = zeros(nf, ns, n); fP = zeros(nf, ns, n); fK = zeros(nf, ns, n)
     nbins = zeros(Int, n); ca = zeros(n); zmin = zeros(n); zmax = zeros(n)
     for (i, t) in enumerate(tables)
         k = length(t.elev_bins); nbins[i] = k
         elev[1:k, i] .= t.elev_bins; vol[1:k, i] .= t.vol_curve; area[1:k, i] .= t.area_curve
-        s = size(t.edge_area_curves, 2)
-        eac[1:k, 1:s, i] .= t.edge_area_curves; epc[1:k, 1:s, i] .= t.edge_perim_curves
+        s = length(t.face_z0)
+        size(t.face_A, 1) == nf || error("SGS face tables of different lengths cannot be packed")
+        fz0[1:s, i] .= t.face_z0; fzr[1:s, i] .= t.face_zr
+        fA[:, 1:s, i] .= t.face_A; fP[:, 1:s, i] .= t.face_P; fK[:, 1:s, i] .= t.face_K
         ca[i] = t.cell_area; zmin[i] = t.z_min; zmax[i] = t.z_max
     end
-    return (elev = elev, vol = vol, area = area, eac = eac, epc = epc, nbins = nbins,
+    return (elev = elev, vol = vol, area = area, fz0 = fz0, fzr = fzr, fA = fA, fP = fP, fK = fK,
+            nbins = nbins,
             ca = ca, zmin = zmin, zmax = zmax)
 end
 
@@ -82,13 +88,7 @@ end
         wse_ghost = _ghost_wse(wse_ci, a.g_sill[k], bc, wse_nb, a.g_nbL[k], a.g_L[k])
         wse_ghost == -Inf && return nothing
         if a.g_isQ[k]
-            h_flow_ge = max(0.0, wse_ci - a.g_sill[k])
-            if h_flow_ge > HFLOW_THRESHOLD
-                A_ge = a.g_width[k] * h_flow_ge
-                R_ge = A_ge / (a.g_width[k] + 2.0 * h_flow_ge)
-            else
-                A_ge = 0.0; R_ge = 0.0
-            end
+            A_ge, R_ge = _sgs_ghost_area_radius(tbl, a.g_slot[k], wse_ci, a.g_sill[k], a.g_width[k], a.k2d)
             Q_out, q_stored = _manning_ghost_flux(a.g_fprev[k], wse_ci, wse_ghost, a.g_sill[k],
                                                   A_ge, R_ge, a.g_L[k], a.manning_n[ci], dt)
         else
@@ -107,17 +107,21 @@ end
     return nothing
 end
 
-# local CFL rate (as _cfl_dt_local, SGS: depth capped at the cell's relief)
+# local CFL rate (as _cfl_dt_local, SGS: the hydraulic depth, _sgs_cfl_depth)
 @inline function _cfl_rate_sgs_k!(i, a)
     @inbounds begin
         r = 0.0
         h = a.water_depth[i]
         if h > 1e-4
-            zmin = a.tables.zmin[i]
-            isnan(zmin) || (h = min(h, max(0.0, a.tables.zmax[i] - zmin)))
+            t = _tab(a.tables, i)
+            if !isnan(t.z_min)
+                aw = max(wetted_area_from_wse(t, t.z_min + h), SGS_CFL_AREA_FLOOR * t.cell_area)
+                r = _sgs_face_rate(i, a.cptr, a.cedge, a.face_A, a.L, aw)
+                h = _sgs_cfl_depth(t, a.volume[i], h)
+            end
             if h > 1e-4
                 ℓ = a.cell_length[i]
-                ℓ > 0.0 && (r = sqrt(_G * h) / ℓ)
+                ℓ > 0.0 && (r = max(r, sqrt(_G * h) / ℓ))
             end
         end
         a.cfl[i] = r
@@ -149,6 +153,7 @@ function _sgs_device_args(state::FlowState)
         cfl = zeros(length(state.cell_ids)),
         g_cell = [g.cell_index for g in G], g_width = [g.width for g in G], g_L = [g.L for g in G],
         g_sill = [g.sill for g in G], g_fprev = [g.flux_prev for g in G],
+        g_slot = [g.slot for g in G], k2d = SGS_CONVEYANCE[] === :twod,
         g_isQ = [g.is_Q_flux for g in G],
         g_nb = [g.interior_nb_idx for g in G], g_nbL = [g.interior_nb_L for g in G],
         g_bc = BCType[b for b in state.ghost_cell_bc], removed = [state.vol_removed],

@@ -282,6 +282,12 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
 
         # Pentagon sides: check each side against shared_pairs
         sides      = _ghost_edge_sides(bnd)
+        # SGS (0.7.0): the b-th boundary side's face table is in the b-th
+        # table slot without an in-mesh neighbour (A5Grid.boundary_side_slots)
+        free_slots = (use_sgs && i <= length(sgs_tables) && sgs_tables[i] !== nothing) ?
+            A5Grid.boundary_side_slots(length(sgs_tables[i].face_z0),
+                                       Bool[get(id_idx, nb, 0) != 0 for nb in nbr_ids]) : Int[]
+        n_bside    = 0
         nv         = length(bnd)
         n_actual   = length(bnd) - (nv >= 2 &&
                                     bnd[nv][1] ≈ bnd[1][1] &&
@@ -319,6 +325,7 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                 end
             end
             is_shared && continue
+            n_bside += 1
 
             # This side is a ghost edge — compute geometry
             width = A5Grid._haversine_m(v1[1], v1[2], v2[1], v2[2])
@@ -337,6 +344,15 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
                 isnan(tbl.z_min) ? elev_ci : tbl.z_min
             else
                 elev_ci
+            end
+            # SGS: the side's face table, if the mesh has one (its sill = the
+            # lowest point of the side's DEM profile)
+            g_slot = 0
+            if n_bside <= length(free_slots)
+                sl = free_slots[n_bside]; tbl = sgs_tables[i]
+                if isfinite(tbl.face_z0[sl]) && tbl.face_P[end, sl] > 0.0
+                    g_slot = sl; sill = tbl.face_z0[sl]
+                end
             end
 
             # Find the interior neighbour most aligned with the outward normal of
@@ -397,7 +413,7 @@ function _build_ghost_edges(cells       :: Vector{A5Grid.A5Cell},
             rx  = deg2rad(mid_lon - cell_lon) * Rm * cos_lat; ry = deg2rad(mid_lat - cell_lat) * Rm
             gnx * rx + gny * ry < 0.0 && (gnx = -gnx; gny = -gny)
             push!(ghost_edges,   GhostEdge(i, width, L, sill, 0.0, use_sgs,
-                                            best_nb_idx, best_nb_L, gnx, gny, rx, ry))
+                                            best_nb_idx, best_nb_L, gnx, gny, rx, ry, g_slot))
             push!(ghost_cell_bc, default_bc)
         end
     end
