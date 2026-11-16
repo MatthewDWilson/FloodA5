@@ -2370,9 +2370,10 @@ or the DEM's resolution, about two thirds of them inside a pentagon.)
 
 **Per cell**
 1. Hypsometric curve: stored volume and wetted area at `n_bins` levels from
-   the cell's lowest to its highest ground, the extremes taken over the grid
-   *and* the profiles of the cell's sides (so that no face point lies outside
-   the cell's range).
+   the cell's lowest to its highest ground, from four samples per grid cell
+   (so that the grid does not alias with the DEM's lattice); the extremes are
+   taken over them, the grid *and* the profiles of the cell's sides (so that
+   no face point lies outside the cell's range).
 2. Connectivity (`connectivity = true`): the level at which each grid point
    connects to the cell's main basin, `_cell_connectivity`.
 3. Wetted-area centroid at each level (of the ground connected to the main
@@ -2546,8 +2547,20 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
             continue
         end
 
-        # shared extremes: the grid and the side profiles
-        z_min = minimum(zg); z_max = maximum(zg)
+        # storage samples: four per grid cell (quarter points). The grid itself
+        # can line up with the DEM's lattice (a 0.5 m grid on a 0.5 m DEM sees
+        # the foot and the top of a one-pixel bank and nothing between), which
+        # biases the volume at low levels; connectivity keeps the grid.
+        hlon = Vector{Float64}(undef, 4np); hlat = Vector{Float64}(undef, 4np)
+        for p in 1:np, (q, (sx_, sy_)) in enumerate(((-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)))
+            hlon[4(p-1)+q] = lonc + (gx[p] + sx_ * dxg) / mx
+            hlat[4(p-1)+q] = latc + (gy[p] + sy_ * dyg) / my
+        end
+        zh = filter(isfinite, _sample(hlon, hlat))
+        isempty(zh) && (zh = copy(zg))
+
+        # shared extremes: the grid, the storage samples and the side profiles
+        z_min = min(minimum(zg), minimum(zh)); z_max = max(maximum(zg), maximum(zh))
         for v in sz, zz in v
             isfinite(zz) || continue
             zz < z_min && (z_min = zz); zz > z_max && (z_max = zz)
@@ -2593,15 +2606,15 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
 
         # hypsometric curve (level pool over the whole cell) and wetted-area centroid
         bins = range(z_min, z_max, length = n_bins)
-        A_cell = cell_areas[ci]; dA = A_cell / np
-        zs = sort(zg)
+        A_cell = cell_areas[ci]; nh = length(zh); dA = A_cell / nh
+        zs = sort(zh)
         oc = sortperm(conn)
         cum_area = 0.0; cum_vol = 0.0; ptr = 1; n_in = 0; prev = z_min
         cptr = 1; sx = 0.0; sy = 0.0; nc = 0
         for k in 1:n_bins
             w = Float64(bins[k])
             cum_vol += n_in * dA * (w - prev)
-            while ptr <= np && zs[ptr] <= w
+            while ptr <= nh && zs[ptr] <= w
                 cum_area += dA; cum_vol += dA * (w - zs[ptr]); n_in += 1; ptr += 1
             end
             while cptr <= np && conn[oc[cptr]] <= w

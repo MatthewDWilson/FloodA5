@@ -258,8 +258,10 @@ end
 
 `:done` if the output completed and records exactly this job's command line.
 """
-# Windows paths are case-insensitive (a run started from d:\ is the run recorded from D:\)
-_same_argv(a, b) = Sys.iswindows() ? lowercase.(String.(a)) == lowercase.(String.(b)) : a == b
+# Windows paths are case-insensitive and take either slash (a run started
+# from d:/… is the run recorded from D:\…)
+_norm_arg(a) = Sys.iswindows() ? replace(lowercase(String(a)), '/' => '\\') : String(a)
+_same_argv(a, b) = length(a) == length(b) && all(_norm_arg(x) == _norm_arg(y) for (x, y) in zip(a, b))
 
 function job_status(c::Case, j::Job)
     p = job_output(c, j)
