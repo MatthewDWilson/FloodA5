@@ -464,7 +464,7 @@ const _BOOL_FLAGS = Set(["--closed-boundaries", "--dem-strict", "--limiter-stats
 const _DROP_FLAGS = Set(["--meshgen", "--meshres", "--meshgen-cartesian", "--dx",
                          "--cartesian-lat-ref", "--meshout", "--meshload", "--dem",
                          "--dem-method", "--dem-samples", "--dem-seed", "--dem-strict",
-                         "--sgs-bins", "--sgs-samples", "--mesh-only", "--output",
+                         "--sgs-bins", "--sgs-samples", "--sgs-connectivity", "--mesh-only", "--output",
                          "--vis-port", "--embed-mesh"])
 const _VIS_MODES = Set(["cesium", "makie"])
 

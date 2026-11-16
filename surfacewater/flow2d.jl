@@ -666,6 +666,50 @@ gives the level of a cell-mean bed overbank).
 end
 
 """
+    SGS_PATH[]
+
+Whether the SGS kernel applies the flow-path geometry of `_sgs_path`
+(`--sgs-path on|off`, default on).
+"""
+const SGS_PATH = Ref(true)
+
+"""
+    _sgs_path(dx, dy, nx, ny, L, ct, cxi, cyi, cxj, cyj, wfi, wfj) → (a, Lg)
+
+Flow-path geometry of a face between SGS cells i and j: the factor `a` on the
+face's flow area and the length `Lg` the head difference acts over.
+
+The water of a partly wet cell is around its wetted-area centroid
+((cxi, cyi), m from the cell centre; `wet_centroid`), not around the cell
+centre. A channel that crosses a row of cells obliquely or in a zig-zag has
+its water on a line u = (dx, dy) + c_j − c_i ((dx, dy): centre i → centre j)
+that is shorter than the line through the centres, and the faces cut it
+obliquely, wider than it is. For flow along u through a face with normal n̂:
+
+    a = |n̂·û|     (the cut seen along the flow)        Lg = |u|
+
+A fully wet pair of cells keeps the kernel's own geometry, a = 1 and
+Lg = L·ct (centre distance projected on the face normal). In between, the two
+are blended with s = clamp(2w − 1, 0, 1), w the mean wetted fraction of the
+two cells: cells less than half wet are channels, s = 0. `a` is at least 0.1
+and the path length at least 0.2 L.
+"""
+@inline function _sgs_path(dx::Float64, dy::Float64, nx::Float64, ny::Float64, L::Float64, ct::Float64,
+                           cxi::Float64, cyi::Float64, cxj::Float64, cyj::Float64,
+                           wfi::Float64, wfj::Float64)::Tuple{Float64,Float64}
+    Lm = L * (ct > 0.1 ? ct : 0.1)                      # the kernel's own length
+    s = wfi + wfj - 1.0
+    s = s < 0.0 ? 0.0 : (s > 1.0 ? 1.0 : s)
+    ux = dx + cxj - cxi; uy = dy + cyj - cyi
+    c = sqrt(ux * ux + uy * uy)
+    (s < 1.0 && c > 1e-9) || return 1.0, Lm             # fully wet, or no geometry (NaN)
+    a = abs(nx * ux + ny * uy) / c
+    a = a < 0.1 ? 0.1 : a
+    c = c < 0.2 * L ? 0.2 * L : c
+    return (1.0 - s) * a + s, (1.0 - s) * c + s * Lm
+end
+
+"""
     _sgs_ghost_area_radius(table, slot, wse, sill, width, twod) → (A, R)
 
 Flow area and hydraulic radius of an SGS open-boundary side at the boundary

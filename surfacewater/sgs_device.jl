@@ -20,7 +20,8 @@ _tab(T::AbstractVector, i) = @inbounds T[i]
             area_curve = view(T.area, 1:nb, i), cell_area = (@inbounds T.ca[i]),
             z_min = (@inbounds T.zmin[i]), z_max = (@inbounds T.zmax[i]),
             face_z0 = view(T.fz0, :, i), face_zr = view(T.fzr, :, i),
-            face_A = view(T.fA, :, :, i), face_P = view(T.fP, :, :, i), face_K = view(T.fK, :, :, i))
+            face_A = view(T.fA, :, :, i), face_P = view(T.fP, :, :, i), face_K = view(T.fK, :, :, i),
+            wet_cx = view(T.wcx, 1:nb, i), wet_cy = view(T.wcy, 1:nb, i))
 end
 
 "Pack the SGS tables into padded arrays (see the file header)."
@@ -30,19 +31,22 @@ function _sgs_flat(tables)
     ns = maximum((length(t.face_z0) for t in tables); init = 0)
     nf = maximum((size(t.face_A, 1) for t in tables); init = 0)
     elev = zeros(nb, n); vol = zeros(nb, n); area = zeros(nb, n)
+    wcx = zeros(nb, n); wcy = zeros(nb, n)
     fz0 = fill(NaN, ns, n); fzr = zeros(ns, n)
     fA = zeros(nf, ns, n); fP = zeros(nf, ns, n); fK = zeros(nf, ns, n)
     nbins = zeros(Int, n); ca = zeros(n); zmin = zeros(n); zmax = zeros(n)
     for (i, t) in enumerate(tables)
         k = length(t.elev_bins); nbins[i] = k
         elev[1:k, i] .= t.elev_bins; vol[1:k, i] .= t.vol_curve; area[1:k, i] .= t.area_curve
+        wcx[1:k, i] .= t.wet_cx; wcy[1:k, i] .= t.wet_cy
         s = length(t.face_z0)
         size(t.face_A, 1) == nf || error("SGS face tables of different lengths cannot be packed")
         fz0[1:s, i] .= t.face_z0; fzr[1:s, i] .= t.face_zr
         fA[:, 1:s, i] .= t.face_A; fP[:, 1:s, i] .= t.face_P; fK[:, 1:s, i] .= t.face_K
         ca[i] = t.cell_area; zmin[i] = t.z_min; zmax[i] = t.z_max
     end
-    return (elev = elev, vol = vol, area = area, fz0 = fz0, fzr = fzr, fA = fA, fP = fP, fK = fK,
+    return (elev = elev, vol = vol, area = area, wcx = wcx, wcy = wcy,
+            fz0 = fz0, fzr = fzr, fA = fA, fP = fP, fK = fK,
             nbins = nbins,
             ca = ca, zmin = zmin, zmax = zmax)
 end
@@ -50,7 +54,13 @@ end
 # ── Kernel bodies ───────────────────────────────────────────────────────────
 
 @inline function _sgs_wse_k!(i, a)
-    @inbounds a.wse[i] = wse_from_volume(_tab(a.tables, i), a.volume[i])
+    @inbounds begin
+        t = _tab(a.tables, i)
+        w = wse_from_volume(t, a.volume[i])
+        a.wse[i] = w
+        a.wcx[i], a.wcy[i] = isnan(t.z_min) ? (0.0, 0.0) : wet_centroid(t, w)
+        a.wfrac[i] = isnan(t.z_min) ? 1.0 : wetted_area_from_wse(t, w) / t.cell_area
+    end
     return nothing
 end
 

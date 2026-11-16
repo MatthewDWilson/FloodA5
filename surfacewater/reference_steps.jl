@@ -371,6 +371,10 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
     wse = ws.wse
     Threads.@threads for i in 1:n                 # per-cell writes only (WP4)
         @inbounds wse[i] = wse_from_volume(state.sgs_tables[i], state.volume[i])
+        @inbounds ws.wcx[i], ws.wcy[i] = isnan(state.sgs_tables[i].z_min) ? (0.0, 0.0) :
+                                         wet_centroid(state.sgs_tables[i], wse[i])
+        @inbounds ws.wfrac[i] = isnan(state.sgs_tables[i].z_min) ? 1.0 :
+            wetted_area_from_wse(state.sgs_tables[i], wse[i]) / state.sgs_tables[i].cell_area
     end
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
@@ -446,7 +450,15 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
         # frozen loop; the per-cell edge curves it read no longer exist.)
         A_edge, P_edge, K_edge = A5Grid.face_apk(state.sgs_tables[ci], slot_ia[e], wse_flow)
         R_edge = _sgs_radius(A_edge, P_edge, K_edge, SGS_CONVEYANCE[] === :twod)
-        ws.face_A[e] = wse_flow - z_sill > HFLOW_THRESHOLD ? A_edge : 0.0
+        L_e = edges.L[e]; ct_e = edges.cos_theta[e]
+        if SGS_PATH[]                          # flow path of partly wet cells (0.7.0)
+            a_p, L_g = _sgs_path(ws.e_dx[e], ws.e_dy[e], edges.nf_x[e], edges.nf_y[e], L_e, ct_e,
+                                 ws.wcx[ci], ws.wcy[ci], ws.wcx[cj], ws.wcy[cj], ws.wfrac[ci], ws.wfrac[cj])
+            A_edge *= a_p
+            L_e = L_g
+            state.gradient_correction || (ct_e = 1.0)
+        end
+        ws.face_A[e] = wse_flow - z_sill > HFLOW_THRESHOLD ? A_edge * edges.L[e] / L_e : 0.0
 
         # Q-centred smoothing on flux_Q (volumetric momentum for R-A kernel).
         # Same collinear lookup as standard flow — the checkerboard mode exists
@@ -506,13 +518,13 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
             h_flow = wse_flow - z_sill
 
             _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge,
-                                        dWSE_n, edges.L[e],
+                                        dWSE_n, L_e,
                                         0.5 * (state.manning_n[ci] + state.manning_n[cj]),
                                         dt; Q_t = Q_t, vector_friction = vector_friction)
         else
             _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill,
                               A_edge, R_edge,
-                              edges.L[e], edges.cos_theta[e],
+                              L_e, ct_e,
                               0.5 * (state.manning_n[ci] + state.manning_n[cj]),
                               dt; Q_t = Q_t, vector_friction = vector_friction)
         end

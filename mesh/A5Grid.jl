@@ -84,7 +84,7 @@ export mesh_for_aoi, save_mesh, save_mesh_geoparquet, save_mesh_geojson, load_me
 export mesh_to_geojson_string
 export sample_dem!, sample_dem_centroid!, sample_dem_mean!, check_dem_coverage
 export build_sgs_tables!, SGSTable
-export wse_from_volume, wetted_area_from_wse, sgs_table
+export wse_from_volume, wetted_area_from_wse, wet_centroid, sgs_table
 export face_apk, face_table_from_profile, SGS_FACE_LEVELS, boundary_side_slots
 export cell_to_boundary, cell_to_lonlat, lonlat_to_cell
 export cell_to_children, cell_to_parent, get_resolution, grid_disk_neighbours
@@ -1782,7 +1782,15 @@ struct SGSTable
     face_A  :: Matrix{Float64}   # (NF × n_slots)
     face_P  :: Matrix{Float64}   # (NF × n_slots)
     face_K  :: Matrix{Float64}   # (NF × n_slots)
+    # Wetted-area centroid at each level of elev_bins (m east / north of the
+    # cell centre), of the ground connected to the cell's main basin: where
+    # the water of a partly wet cell is (`wet_centroid`). Zeros: the centre.
+    wet_cx  :: Vector{Float64}   # (n_bins)
+    wet_cy  :: Vector{Float64}   # (n_bins)
 end
+SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K) =
+    SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K,
+             zeros(length(elev_bins)), zeros(length(elev_bins)))
 
 "Levels per face table (see `SGSTable`)."
 const SGS_FACE_LEVELS = 64
@@ -1924,6 +1932,28 @@ individual cells have filled their hypsometric range.
     end
     frac = (V - t.vol_curve[lo]) / (t.vol_curve[hi] - t.vol_curve[lo] + 1e-15)
     return t.elev_bins[lo] + frac * (t.elev_bins[hi] - t.elev_bins[lo])
+end
+
+"""
+    wet_centroid(table, wse) → (cx, cy)
+
+Centroid of the wetted area of the cell at level `wse` (m east / north of the
+cell centre), interpolated from `wet_cx`/`wet_cy`: the lowest point of the
+main basin for a dry cell, the polygon's centroid for a submerged one.
+"""
+@inline function wet_centroid(t, wse::Float64)::Tuple{Float64,Float64}   # SGSTable or a view
+    eb = t.elev_bins; n = length(eb)
+    @inbounds begin
+        wse <= eb[1] && return t.wet_cx[1], t.wet_cy[1]
+        wse >= eb[n] && return t.wet_cx[n], t.wet_cy[n]
+        lo, hi = 1, n
+        while hi - lo > 1
+            mid = (lo + hi) >>> 1
+            eb[mid] <= wse ? lo = mid : hi = mid
+        end
+        f = (wse - eb[lo]) / (eb[hi] - eb[lo] + 1e-15)
+        return t.wet_cx[lo] + f * (t.wet_cx[hi] - t.wet_cx[lo]), t.wet_cy[lo] + f * (t.wet_cy[hi] - t.wet_cy[lo])
+    end
 end
 
 """
@@ -2238,385 +2268,452 @@ boundary_side_slots(n_slots::Int, in_mesh::AbstractVector{Bool}) =
 # ---------------------------------------------------------------------------
 
 """
+    _cell_connectivity(z, idx, sidemask, need) → (seed, conn)
+
+Connectivity of a cell's working grid (0.7.0). `z[p]` are the elevations of
+the grid points inside the cell, `idx[i, j]` their index on the regular grid
+(0: outside the cell or no data) and `sidemask[p]` the polygon sides the
+point lies next to (bit k: side k).
+
+The cell's **main basin** is the first region of ground below a rising water
+level (4-connected, so a wall one point thick and diagonal to the grid still
+holds) that reaches `need` different sides of the cell — the lowest route
+*through* the cell. A pit that touches no side, or a hollow cut by one side,
+does not qualify until it has spilled into something that does. `seed` is
+the lowest point of that region.
+
+`conn[p]` is the lowest water level at which point p is connected to the seed
+through ground below that level (≥ z[p]; = z[p] for the main basin itself).
+"""
+function _cell_connectivity(z::Vector{Float64}, idx::Matrix{Int32}, gi::Vector{Int32},
+                            gj::Vector{Int32}, sidemask::Vector{UInt32}, need::Int)
+    np = length(z)
+    np == 0 && return 0, Float64[]
+    order  = sortperm(z)
+    parent = collect(1:np)
+    find(i) = (@inbounds while parent[i] != i; parent[i] = parent[parent[i]]; i = parent[i]; end; i)
+    nxg, nyg = size(idx)
+    @inline function nbr(p, k)
+        i = Int(gi[p]); j = Int(gj[p])
+        k == 1 ? (i > 1   ? Int(idx[i-1, j]) : 0) :
+        k == 2 ? (i < nxg ? Int(idx[i+1, j]) : 0) :
+        k == 3 ? (j > 1   ? Int(idx[i, j-1]) : 0) :
+                 (j < nyg ? Int(idx[i, j+1]) : 0)
+    end
+
+    # pass 1: the first region to touch `need` sides
+    mask  = copy(sidemask); low = collect(1:np); added = falses(np)
+    seed  = 0
+    for p in order
+        added[p] = true
+        for k in 1:4
+            q = nbr(p, k); (q == 0 || !added[q]) && continue
+            a = find(p); b = find(q); a == b && continue
+            parent[b] = a
+            mask[a] |= mask[b]
+            z[low[b]] < z[low[a]] && (low[a] = low[b])
+        end
+        r = find(p)
+        if count_ones(mask[r]) >= need
+            seed = low[r]; break
+        end
+    end
+    seed == 0 && (seed = order[1])
+
+    # pass 2: the level at which each point joins the seed's region
+    conn = copy(z)
+    parent .= 1:np; fill!(added, false)
+    next = zeros(Int, np); tail = collect(1:np)       # member lists per root
+    for p in order
+        added[p] = true
+        for k in 1:4
+            q = nbr(p, k); (q == 0 || !added[q]) && continue
+            a = find(p); b = find(q); a == b && continue
+            if added[seed]
+                s = find(seed)
+                if s == a || s == b
+                    o = s == a ? b : a                # the region joining the main basin now
+                    m = o
+                    while m != 0
+                        conn[m] = max(conn[m], z[p]); m = next[m]
+                    end
+                end
+            end
+            next[tail[a]] = b; tail[a] = tail[b]      # append b's members to a's
+            parent[b] = a
+        end
+    end
+    return seed, conn
+end
+
+"Distance from (x, y) to the segment (x1, y1)–(x2, y2)."
+@inline function _seg_dist(x, y, x1, y1, x2, y2)
+    dx = x2 - x1; dy = y2 - y1; l2 = dx * dx + dy * dy
+    t = l2 > 0 ? clamp(((x - x1) * dx + (y - y1) * dy) / l2, 0.0, 1.0) : 0.0
+    return hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+end
+
+"""
     build_sgs_tables!(mesh, dem_source;
-                      n_bins=100, n_samples=512,
-                      halton_seed=0,
-                      edge_spacing_m=nothing,
-                      var_prefix="sgs")
+                      n_bins=100, n_samples=1600, edge_spacing_m=nothing,
+                      connectivity=true)
 
-Pre-compute Sub-Grid Sampling (SGS) hypsometric tables for every cell in
-the mesh and store them in `mesh.array_vars`.
+Pre-compute the sub-grid (SGS) tables of every cell and face and store them
+in `mesh.array_vars` / `mesh.static_vars` (layout 3, 0.7.0).
 
-For each cell:
-1. Generate `n_samples` Halton quasi-random points within the cell polygon.
-2. Sample the DEM at all points (bilinear, from in-memory raster).
-3. Build an elevation histogram with `n_bins` quantile-spaced bins.
-4. Derive cumulative volume and wetted-area curves from the histogram.
+**Working grid.** Each cell is covered by a regular grid in a local metric
+frame, spaced min(DEM pixel, √(bounding box / `n_samples`)), and the DEM is
+sampled (bilinear) at the grid points inside the polygon. The grid is used
+for everything below, so the tables of a cell and of its faces describe the
+same surface. (Until 0.7.0: 512 Halton candidates per cell whatever its size
+or the DEM's resolution, about two thirds of them inside a pentagon.)
 
-For each pair of topologically adjacent cells:
-5. Sample the DEM along the shared boundary edge at ~`edge_spacing_m`
-   intervals (default: 0.5 × DEM pixel size) to find the sill elevation.
-   The sill is stored in `mesh.static_vars["sgs_sill_<i>_<j>"]` — but
-   since sills are keyed by cell-pair, they are instead stored in a
-   flat `mesh.static_vars["sgs_sill"]` vector for each cell, holding the
-   minimum sill elevation to any neighbour (conservative for flow).
-   Per-edge sill values are kept in `mesh.array_vars["sgs_edge_sills"]`
-   as a (max_neighbours × n_cells) matrix.
+**Per cell**
+1. Hypsometric curve: stored volume and wetted area at `n_bins` levels from
+   the cell's lowest to its highest ground, the extremes taken over the grid
+   *and* the profiles of the cell's sides (so that no face point lies outside
+   the cell's range).
+2. Connectivity (`connectivity = true`): the level at which each grid point
+   connects to the cell's main basin, `_cell_connectivity`.
+3. Wetted-area centroid at each level (of the ground connected to the main
+   basin), relative to the cell centre, for the flow-path length and
+   direction of a partly wet cell (`wet_centroid`).
+
+**Per face** (and per boundary side): the DEM profile along the side at
+`edge_spacing_m` (default half a pixel) and, per point, its activation
+level: the lowest level at which it is wet *and* connected to the main basins
+of both cells. One face table (`face_table_from_profile`) per face, held by
+both cells; the sill of a face is its lowest activation level. A barrier
+inside a cell therefore closes the faces on the side cut off from the cell's
+main basin up to the level at which the water gets over or round it — a gap
+through the barrier is found by the connectivity search and keeps its own
+sill. `sgs_face_raise` records by how much each face's sill was raised.
 
 Output arrays in `mesh.array_vars`:
-  "sgs_elev_bins"   — (n_bins × n_cells)  elevation knot points (m)
-  "sgs_vol_curve"   — (n_bins × n_cells)  cumulative volume (m³)
-  "sgs_area_curve"  — (n_bins × n_cells)  cumulative wetted area (m²)
-  "sgs_edge_sills"  — (n_slots × n_cells) sill elevation per neighbour slot
-  "sgs_face_zr"     — (n_slots × n_cells) face profile range, highest − lowest (m)
+  "sgs_elev_bins", "sgs_vol_curve", "sgs_area_curve" — (n_bins × n_cells)
+  "sgs_wet_cx", "sgs_wet_cy" — (n_bins × n_cells) wetted-area centroid (m east /
+                      north of the cell centre)
+  "sgs_edge_sills"  — (n_slots × n_cells) sill per slot = lowest level of the face table
+  "sgs_face_zr"     — (n_slots × n_cells) height of the tabulated range (m)
   "sgs_face_A", "sgs_face_P", "sgs_face_K" — (NF·n_slots × n_cells) face tables
-                      (flow area, wetted width, conveyance integral; see
-                      `SGSTable`), column-major (level fastest), NF =
-                      `SGS_FACE_LEVELS`; "sgs_edge_sills" is their lowest level
+                      (see `SGSTable`), column-major (level fastest)
+  "sgs_face_raise"  — (n_slots × n_cells) sill − lowest point of the profile (m)
 
 Slot k of a cell is the k-th entry of its neighbour list `mesh.adjacency[id]`
-— the same order `initialise_flow_model` uses for `adj_matrix`, including
-list entries that are not in the mesh (they take a slot but get no curve).
+(the order `initialise_flow_model` uses for `adj_matrix`); boundary sides
+take the slots without an in-mesh neighbour (`boundary_side_slots`).
 `n_slots` is the longest neighbour list, so any valence is supported. If the
-mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only)
-and stored in `mesh.adjacency`, so the saved neighbour list matches the slots.
+mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only).
 
-WP3 fix (2026-10): slots used to follow `grid_disk_neighbours` order, which
-differs from the stored neighbour list for ~95% of A5 cells (and counted
-out-of-mesh `grid_disk` cells), so the SGS sill and R-A curves of most edges
-belonged to a different neighbour. Tables built by this version carry
-`static_vars["sgs_layout"] = 2`. Layout 3 (2026-11) replaces the per-cell edge
-curves by one face table per face; `initialise_flow_model` refuses older ones
-(see mesh/repair_sgs_slot_order.py).
-
-Output scalars in `mesh.static_vars`:
-  "sgs_cell_area"   — total plan area of each cell (m²)
-  "sgs_z_min"       — minimum DEM elevation in cell
-  "sgs_z_max"       — maximum DEM elevation in cell
-  "sgs_n_bins"      — n_bins (stored as Float64 for parquet compatibility)
-  "sgs_layout"      — 3 (face tables; neighbour-list slot order, any valence)
-
-The arrays are automatically persisted when you call `save_mesh_geoparquet`.
+Output scalars in `mesh.static_vars`: "sgs_cell_area", "sgs_z_min",
+"sgs_z_max", "sgs_n_bins", "sgs_layout" (3), "sgs_connectivity" (1 or 0),
+"sgs_n_grid" (grid points used per cell).
 """
 function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
                             n_bins::Int=100,
-                            n_samples::Int=512,
-                            halton_seed::Int=0,
-                            edge_spacing_m::Union{Float64,Nothing}=nothing)
+                            n_samples::Int=1600,
+                            halton_seed::Int=0,        # unused since 0.7.0 (kept for callers)
+                            edge_spacing_m::Union{Float64,Nothing}=nothing,
+                            connectivity::Bool=true)
     dem_path = _resolve_dem_path(dem_source, mesh)
     n = length(mesh.cells)
     n == 0 && error("Cannot build SGS tables on an empty mesh.")
 
-    @info "SGS pre-processing: $(basename(dem_path)), $n cells, " *
-          "$n_bins bins, $n_samples Halton pts/cell..."
+    @info "SGS pre-processing: $(basename(dem_path)), $n cells, $n_bins bins, " *
+          "working grid ≈ $n_samples points/cell, connectivity $(connectivity ? "on" : "off")..."
     t0 = time()
 
     raster = _load_dem_raster(dem_path)
+    lat_ref = sum(c.center_lat for c in mesh.cells) / n
 
-    # Default edge spacing: half the DEM pixel size in metres.
-    # gt[2] is the pixel width in the raster's native CRS units.
-    # For a projected CRS (e.g. NZTM2000) it is already in metres.
-    # For a geographic CRS (degrees) we convert via the Earth radius.
-    # Heuristic: if gt[2] < 1.0 it's almost certainly degrees.
+    # DEM pixel size in metres. A geographic DEM (pixel < 1: degrees) is
+    # converted with the mesh's latitude (0.7.0: the east–west size was taken
+    # without cos φ, so faces were sampled at 0.8 rather than 0.5 pixels at 51°).
     px_size_m = if abs(raster.gt[2]) < 1.0
-        abs(raster.gt[2]) * _EARTH_R * π / 180.0
+        d2m = _EARTH_R * π / 180.0
+        min(abs(raster.gt[2]) * d2m * cosd(lat_ref), abs(raster.gt[6]) * d2m)
     else
-        abs(raster.gt[2])   # already metres
+        min(abs(raster.gt[2]), abs(raster.gt[6]))
     end
-    spacing   = something(edge_spacing_m, 0.5 * px_size_m)
-    @info "  DEM pixel ≈ $(round(px_size_m, digits=1)) m, " *
-          "edge sample spacing = $(round(spacing, digits=1)) m"
+    spacing = something(edge_spacing_m, 0.5 * px_size_m)
+    @info "  DEM pixel ≈ $(round(px_size_m, digits=2)) m, face sample spacing = $(round(spacing, digits=2)) m"
 
-    # Pre-generate Halton sequences (shared across all cells, scaled per bbox)
-    h2 = _halton(2, n_samples, halton_seed)
-    h3 = _halton(3, n_samples, halton_seed)
+    # DEM elevations at lon/lat points (NaN: no data)
+    function _sample(lons::Vector{Float64}, lats::Vector{Float64})
+        np = length(lons)
+        xs, ys = if isempty(raster.proj)
+            lons, lats
+        else
+            x = copy(lons); y = copy(lats); zz = zeros(np)
+            ArchGDAL.createcoordtrans(_crs_gis(4326), _crs_gis(raster.proj)) do xform
+                ArchGDAL.transform!(x, y, zz, xform)
+            end
+            x, y
+        end
+        z = Vector{Float64}(undef, np)
+        for j in 1:np
+            col_f, row_f = _affine_to_pixel(xs[j], ys[j], raster.gt)
+            v = _bilinear(raster.band, col_f, row_f, raster.nx, raster.ny, raster.nodata_val)
+            z[j] = isfinite(v) ? v : NaN
+        end
+        return z
+    end
 
-    # Output matrices
-    elev_bins_mat  = Matrix{Float64}(undef, n_bins, n)
-    vol_curve_mat  = Matrix{Float64}(undef, n_bins, n)
-    area_curve_mat = Matrix{Float64}(undef, n_bins, n)
-    # Neighbour lists define the slots (see the docstring). Computed before
-    # Step 1 so the slot count is known.
+    # Neighbour lists define the slots
     if isempty(mesh.adjacency)
         @info "  No adjacency on the mesh — computing it via grid_disk..."
         gd = grid_disk_neighbours_batch([c.id for c in mesh.cells])
-        in_mesh = Set(c.id for c in mesh.cells)
+        in_mesh_ids = Set(c.id for c in mesh.cells)
         for c in mesh.cells
-            mesh.adjacency[c.id] = [nb for nb in get(gd, c.id, String[]) if nb in in_mesh]
+            mesh.adjacency[c.id] = [nb for nb in get(gd, c.id, String[]) if nb in in_mesh_ids]
         end
     end
     _nbrs(c) = get(mesh.adjacency, c.id, get(mesh.adjacency, _to_hex_safe(c.id), String[]))
     n_slots = max(1, maximum(length(_nbrs(c)) for c in mesh.cells))
-    edge_sills_mat = fill(NaN, n_slots, n)
-    # R-A flux tables: cross-sectional flow area and wetted perimeter per edge slot
-    # Shape: (n_bins, n_slots, n_cells) — stored flat as (n_bins×n_slots, n_cells)
     nf = SGS_FACE_LEVELS
-    face_zr_mat = zeros(Float64, n_slots, n)
-    face_A_mat  = zeros(Float64, nf, n_slots, n)          # m²
-    face_P_mat  = zeros(Float64, nf, n_slots, n)          # m
-    face_K_mat  = zeros(Float64, nf, n_slots, n)          # m^(8/3)
-    cell_areas     = Vector{Float64}(undef, n)
-    z_mins         = Vector{Float64}(undef, n)
-    z_maxs         = Vector{Float64}(undef, n)
 
-    # ── Step 1: Build hypsometric curves for each cell ────────────────────
-    @info "  Building hypsometric curves..."
+    elev_bins_mat  = Matrix{Float64}(undef, n_bins, n)
+    vol_curve_mat  = Matrix{Float64}(undef, n_bins, n)
+    area_curve_mat = Matrix{Float64}(undef, n_bins, n)
+    wet_cx_mat     = zeros(Float64, n_bins, n)
+    wet_cy_mat     = zeros(Float64, n_bins, n)
+    edge_sills_mat = fill(NaN, n_slots, n)
+    face_zr_mat    = zeros(Float64, n_slots, n)
+    face_raise_mat = zeros(Float64, n_slots, n)
+    face_A_mat     = zeros(Float64, nf, n_slots, n)
+    face_P_mat     = zeros(Float64, nf, n_slots, n)
+    face_K_mat     = zeros(Float64, nf, n_slots, n)
+    cell_areas     = Vector{Float64}(undef, n)
+    z_mins         = fill(NaN, n)
+    z_maxs         = fill(NaN, n)
+    n_grid         = zeros(Float64, n)
+    # per cell, per polygon side: profile elevations, activation levels in
+    # this cell, width (the sides in a canonical direction, so that the two
+    # cells of a face sample the same points)
+    side_z   = Vector{Vector{Vector{Float64}}}(undef, n)
+    side_act = Vector{Vector{Vector{Float64}}}(undef, n)
+    side_W   = Vector{Vector{Float64}}(undef, n)
+
+    # ── Step 1: per cell — working grid, hypsometry, connectivity, sides ──
+    @info "  Cells: working grid, hypsometric curves, connectivity..."
+    d2m = _EARTH_R * π / 180.0
     Threads.@threads for ci in 1:n
         cell = mesh.cells[ci]
         bnd  = cell.boundary
-
-        # Bounding box
-        bb_lon_min = minimum(Float64(v[1]) for v in bnd)
-        bb_lon_max = maximum(Float64(v[1]) for v in bnd)
-        bb_lat_min = minimum(Float64(v[2]) for v in bnd)
-        bb_lat_max = maximum(Float64(v[2]) for v in bnd)
-        dlon = bb_lon_max - bb_lon_min
-        dlat = bb_lat_max - bb_lat_min
-
-        # Halton candidates → PIP filter
-        cand_lons = bb_lon_min .+ h2 .* dlon
-        cand_lats = bb_lat_min .+ h3 .* dlat
-        inside    = [_point_in_ring(cand_lons[j], cand_lats[j], bnd)
-                     for j in 1:n_samples]
-        in_lons   = cand_lons[inside]
-        in_lats   = cand_lats[inside]
-        n_in      = length(in_lons)
-
+        lonc = Float64(cell.center_lon); latc = Float64(cell.center_lat)
+        mx = d2m * cosd(latc); my = d2m
         cell_areas[ci] = _polygon_area_m2(bnd)
+        sides = _polygon_sides(bnd)
+        ns = length(sides)
 
-        if n_in == 0
-            # Degenerate cell — fill with NaN
-            elev_bins_mat[:, ci]  .= NaN
-            vol_curve_mat[:, ci]  .= 0.0
-            area_curve_mat[:, ci] .= 0.0
-            z_mins[ci] = NaN;  z_maxs[ci] = NaN
+        # sides: profiles (midpoint samples, canonical direction)
+        sz = Vector{Vector{Float64}}(undef, ns); sW = zeros(ns)
+        slon = Vector{Vector{Float64}}(undef, ns); slat = Vector{Vector{Float64}}(undef, ns)
+        for (k, (va, vb)) in enumerate(sides)
+            a1, a2, b1, b2 = Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2])
+            (a1, a2) > (b1, b2) && ((a1, a2, b1, b2) = (b1, b2, a1, a2))
+            W = _haversine_m(a1, a2, b1, b2); sW[k] = W
+            m = max(2, ceil(Int, W / spacing))
+            f = [(q - 0.5) / m for q in 1:m]
+            slon[k] = a1 .+ f .* (b1 - a1); slat[k] = a2 .+ f .* (b2 - a2)
+            sz[k] = _sample(slon[k], slat[k])
+        end
+        side_z[ci] = sz; side_W[ci] = sW
+        side_act[ci] = [copy(v) for v in sz]
+
+        # working grid over the bounding box, local metric frame at the cell centre
+        px = [(Float64(v[1]) - lonc) * mx for v in bnd]; py = [(Float64(v[2]) - latc) * my for v in bnd]
+        xmin, xmax = extrema(px); ymin, ymax = extrema(py)
+        wx = max(xmax - xmin, 1e-6); wy = max(ymax - ymin, 1e-6)
+        h = min(px_size_m, sqrt(wx * wy / n_samples))
+        h = max(h, sqrt(wx * wy / 250_000))                    # at most 250 000 points
+        nxg = max(1, ceil(Int, wx / h)); nyg = max(1, ceil(Int, wy / h))
+        dxg = wx / nxg; dyg = wy / nyg
+        glon = Float64[]; glat = Float64[]; gi = Int32[]; gj = Int32[]
+        for j in 1:nyg, i in 1:nxg
+            lo = lonc + (xmin + (i - 0.5) * dxg) / mx; la = latc + (ymin + (j - 0.5) * dyg) / my
+            _point_in_ring(lo, la, bnd) || continue
+            push!(glon, lo); push!(glat, la); push!(gi, i); push!(gj, j)
+        end
+        gz = _sample(glon, glat)
+        keep = findall(isfinite, gz)
+        zg = gz[keep]; gi = gi[keep]; gj = gj[keep]
+        gx = [xmin + (Int(gi[p]) - 0.5) * dxg for p in eachindex(zg)]
+        gy = [ymin + (Int(gj[p]) - 0.5) * dyg for p in eachindex(zg)]
+        np = length(zg); n_grid[ci] = np
+        if np == 0
+            elev_bins_mat[:, ci] .= NaN; vol_curve_mat[:, ci] .= 0.0; area_curve_mat[:, ci] .= 0.0
             continue
         end
 
-        # Reproject to DEM CRS
-        native_xs, native_ys = if isempty(raster.proj)
-            copy(in_lons), copy(in_lats)
-        else
-            xs = copy(in_lons);  ys = copy(in_lats);  zs = zeros(n_in)
-            wgs84   = _crs_gis(4326)
-            dem_crs = _crs_gis(raster.proj)
-            ArchGDAL.createcoordtrans(wgs84, dem_crs) do xform
-                ArchGDAL.transform!(xs, ys, zs, xform)
+        # shared extremes: the grid and the side profiles
+        z_min = minimum(zg); z_max = maximum(zg)
+        for v in sz, zz in v
+            isfinite(zz) || continue
+            zz < z_min && (z_min = zz); zz > z_max && (z_max = zz)
+        end
+        z_mins[ci] = z_min; z_maxs[ci] = z_max
+
+        # connectivity to the main basin
+        conn = zg
+        seed = argmin(zg)
+        if connectivity
+            idx = zeros(Int32, nxg, nyg)
+            for p in 1:np; idx[gi[p], gj[p]] = p; end
+            hg = max(dxg, dyg)
+            smask = zeros(UInt32, np); touched = UInt32(0)
+            for p in 1:np, (k, (va, vb)) in enumerate(sides)
+                k > 32 && break
+                d = _seg_dist(gx[p], gy[p], (Float64(va[1]) - lonc) * mx, (Float64(va[2]) - latc) * my,
+                              (Float64(vb[1]) - lonc) * mx, (Float64(vb[2]) - latc) * my)
+                if d <= 0.75 * hg
+                    smask[p] |= UInt32(1) << (k - 1); touched |= UInt32(1) << (k - 1)
+                end
             end
-            xs, ys
+            seed, conn = _cell_connectivity(zg, idx, gi, gj, smask, min(2, count_ones(touched)))
+            # activation level of each side point in this cell: the easiest
+            # connection among the grid points next to it
+            for k in 1:ns
+                act = side_act[ci][k]
+                for q in eachindex(act)
+                    zp = sz[k][q]; isfinite(zp) || continue
+                    x = (slon[k][q] - lonc) * mx; y = (slat[k][q] - latc) * my
+                    i0 = clamp(floor(Int, (x - xmin) / dxg) + 1, 1, nxg)
+                    j0 = clamp(floor(Int, (y - ymin) / dyg) + 1, 1, nyg)
+                    best = Inf
+                    for jj in max(1, j0 - 1):min(nyg, j0 + 1), ii in max(1, i0 - 1):min(nxg, i0 + 1)
+                        p = Int(idx[ii, jj]); p == 0 && continue
+                        hypot(gx[p] - x, gy[p] - y) <= 1.5 * hg || continue
+                        c = max(zp, conn[p]); c < best && (best = c)
+                    end
+                    act[q] = isfinite(best) ? best : zp
+                end
+            end
         end
 
-        # Sample elevations at all interior points
-        sample_elevs = Vector{Float64}(undef, n_in)
-        for j in 1:n_in
-            col_f, row_f = _affine_to_pixel(native_xs[j], native_ys[j], raster.gt)
-            sample_elevs[j] = _bilinear(raster.band, col_f, row_f,
-                                         raster.nx, raster.ny, raster.nodata_val)
-        end
-        valid_elevs = filter(isfinite, sample_elevs)
-        if isempty(valid_elevs)
-            elev_bins_mat[:, ci]  .= NaN
-            vol_curve_mat[:, ci]  .= 0.0
-            area_curve_mat[:, ci] .= 0.0
-            z_mins[ci] = NaN;  z_maxs[ci] = NaN
-            continue
-        end
-
-        sort!(valid_elevs)
-        z_min = valid_elevs[1]
-        z_max = valid_elevs[end]
-        z_mins[ci] = z_min
-        z_maxs[ci] = z_max
-
-        # Build n_bins quantile-spaced elevation knots spanning [z_min, z_max]
-        bins = range(z_min, z_max, length=n_bins)
-        A_cell = cell_areas[ci]
-        n_valid = length(valid_elevs)
-        dA = A_cell / n_valid   # area element per sample point (uniform weights)
-
-        # We scan through sorted valid_elevs once per bin.
-        # For each WSE knot, volume = sum over all inundated samples of
-        #   dA × (wse_k - z_sample)
-        # This can be maintained incrementally:
-        #   when a new sample s crosses below wse_k, add dA*(wse_k - z_s)
-        #   for already-inundated samples, add dA*(wse_{k} - wse_{k-1}) to cum_vol
-        #
-        #   cum_vol[k] = cum_vol[k-1]
-        #              + n_newly_inundated * dA * (wse_k - their_elevation)   [new samples]
-        #              + n_already_inundated_prev * dA * (wse_k - wse_{k-1}) [depth increase]
-
-        cum_area   = 0.0
-        cum_vol    = 0.0
-        bin_idx    = 1        # next unprocessed sample index in sorted valid_elevs
-        n_inundated = 0       # count of samples already below WSE
-        prev_wse   = z_min
-
+        # hypsometric curve (level pool over the whole cell) and wetted-area centroid
+        bins = range(z_min, z_max, length = n_bins)
+        A_cell = cell_areas[ci]; dA = A_cell / np
+        zs = sort(zg)
+        oc = sortperm(conn)
+        cum_area = 0.0; cum_vol = 0.0; ptr = 1; n_in = 0; prev = z_min
+        cptr = 1; sx = 0.0; sy = 0.0; nc = 0
         for k in 1:n_bins
-            wse_k = Float64(bins[k])
-
-            # Volume increase for samples already inundated in previous bins:
-            # each gains (wse_k - prev_wse) × dA additional depth
-            cum_vol += n_inundated * dA * (wse_k - prev_wse)
-
-            # Bring in any new samples that fall below wse_k
-            while bin_idx <= n_valid && valid_elevs[bin_idx] <= wse_k
-                z_s      = valid_elevs[bin_idx]
-                cum_area += dA
-                cum_vol  += dA * (wse_k - z_s)
-                n_inundated += 1
-                bin_idx  += 1
+            w = Float64(bins[k])
+            cum_vol += n_in * dA * (w - prev)
+            while ptr <= np && zs[ptr] <= w
+                cum_area += dA; cum_vol += dA * (w - zs[ptr]); n_in += 1; ptr += 1
             end
-
-            elev_bins_mat[k,  ci] = wse_k
-            area_curve_mat[k, ci] = cum_area
-            vol_curve_mat[k,  ci] = cum_vol
-            prev_wse = wse_k
+            while cptr <= np && conn[oc[cptr]] <= w
+                p = oc[cptr]; sx += gx[p]; sy += gy[p]; nc += 1; cptr += 1
+            end
+            elev_bins_mat[k, ci] = w; area_curve_mat[k, ci] = cum_area; vol_curve_mat[k, ci] = cum_vol
+            wet_cx_mat[k, ci] = nc > 0 ? sx / nc : gx[seed]
+            wet_cy_mat[k, ci] = nc > 0 ? sy / nc : gy[seed]
+            prev = w
         end
     end
 
-    # ── Step 2: Edge sill elevations ──────────────────────────────────────
-    @info "  Sampling edge sill elevations..."
-
-    # Build a cell_id → index map (raw and normalised IDs)
+    # ── Step 2: faces and boundary sides ──────────────────────────────────
+    @info "  Faces: activation levels and face tables..."
     id_to_idx = Dict{String,Int}(cell.id => i for (i, cell) in enumerate(mesh.cells))
     for (i, cell) in enumerate(mesh.cells)
         id_to_idx[_to_hex_safe(cell.id)] = i
     end
-
-    # For each cell, sample the DEM along each shared edge.
-    # NOTE: must be serial (not Threads.@threads). The ArchGDAL coordinate transform
-    # inside this loop uses PyCall, whose GC finaliser (pydecref) is not thread-safe
-    # with Python 3.13 on Windows — a GC cycle on a non-main thread triggers
-    # EXCEPTION_ACCESS_VIOLATION in PyObject_ClearWeakRefs (Bug 57, same root cause
-    # as Bug 50 in _shared_edge).  The hypsometric curve build (Step 1) dominates
-    # wall time; the edge sill loop is fast even serially at res 18 (29,902 cells).
-    # Valid DEM elevations along the arc (lon1, lat1)–(lon2, lat2), sampled every `spacing`.
-    function _edge_profile(lon1, lat1, lon2, lat2)
-        e_lons, e_lats = _arc_sample_lons_lats(lon1, lat1, lon2, lat2, spacing)
-        n_ep = length(e_lons)
-        native_xs, native_ys = if isempty(raster.proj)
-            e_lons, e_lats
-        else
-            xs = copy(e_lons);  ys = copy(e_lats);  zs = zeros(n_ep)
-            wgs84   = _crs_gis(4326)
-            dem_crs = _crs_gis(raster.proj)
-            ArchGDAL.createcoordtrans(wgs84, dem_crs) do xform
-                ArchGDAL.transform!(xs, ys, zs, xform)
-            end
-            xs, ys
-        end
-        elevs = Float64[]
-        for j in 1:n_ep
-            col_f, row_f = _affine_to_pixel(native_xs[j], native_ys[j], raster.gt)
-            v = _bilinear(raster.band, col_f, row_f, raster.nx, raster.ny, raster.nodata_val)
-            isfinite(v) && push!(elevs, v)
-        end
-        return elevs
+    # index of the polygon side of cell c that is the edge (lon1, lat1, lon2, lat2)
+    _side_of(c, edge) = findfirst(s -> _side_is_shared(s[1], s[2], (edge,)), _polygon_sides(mesh.cells[c].boundary))
+    function _store!(slot, ci, z, act, W)
+        ok = [q for q in eachindex(z) if isfinite(z[q])]
+        length(ok) >= 2 || return false
+        z0, zr, fa, fp, fk = face_table_from_profile(z[ok], W / length(ok); act = act[ok], nf = nf)
+        edge_sills_mat[slot, ci] = z0
+        face_zr_mat[slot, ci]    = zr
+        face_raise_mat[slot, ci] = z0 - minimum(z[ok])
+        face_A_mat[:, slot, ci] .= fa; face_P_mat[:, slot, ci] .= fp; face_K_mat[:, slot, ci] .= fk
+        return true
     end
-
+    n_raised = 0; n_faces = 0; max_raise = 0.0
     for ci in 1:n
         cell_i = mesh.cells[ci]
         nbrs   = _nbrs(cell_i)
-        shared = NTuple{4,Float64}[]           # this cell's sides that are faces
         in_mesh = falses(length(nbrs))
-        for (slot, nb_id) in enumerate(nbrs)   # slot = position in the neighbour list
-            ci_nb = get(id_to_idx, nb_id, get(id_to_idx, _to_hex_safe(nb_id), 0))
-            ci_nb == 0 && continue
+        used = falses(length(side_z[ci]))                  # sides that are faces
+        for (slot, nb_id) in enumerate(nbrs)               # slot = position in the neighbour list
+            cj = get(id_to_idx, nb_id, get(id_to_idx, _to_hex_safe(nb_id), 0))
+            cj == 0 && continue
             in_mesh[slot] = true
-
-            cell_j  = mesh.cells[ci_nb]
-            edge    = _shared_edge(cell_i.boundary, cell_j.boundary)
-            if edge === nothing
-                # Fallback: use min of the two cell z_mins
-                zmin_i = z_mins[ci];  zmin_j = z_mins[ci_nb]
-                edge_sills_mat[slot, ci] = isnan(zmin_i) || isnan(zmin_j) ?
-                    NaN : min(zmin_i, zmin_j)
+            edge = _shared_edge(cell_i.boundary, mesh.cells[cj].boundary)
+            ki = edge === nothing ? nothing : _side_of(ci, edge)
+            kj = edge === nothing ? nothing : _side_of(cj, edge)
+            if ki === nothing || kj === nothing
+                zi = z_mins[ci]; zj = z_mins[cj]           # no common side found: no table
+                edge_sills_mat[slot, ci] = isnan(zi) || isnan(zj) ? NaN : min(zi, zj)
                 continue
             end
-
-            lon1, lat1, lon2, lat2 = edge
-            push!(shared, (lon1, lat1, lon2, lat2))
-
-            valid_edge_elevs = _edge_profile(lon1, lat1, lon2, lat2)
-            edge_sills_mat[slot, ci] = isempty(valid_edge_elevs) ? NaN : minimum(valid_edge_elevs)
-
-            # ── Face table (layout 3) ───────────────────────────────────────
-            # Flow area, wetted width and conveyance integral of the face's
-            # own profile on the face's own levels (face_table_from_profile).
-            # One table per face: computed from the lower-index cell and
-            # copied to the neighbour's slot, so both cells hold the same
-            # numbers (and the same sill).
-            if length(valid_edge_elevs) >= 2
-                W  = _haversine_m(lon1, lat1, lon2, lat2)
-                dx = W / length(valid_edge_elevs)
-                slot_nb = findfirst(id -> get(id_to_idx, id, get(id_to_idx, _to_hex_safe(id), 0)) == ci,
-                                    _nbrs(cell_j))
-                if ci > ci_nb && slot_nb !== nothing && face_P_mat[nf, slot_nb, ci_nb] > 0.0
-                    edge_sills_mat[slot, ci] = edge_sills_mat[slot_nb, ci_nb]
-                    face_zr_mat[slot, ci]    = face_zr_mat[slot_nb, ci_nb]
-                    face_A_mat[:, slot, ci] .= view(face_A_mat, :, slot_nb, ci_nb)
-                    face_P_mat[:, slot, ci] .= view(face_P_mat, :, slot_nb, ci_nb)
-                    face_K_mat[:, slot, ci] .= view(face_K_mat, :, slot_nb, ci_nb)
-                else
-                    z0, zr, fa, fp, fk = face_table_from_profile(valid_edge_elevs, dx; nf = nf)
-                    edge_sills_mat[slot, ci] = z0
-                    face_zr_mat[slot, ci]    = zr
-                    face_A_mat[:, slot, ci] .= fa
-                    face_P_mat[:, slot, ci] .= fp
-                    face_K_mat[:, slot, ci] .= fk
-                end
+            used[ki] = true
+            slot_nb = findfirst(id -> get(id_to_idx, id, get(id_to_idx, _to_hex_safe(id), 0)) == ci,
+                                _nbrs(mesh.cells[cj]))
+            if ci > cj && slot_nb !== nothing && face_P_mat[nf, slot_nb, cj] > 0.0
+                # one table per face: computed from the lower-index cell, copied here
+                edge_sills_mat[slot, ci] = edge_sills_mat[slot_nb, cj]
+                face_zr_mat[slot, ci]    = face_zr_mat[slot_nb, cj]
+                face_raise_mat[slot, ci] = face_raise_mat[slot_nb, cj]
+                face_A_mat[:, slot, ci] .= view(face_A_mat, :, slot_nb, cj)
+                face_P_mat[:, slot, ci] .= view(face_P_mat, :, slot_nb, cj)
+                face_K_mat[:, slot, ci] .= view(face_K_mat, :, slot_nb, cj)
+                continue
             end
-            # With fewer than two valid points the slot keeps zeros (no table).
+            z  = side_z[ci][ki]; ai = side_act[ci][ki]; aj = side_act[cj][kj]
+            m  = length(z)
+            act = Vector{Float64}(undef, m)
+            for q in 1:m
+                qj = length(aj) == m ? q : clamp(round(Int, (q - 0.5) / m * length(aj) + 0.5), 1, length(aj))
+                a = max(ai[q], isfinite(aj[qj]) ? aj[qj] : ai[q])
+                act[q] = isfinite(z[q]) ? max(z[q], a) : NaN
+            end
+            if _store!(slot, ci, z, act, side_W[ci][ki])
+                n_faces += 1
+                r = face_raise_mat[slot, ci]
+                r > 0.05 && (n_raised += 1); r > max_raise && (max_raise = r)
+            end
         end
-
-        # ── Boundary sides (0.7.0) ──────────────────────────────────────────
-        # A polygon side that is not a face gets a face table too, for the
-        # open-boundary outflow (which until 0.7.0 took a rectangle of the full
-        # side width above the cell's lowest ground). They go in the slots
-        # without an in-mesh neighbour, in polygon-side order
-        # (`boundary_side_slots`; the ghost-edge builder assigns the same).
+        # boundary sides: the slots without an in-mesh neighbour, in polygon-side order
         free = boundary_side_slots(n_slots, in_mesh)
-        if !isempty(free)
-            b = 0
-            for (va, vb) in _polygon_sides(cell_i.boundary)
-                _side_is_shared(va, vb, shared) && continue
-                b += 1
-                b > length(free) && break
-                elevs = _edge_profile(Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2]))
-                length(elevs) >= 2 || continue
-                W  = _haversine_m(Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2]))
-                z0, zr, fa, fp, fk = face_table_from_profile(elevs, W / length(elevs); nf = nf)
-                slot = free[b]
-                edge_sills_mat[slot, ci] = z0
-                face_zr_mat[slot, ci]    = zr
-                face_A_mat[:, slot, ci] .= fa
-                face_P_mat[:, slot, ci] .= fp
-                face_K_mat[:, slot, ci] .= fk
-            end
+        b = 0
+        for k in eachindex(used)
+            used[k] && continue
+            b += 1
+            b > length(free) && break
+            _store!(free[b], ci, side_z[ci][k], side_act[ci][k], side_W[ci][k])
         end
     end
 
     # ── Store results ─────────────────────────────────────────────────────
-    mesh.array_vars["sgs_elev_bins"]       = elev_bins_mat
-    mesh.array_vars["sgs_vol_curve"]       = vol_curve_mat
-    mesh.array_vars["sgs_area_curve"]      = area_curve_mat
-    mesh.array_vars["sgs_edge_sills"]      = edge_sills_mat
+    mesh.array_vars["sgs_elev_bins"]  = elev_bins_mat
+    mesh.array_vars["sgs_vol_curve"]  = vol_curve_mat
+    mesh.array_vars["sgs_area_curve"] = area_curve_mat
+    mesh.array_vars["sgs_wet_cx"]     = wet_cx_mat
+    mesh.array_vars["sgs_wet_cy"]     = wet_cy_mat
+    mesh.array_vars["sgs_edge_sills"] = edge_sills_mat
+    mesh.array_vars["sgs_face_zr"]    = face_zr_mat
+    mesh.array_vars["sgs_face_raise"] = face_raise_mat
+    mesh.array_vars["sgs_face_A"]     = reshape(face_A_mat, nf*n_slots, n)
+    mesh.array_vars["sgs_face_P"]     = reshape(face_P_mat, nf*n_slots, n)
+    mesh.array_vars["sgs_face_K"]     = reshape(face_K_mat, nf*n_slots, n)
 
-    # R-A flux tables: reshape (n_bins, n_slots, n) → (n_bins×n_slots, n) for parquet
-    mesh.array_vars["sgs_face_zr"] = face_zr_mat
-    mesh.array_vars["sgs_face_A"]  = reshape(face_A_mat, nf*n_slots, n)
-    mesh.array_vars["sgs_face_P"]  = reshape(face_P_mat, nf*n_slots, n)
-    mesh.array_vars["sgs_face_K"]  = reshape(face_K_mat, nf*n_slots, n)
-
-    mesh.static_vars["sgs_cell_area"] = cell_areas
-    mesh.static_vars["sgs_z_min"]     = z_mins
-    mesh.static_vars["sgs_z_max"]     = z_maxs
-    mesh.static_vars["sgs_n_bins"]    = fill(Float64(n_bins), n)
-    mesh.static_vars["sgs_layout"]    = fill(3.0, n)   # 3: face tables (2: per-cell edge curves)
+    mesh.static_vars["sgs_cell_area"]    = cell_areas
+    mesh.static_vars["sgs_z_min"]        = z_mins
+    mesh.static_vars["sgs_z_max"]        = z_maxs
+    mesh.static_vars["sgs_n_bins"]       = fill(Float64(n_bins), n)
+    mesh.static_vars["sgs_layout"]       = fill(3.0, n)   # 3: face tables (2: per-cell edge curves)
+    mesh.static_vars["sgs_connectivity"] = fill(connectivity ? 1.0 : 0.0, n)
+    mesh.static_vars["sgs_n_grid"]       = n_grid
 
     n_ok = count(isfinite, z_mins)
-    @info "SGS tables built in $(round(time()-t0, digits=1))s: " *
-          "$n_ok / $n cells with valid curves"
+    @info "SGS tables built in $(round(time()-t0, digits=1))s: $n_ok / $n cells with valid curves; " *
+          "grid points per cell: median $(round(Int, sort(n_grid)[max(1, n ÷ 2)]))"
+    connectivity && @info "  Connectivity: $n_raised of $n_faces faces have their sill raised by more than " *
+          "5 cm (largest $(round(max_raise, digits=2)) m) — see sgs_face_raise"
     return mesh
 end
 
@@ -2658,6 +2755,8 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         mesh.array_vars["sgs_edge_sills"][:, i],
         mesh.array_vars["sgs_face_zr"][:, i],
         fcol("sgs_face_A"), fcol("sgs_face_P"), fcol("sgs_face_K"),
+        haskey(mesh.array_vars, "sgs_wet_cx") ? mesh.array_vars["sgs_wet_cx"][:, i] : zeros(n_bins),
+        haskey(mesh.array_vars, "sgs_wet_cy") ? mesh.array_vars["sgs_wet_cy"][:, i] : zeros(n_bins),
     )
 end
 

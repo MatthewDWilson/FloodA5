@@ -87,7 +87,7 @@ end
 
 using .A5Grid
 using .A5Grid: SGSTable, wse_from_volume, wetted_area_from_wse,
-               face_apk, face_table_from_profile,
+               face_apk, face_table_from_profile, wet_centroid,
                sgs_table, build_sgs_tables!,
                grid_disk_neighbours, grid_disk_neighbours_batch,
                _polygon_area_m2, _shared_edge, _haversine_m
@@ -387,6 +387,14 @@ mutable struct StepWorkspace
     # SGS (0.7.0): flow area of each face at the last step (ne), for the
     # time-step limit of partly wet cells (_sgs_face_rate)
     face_A    :: Vector{Float64}
+    # SGS flow-path geometry (0.7.0, _sgs_path): wetted-area centroid (m from
+    # the cell centre) and wetted fraction of each cell this step (n), and
+    # per face the centre-to-centre vector i→j (m) (ne; built by _edge_slots!)
+    wcx       :: Vector{Float64}
+    wcy       :: Vector{Float64}
+    wfrac     :: Vector{Float64}
+    e_dx      :: Vector{Float64}
+    e_dy      :: Vector{Float64}
 end
 StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Float64[], Bool[], Int[], Int[],
@@ -394,6 +402,7 @@ StepWorkspace() = StepWorkspace(Float64[], Float64[], Float64[], Float64[], Floa
                                 Int[], UInt32[],
                                 zeros(0, 0), zeros(0, 0), Float64[], Float64[], Float64[], Float64[],
                                 Int[], Int[], Int[], Int[], Float64[], falses(0),
+                                Float64[], Float64[], Float64[], Float64[], Float64[],
                                 Float64[], Float64[], Float64[], Float64[], Float64[])
 
 # BCType and GhostEdge must be defined before FlowState (which has ghost_cell_bc field).
@@ -916,6 +925,8 @@ function _workspace!(state::FlowState)::StepWorkspace
     n  = length(state.cell_ids); ne = state.edges.n_edges
     if length(ws.dV) != n
         resize!(ws.dV, n); resize!(ws.wse, n); resize!(ws.out, n)
+        resize!(ws.wcx, n); resize!(ws.wcy, n); resize!(ws.wfrac, n)
+        fill!(ws.wcx, 0.0); fill!(ws.wcy, 0.0); fill!(ws.wfrac, 1.0)
     end
     if length(ws.edge_vol) != ne
         resize!(ws.edge_vol, ne); resize!(ws.flux_prev, ne)
@@ -1132,6 +1143,16 @@ function _edge_slots!(state::FlowState, ws::StepWorkspace)
         ci = state.edges.cell_i[e]; cj = state.edges.cell_j[e]
         ws.slot_i[e] = _adjacency_slot(state.adj_matrix, ci, cj, max_nb)
         ws.slot_j[e] = _adjacency_slot(state.adj_matrix, cj, ci, max_nb)
+    end
+    # centre-to-centre vector of each face, i → j (m, local east/north): the
+    # frame of the wetted-area centroids (_sgs_path)
+    resize!(ws.e_dx, ne); resize!(ws.e_dy, ne)
+    d2m = A5Grid._EARTH_R * π / 180.0
+    @inbounds for e in 1:ne
+        ci = state.edges.cell_i[e]; cj = state.edges.cell_j[e]
+        latm = 0.5 * (state.cell_lats[ci] + state.cell_lats[cj])
+        ws.e_dx[e] = (state.cell_lons[cj] - state.cell_lons[ci]) * d2m * cosd(latm)
+        ws.e_dy[e] = (state.cell_lats[cj] - state.cell_lats[ci]) * d2m
     end
     return ws
 end
@@ -3363,7 +3384,8 @@ function step_sgs!(state::FlowState, dt::Float64; velocity::Bool = true)
     wse = ws.wse
     # per-cell writes only (WP4); body shared with the device path (WP5)
     foreach_index!(CPUThreads(), n, _sgs_wse_k!, (wse = wse, tables = state.sgs_tables,
-                                                  volume = state.volume))
+                                                  volume = state.volume, wcx = ws.wcx, wcy = ws.wcy,
+                                                  wfrac = ws.wfrac))
 
     # ── WLSQ non-orthogonal gradient correction (flow-direction-fixes) ─────
     # Unlike step_standard!, `wse` here is already a full per-cell array
@@ -4037,7 +4059,9 @@ function run_flood_model(;
     halton_seed      :: Int     = 0,
     flow_method      :: Symbol  = :sgs,
     sgs_bins         :: Int     = 100,
-    sgs_samples      :: Int     = 512,
+    sgs_samples      :: Int     = 1600,
+    sgs_connectivity :: Bool    = true,     # 0.7.0: face activation levels (mesh generation)
+    sgs_path         :: Bool    = true,     # 0.7.0: flow-path geometry of partly wet cells
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
@@ -4282,7 +4306,7 @@ function run_flood_model(;
             t0 = time()
             build_sgs_tables!(mesh, dem_source;
                               n_bins=sgs_bins, n_samples=sgs_samples,
-                              halton_seed=halton_seed)
+                              connectivity=sgs_connectivity)
             tl.sgs_tables = time() - t0
             @info "SGS tables built in $(_fmt_elapsed(tl.sgs_tables))"
             mesh_modified = true
@@ -4545,7 +4569,7 @@ function run_flood_model(;
             "eta_filter" => eta_filter, "momentum_damping" => momentum_damping,
             "momentum_damping_scale" => momentum_damping_scale,
             "open_boundary" => open_boundary, "boundary_limiter" => boundary_limiter,
-            "sgs_conveyance" => sgs_conveyance,
+            "sgs_conveyance" => sgs_conveyance, "sgs_path" => sgs_path,
             "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
             "manning_n" => manning_n, "friction" => friction_source,
             "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
@@ -4585,6 +4609,7 @@ function run_flood_model(;
     sgs_conveyance in (:twod, :lumped) ||
         throw(ArgumentError("sgs_conveyance must be :twod or :lumped"))
     SGS_CONVEYANCE[] = sgs_conveyance
+    SGS_PATH[] = sgs_path
     limiter_stats && _lstats_reset!(flow_state.edges.n_edges)
     tl.source_setup = time() - t0_src
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  courant=$(courant)  " *
@@ -4756,7 +4781,22 @@ Flow model options:
                                  mesh built with --flow-model sgs. Opt-in: its
                                  behaviour at high stage is under investigation.
   --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
-  --sgs-samples N    Halton points per cell for SGS pre-processing (default: 512).
+  --sgs-samples N    Working-grid points per cell (its bounding box) for the
+                     SGS tables (default: 1600; the grid is never coarser
+                     than the DEM's pixels allow, nor finer than a pixel).
+  --sgs-connectivity on|off
+                     (mesh generation) on (default): a point of a face conveys
+                     only from the level at which it is connected, below the
+                     water, to the main basins of both cells — a barrier
+                     inside a cell closes the faces behind it up to its
+                     crest (or to the sill of a gap through it). off: every
+                     face point conveys from its own elevation.
+  --sgs-path on|off  (SGS) on (default): the slope across a face is taken
+                     over the distance between the wetted areas of the two
+                     cells, and the face's flow area is projected on that
+                     direction, so a channel crossing cells obliquely keeps
+                     its own length and width. off: centre-to-centre
+                     distance and the face's full cut (as for a wet cell).
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
   --friction FILE    GeoTIFF friction raster. Per-cell Manning's n sampled at
                      cell centres; overrides --manning-n where finite.
@@ -5446,7 +5486,13 @@ function main(args=String[])
     # understood (PROJECT_STATE, "SGS at the Carlisle peak").
     flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) : :standard
     sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
-    sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 512
+    sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 1600
+    sgs_onoff(flag, v) = v === nothing || v == "on" ? true : v == "off" ? false :
+        (println("ERROR: $flag requires 'on' or 'off' (got '$v')\n"); print_help(1))
+    sgs_conn_val, args = _pop_flag(args, "--sgs-connectivity")
+    sgs_connectivity = sgs_onoff("--sgs-connectivity", sgs_conn_val)
+    sgs_path_val, args = _pop_flag(args, "--sgs-path")
+    sgs_path = sgs_onoff("--sgs-path", sgs_path_val)
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
 
     q_centre_theta = q_centre_theta_val !== nothing ?
@@ -5824,6 +5870,8 @@ function main(args=String[])
         flow_method     = flow_method,
         sgs_bins        = sgs_bins,
         sgs_samples     = sgs_samples,
+        sgs_connectivity = sgs_connectivity,
+        sgs_path        = sgs_path,
         manning_n       = manning_n,
         friction_source = friction_source,
         q_centre_theta            = q_centre_theta,

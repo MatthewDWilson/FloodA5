@@ -257,13 +257,16 @@ end
 
 `:done` if the output completed and records exactly this job's command line.
 """
+# Windows paths are case-insensitive (a run started from d:\ is the run recorded from D:\)
+_same_argv(a, b) = Sys.iswindows() ? lowercase.(String.(a)) == lowercase.(String.(b)) : a == b
+
 function job_status(c::Case, j::Job)
     p = job_output(c, j)
     isfile(p) || return :missing
     try
         FO.format_version(p) >= 2 || return :changed
         ri = FO.run_info(p)
-        ri["argv"] == job_argv(c, j) || return :changed
+        _same_argv(ri["argv"], job_argv(c, j)) || return :changed
         get(get(ri, "summary", Dict()), "completed", false) == true || return :failed
         return :done
     catch
