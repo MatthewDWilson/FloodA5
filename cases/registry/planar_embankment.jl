@@ -139,7 +139,7 @@ function _pe_crossing(r, p, xmin, xmax, up, down, cell, kf)
         "v_emb_interior_far_end" => sum(fin(V, i) for i in Iint_far; init = 0.0),
         "v_emb_east_far_end" => sum(fin(V, i) for i in Ieast_far; init = 0.0))
     for th in 1:6
-        k = FA.frame_at(r, 3600.0 * th; tol = 30.0)
+        k = FA.frame_at(r, 3600.0 * th; tol = 90.0)
         d["v_down_notch_band_$(th)h"] = vn[k]
         d["v_down_off_notch_$(th)h"] = vo[k]
         d["n_row_far_wet_$(th)h"] = nrf[k]
@@ -198,7 +198,7 @@ function _planar_embankment_metrics(ctx)
         haskey(mesh.static, "sgs_z_min") &&
             (d["z_bneck_zmin"] = _pe_bottleneck(mesh.static["sgs_z_min"], mesh.neighbours, up, down))
         for th in 1:6
-            k = FA.frame_at(r, 3600.0 * th; tol = 30.0)
+            k = FA.frame_at(r, 3600.0 * th; tol = 90.0)
             d["wse_up_$(th)h"] = wse_up[k]
             d["v_down_$(th)h"] = v_down[k]
         end
@@ -210,7 +210,7 @@ function _planar_embankment_metrics(ctx)
     # water and standard's (before standard overtops)
     s, t = series["sgs"], series["standard"]
     t0, t1 = out["sgs"]["t_first_down"], out["standard"]["t_first_down"]
-    ks = [(ka, kb) for (ka, kb) in FA.matched_frames(ctx.runs["sgs"], ctx.runs["standard"]; tol = 30.0)
+    ks = [(ka, kb) for (ka, kb) in FA.matched_frames(ctx.runs["sgs"], ctx.runs["standard"]; tol = 90.0)
           if t0 <= s.t[ka] < t1]
     out["sgs_vs_standard"] = Dict(
         "n_frames_compared" => length(ks),

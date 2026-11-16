@@ -228,12 +228,11 @@ _ss_arrive_detail(m, job, ref, q) = "$job: " * join(("x=$(round(Int, xs)) $(_ss_
 # 0.7.0 there were eight (frozen overbank face tables, the legacy donor cap:
 # cases/expected/v0.6.0/); the face tables, positivity limiting and the
 # face-area time-step limit of 0.7.0 fixed them.
-const _SS_XF_PATH = "on A5 the channel zig-zags through the cells: the kernel takes the slope over the " *
-    "centroid distance, which is longer than the channel's own length between cells, and oblique faces " *
-    "cut it wider than it is (plan §2.2 C5; Phase 3, flow-path geometry)"
-const _SS_XFAIL = [
-    "SGS A5 res 18, in bank" => _SS_XF_PATH,
-]
+# (The eighth, A5 in bank, was 0.054 m high with the face tables alone: on A5
+# the channel zig-zags through the cells, and the kernel took the slope over
+# the centre distance and the faces' full oblique cut. The flow-path geometry
+# of 0.7.0, _sgs_path, takes both along the line between the wetted areas.)
+const _SS_XFAIL = Pair{String,String}[]
 function _ss_mark_xfail(chs)
     map(chs) do ch
         i = findfirst(p -> startswith(ch.name, first(p)), _SS_XFAIL)
@@ -418,8 +417,7 @@ let
         over the last hour / Q), arrival times at x = 1000 and 2000 m. The
         SGS checks state the correct behaviour. Until 0.7.0 eight of them
         failed (frozen overbank face tables, the legacy donor cap; record in
-        cases/expected/v0.6.0/); one still does (A5 in bank, 0.05 m high:
-        flow-path geometry) and is kept as an expected failure. Preparation ~5 min; runs ~1 min each
+        cases/expected/v0.6.0/); all pass since 0.7.0. Preparation ~5 min; runs ~1 min each
         on 2 threads at 20 m and A5, 1.5–25 min on 4 threads at 2.5 m (SWE at
         20 m³/s the longest); ~35 min with -P 2.""",
         prep = prep, jobs = jobs,

@@ -137,7 +137,7 @@ function _pw_run_metrics(r, p)
     haskey(mesh.static, "sgs_z_min") &&
         (d["z_bneck_zmin"] = _pe_bottleneck(mesh.static["sgs_z_min"], mesh.neighbours, up, down))
     for th in 1:6
-        k = FA.frame_at(r, 3600.0 * th; tol = 30.0)
+        k = FA.frame_at(r, 3600.0 * th; tol = 90.0)
         d["wse_up_$(th)h"] = wse_up[k]
         d["v_down_$(th)h"] = v_down[k]
         d["row_wet_frac_$(th)h"] = row_wet[k]
@@ -204,14 +204,13 @@ function _pw_detail(m, j)
            "row wet at the end $(_pw_r(100 * _pw(m, j, "row_wet_frac_end"); d = 0))%"
 end
 
-# Checks of the correct behaviour that SGS fails today (0.6.0): kept unweakened
-# and marked as expected failures until fixed. Matched by name prefix.
-const _PW_XF_HOP = "SGS conveys through faces from the DEM profile on the face line only; " *
-    "a barrier inside a cell is not seen (fixed in Phase 3, connectivity)"
-const _PW_XFAIL = Pair{String,String}[
-    "SGS, A5 res 18, thin wall"      => _PW_XF_HOP,
-    "SGS, Cartesian 20 m, thin wall" => _PW_XF_HOP,
-]
+# Checks of the correct behaviour that the model fails (matched by name
+# prefix): none since 0.7.0. Until then SGS conveyed through each face from
+# the DEM profile on the face line only, so a barrier inside a cell was not
+# seen: both thin-wall SGS runs passed 58–64% of the inflow, from the moment
+# the water reached the wall. The activation levels of 0.7.0 (connectivity,
+# HYDRAULICS §9.3) close the faces behind the wall up to its crest.
+const _PW_XFAIL = Pair{String,String}[]
 function _pw_mark_xfail(chs)
     map(chs) do ch
         i = findfirst(p -> startswith(ch.name, first(p)), _PW_XFAIL)

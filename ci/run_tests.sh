@@ -29,6 +29,7 @@ TESTS=(
   test/test_noc_correction.jl
   test/test_sgs_unit.jl
   test/test_sgs_edge_ra_tables.jl
+  test/test_sgs_connectivity.jl
   test/test_inflow_point.jl
   test/test_mirror_symmetry.jl
   test/test_cell_momentum.jl

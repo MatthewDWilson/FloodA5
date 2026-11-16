@@ -105,12 +105,16 @@ end
     @test FC.check(mk([FC.Check("fixed defect", m -> true; xfail = "documented")]), m; io)
     @test occursin("XPASS", String(take!(io)))
     @test !FC.check(mk([FC.Check("ordinary", m -> false), FC.Check("known", m -> false; xfail = "d")]), m; io)
-    # the registered SGS strip case marks only its SGS-behaviour checks
-    xs = [ch for ch in FC.case("sgs_strip").checks if !isempty(ch.xfail)]
-    @test !isempty(xs) && all(ch -> occursin("SGS", ch.name), xs)
+    # sgs_strip had eight expected failures until 0.7.0 (the SGS conveyance
+    # defects) and planar_wall two (the hop over a wall inside a cell); the
+    # checks stay, unweakened, and none is marked now
+    for name in ("sgs_strip", "planar_wall")
+        @test all(ch -> isempty(ch.xfail), FC.case(name).checks)
+        @test count(ch -> occursin("SGS", ch.name), FC.case(name).checks) >= 4
+    end
 end
 
-@testset "C5 — planar_wall: registered, well formed, SGS checks marked (no runs)" begin
+@testset "C5 — planar_wall: registered, well formed, checks unweakened (no runs)" begin
     c = FC.case("planar_wall")
     @test c.tier === :standard
     # 2 walls × 2 meshes × SGS/standard, the flow model always explicit, closed, no shared inputs
@@ -149,18 +153,14 @@ end
     @test thin.width < 20 && thin.x - thin.width / 2 > 981.1 + 5 && thin.x + thin.width / 2 < 1001.1 - 5
     # checks: "no water downstream" for every run but standard flow on the thin wall (cell-mean
     # beds: checked against the ridge they see), stating the correct behaviour; expected
-    # failures only on the SGS thin-wall runs, with the plan's reason; mass and design unmarked
     nodown = [ch for ch in c.checks if occursin("no water downstream of the wall", ch.name)]
     @test length(nodown) == 6
     @test count(ch -> startswith(ch.name, "standard") && occursin("thin wall", ch.name) &&
                       occursin("cell-mean", ch.name), c.checks) == 2
-    xs = [ch for ch in c.checks if !isempty(ch.xfail)]
-    @test length(xs) == 2 && all(ch -> startswith(ch.name, "SGS") && occursin("thin wall", ch.name), xs)
-    @test all(ch -> ch in nodown, xs)
-    @test all(ch -> ch.xfail == "SGS conveys through faces from the DEM profile on the face line only; " *
-                                "a barrier inside a cell is not seen (fixed in Phase 3, connectivity)", xs)
-    @test all(ch -> isempty(ch.xfail), [ch for ch in c.checks if occursin("mass conserved", ch.name) ||
-                                                              startswith(ch.name, "design")])
+    # no expected failures since 0.7.0 (connectivity): the two SGS thin-wall
+    # checks are ordinary checks again
+    @test all(ch -> isempty(ch.xfail), c.checks)
+    @test count(ch -> startswith(ch.name, "SGS") && occursin("thin wall", ch.name), nodown) == 2
     # a run with water downstream fails its check; a dry one passes (the check is not weakened)
     job = "a5_sgs_thin"
     ch = only(ch for ch in nodown if startswith(ch.name, "SGS, A5") && occursin("thin wall", ch.name))
