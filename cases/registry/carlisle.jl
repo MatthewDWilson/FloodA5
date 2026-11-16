@@ -342,3 +342,40 @@ let
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end
+
+# ── carlisle_peak_fine: 5 m references for the peak (0.7.0) ────────────────
+# The 22 m runs of `carlisle_peak` cannot say which of them is nearer the
+# truth: their reference is SWE on cell-mean beds at the same resolution, and
+# an SGS cell with water in a sub-grid channel is not the same thing as a
+# cell-mean cell with that volume spread over it. A 5 m Cartesian grid
+# resolves the banks: local-inertial and SWE on it are what the 22 m models
+# (standard, SWE and SGS) should each be judged against (plan of 2026-11,
+# §9.3). GPU runs: 582 012 cells for 55.5 h is hours for local-inertial and
+# about a day for SWE; they are not part of `carlisle_peak`, which must stay
+# runnable on a CPU in under an hour. The mesh is the benchmark suite's
+# (`julia --project=. benchmarks/run.jl`, test/case_runs/perf/).
+let
+    cart5 = "{case}/../perf/carlisle_cart5.parquet"
+    gpu(prec) = ["--backend", "gpu", "--precision", prec]
+    register!(Case(
+        name = "carlisle_peak_fine", tier = :full,
+        title = "Carlisle to the Eden peak on a 5 m Cartesian grid (GPU): the fine reference for carlisle_peak",
+        doc = "docs/TEST_CASES.md §3",
+        description = """
+        The `carlisle_peak` event (55.5 h, river inflow only) on the 5 m Cartesian
+        mesh of the same domain (582 012 cells), local-inertial (GPU, Float64) and
+        SWE (GPU, Float32), output every 30 min. The reference against which the
+        22 m runs of `carlisle_peak` — standard, SWE and SGS — are compared.
+        Needs a CUDA GPU and the 5 m mesh of the benchmark suite; hours
+        (local-inertial) to about a day (SWE).""",
+        prep = Prep[],
+        jobs = [Job("cart5_li", vcat(["--meshload", cart5, "--flow-model", "standard"], _CARL_PEAK_RUN, gpu("float64"));
+                    threads = 2, mesh = "cartesian5", solver = "li"),
+                Job("cart5_swe", vcat(["--meshload", cart5, "--flow-model", "swe"], _CARL_PEAK_RUN, gpu("float32"));
+                    threads = 2, mesh = "cartesian5", solver = "swe")],
+        analyse = ctx -> Dict(name => Dict("t_end" => r.t[end], "storage_w1_m3" => FA.stored_volume(r, FA.nframes(r)))
+                              for (name, r) in ctx.runs),
+        checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
+                        m -> all(d["mass_balance_rel"] < 1e-6 for (_, d) in m))],
+    ))
+end
