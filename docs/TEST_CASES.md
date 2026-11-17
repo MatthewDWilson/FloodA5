@@ -284,58 +284,67 @@ the water 0.86 m above normal depth at the outlet and was still filling at
 the upstream end, 10-minute ramp. Meshes: Cartesian 20 m (3 rows; the channel
 a quarter of the middle row) with SGS tables or cell-mean beds; A5 res 18
 likewise (every cell the AOI touches: a ragged strip 95 m wide on average); a
-Cartesian 2.5 m reference. Runs (16): SGS (default limiter, and `--limiter
-positivity`), LI and SWE on 20 m; SGS and LI on A5; LI and SWE on 2.5 m;
-8 h (2.5 m: 4 h).
+Cartesian 2.5 m reference. Runs (16): SGS (default, and `--sgs-conveyance
+lumped`), LI and SWE on 20 m; SGS and LI on A5; LI and SWE on 2.5 m; 8 h
+(2.5 m: 4 h).
 
 **Analytic answers** (level δ above the floodplain at uniform flow): 2-D
 (Σ strips h^(5/3), the fine-grid limit) −0.267 / +0.372 m with 3.57 /
 27.34 m²/m of storage; 20 m cell-mean rows +0.045 / +0.409 m (7.71 /
-29.52 m²/m); 20 m rows with exact SGS edge tables (one A, one R = A/P per
-face) −0.254 / +0.409 m. Above the floodplain the volume above the cell-mean
+29.52 m²/m); 20 m rows with their true section and one hydraulic radius
+R = A/P per face (`--sgs-conveyance lumped`) −0.254 / +0.409 m. The SGS
+default sums h^(5/3) over each face's profile and should give the 2-D level. Above the floodplain the volume above the cell-mean
 bed *is* the water volume, so a cell-mean grid's storage differs from the
 true volume only where cells are partly wet (in bank: 2.2× here).
 `cases/scripts/sgs_strip_tables.jl` (a preparation step) compares the SGS
 tables with the terrain directly.
 
-Results (0.4.4; measuring reach x = 1000–2000 m, last frame; storage in m²/m):
+Results (0.7.0; measuring reach x = 1000–2000 m, last frame; storage in m²/m;
+the 0.6.0 SGS values are in `cases/expected/v0.6.0/`):
 
 | | 3 m³/s δ (m) | storage | 20 m³/s δ (m) | storage | dS/dt ÷ Q at 20 m³/s |
 |---|---|---|---|---|---|
 | analytic 2-D | −0.267 | 3.57 | 0.372 | 27.34 | 0 |
+| analytic, lumped 20 m rows | −0.254 | 3.64 | 0.409 | 29.52 | 0 |
 | LI / SWE 2.5 m | −0.263 / −0.264 | 3.57 / 3.56 | 0.373 / 0.373 | 27.38 | 0 |
 | LI / SWE 20 m | 0.045 | 7.70 | 0.408 | 29.52 | 0 |
-| SGS 20 m | −0.001 | 5.05 | 4.75 | 106.7 | 0.75 |
-| SGS 20 m, `--limiter positivity` | −0.259 | 3.61 | 4.42 | 99.0 | 0.73 |
+| **SGS 20 m** | **−0.279** | **3.50** | **0.362** | **26.71** | 0 |
+| SGS 20 m, `--sgs-conveyance lumped` | −0.271 | 3.55 | 0.399 | 28.91 | 0 |
 | LI A5 res 18 | 0.095 | 14.09 | 0.390 | 42.05 | 0 |
-| SGS A5 res 18 | 0.173 (filling) | 17.43 | 0.783 | 49.33 | 0.91 |
+| **SGS A5 res 18** | **−0.277** | **3.50** | **0.340** | **37.35** | 0 |
+| *SGS 20 m, 0.6.0* | *−0.001* | *5.05* | *4.75* | *106.7* | *0.75* |
+| *SGS A5 res 18, 0.6.0* | *0.173 (filling)* | *17.43* | *0.783* | *49.33* | *0.91* |
 
-Findings: (1) storage is measured correctly — the tables hold the terrain's
-volume to 0.3% (A5 median 0.05%), and overbank SGS's water volume equals its
-volume above the cell-mean bed; (2) overbank, an SGS face's flow area stops
-growing when the water rises above the cell's highest DEM sample
-(`build_sgs_tables!` tabulates edge curves on the cell's own z_min–z_max
-levels; `edge_area_radius` returns the top value above them; face points
-above a cell's z_max never wet in its table; the kernel averages the two
-cells' A and R): at δ = 0.4 m faces carry 39% (channel) and 2.5% (floodplain)
-of their true flow area on 20 m, 40% and 3% on A5, and the 20 m tables carry
-at most 4.9 m³/s at the bed slope, so SGS piles water up (δ ≈ 21 m at the
-inflow after 8 h); (3) in bank, the legacy donor cap (SGS's default limiter,
-V/(2N) per edge and step) makes a channel cell hold 2N·Q·Δt before it passes
-Q — brim-full here; positivity limiting removes it. At the `carlisle_peak`
-SGS peak 85% of wet cells, holding 26.1 of 26.7 Mm³, have their water above
-z_max (median 2.9 m above; median cell relief 0.56 m).
+(The 2-D analytic level for the A5 strip's own mean width, 95 m, is +0.290 m
+overbank; its ragged edges hold slack water in both A5 models.)
+
+**What the case found in 0.5.1** (and what 0.7.0 changed; HYDRAULICS §9):
+(1) storage is measured correctly — the tables hold the terrain's volume to
+0.3% (now: 0.3% Cartesian, 3% at worst on A5), and overbank SGS's water
+volume equals its volume above the cell-mean bed; (2) overbank, an SGS face's
+flow area stopped growing when the water rose above the cell's highest DEM
+sample (edge curves on the cell's own levels; the top value above them; the
+kernel averaged the two cells' A and R): at δ = 0.4 m faces carried 39%
+(channel) and 2.5% (floodplain) of their true flow area, and the 20 m tables
+at most 4.9 m³/s at the bed slope — now one table per face, on the face's own
+levels and continued above them (face areas within 1–2%, conveyance within
+3%; the tables carry 417 m³/s); (3) in bank, the legacy donor cap (V/(2N) per
+edge and step) made a channel cell hold 2N·Q·Δt before it passed Q — now
+positivity limiting. Getting the A5 strip right also needed a time-step limit
+from the faces for cells holding only a sliver of the channel (they
+oscillated and held the channel up by up to 0.5 m) and the flow-path geometry
+of partly wet cells (the channel zig-zags through A5 cells: 0.054 m high
+without it, 0.010 m low with it).
 
 Checks: the 2.5 m references against the analytic levels (0.03 m, 3%) and
 in-bank arrival times (10%); the 20 m LI/SWE runs against the cell-mean
-analytic; A5 LI steady and within 0.15 m overbank; the measurement identity;
-mass. The SGS checks state the correct behaviour and **fail** (expected
-failures until SGS is fixed): overbank face areas within 10% (tables), the
-tables carry 20 m³/s, SGS in-bank level/storage (default limiter), SGS
-overbank level within 0.10 m and storage within 10% of 2-D, arrival within
-15% of the 2.5 m reference, A5 SGS in bank and against A5 LI overbank.
-Expected values are recorded only for the runs whose checks pass (and the
-analytic values), not the failing SGS runs or the table diagnostics.
+analytic; A5 LI steady and within 0.15 m overbank; the SGS tables against the
+terrain (volume 1%; face areas and conveyance within 10% / 5%; 20 m³/s at the
+bed slope); SGS 20 m at the 2-D level within 0.03 m and 5% in and out of
+bank; the lumped runs at the lumped level; SGS arrival within 15% of the
+2.5 m reference; A5 SGS within 0.05 m in bank, and overbank no further from
+the 2-D answer for its width than A5 LI; the measurement identity; mass. All
+pass since 0.7.0 (eight were expected failures before).
 
 ### 2d. A wall with no gap: is a barrier inside a cell a barrier? (`planar_wall`)
 
@@ -379,7 +388,8 @@ time (`cross_n_cells`, `cross_y_min/max`), against the foot cells holding
 water then (`touch_*`: the stretch of wall the water has reached), and the
 fraction of the row holding water through time (`row_wet_frac_*`).
 
-Results (0.6.0; `cases/run.jl run planar_wall -P 2`):
+Results of the scheme up to 0.6.0 (`cases/run.jl run planar_wall -P 2`;
+0.7.0 below):
 
 | run | downstream at 6 h | first downstream water | level at the wall then (crest) | upstream level at 6 h |
 |---|---|---|---|---|
@@ -400,8 +410,7 @@ Results (0.6.0; `cases/run.jl run planar_wall -P 2`):
   drifted north on A5) and 7 on the Cartesian grid (y = 180–320 m; 9 foot
   cells, y = 160–340 m, symmetric about the source row); within an hour 93%
   (A5) and 100% (Cartesian) of the row holds water. The upstream level never
-  rises above 5.3 m: the wall is not there. These two checks are **expected
-  failures** until connectivity is added to SGS.
+  rises above 5.3 m: the wall is not there.
 - **The wide wall holds on both meshes and both models**: every route across
   it passes a face that lies on the wall. (SGS reaches only 6.6 m at the wall
   against 7.1 m in standard flow, because its conveyance defects, §2c, keep
@@ -414,12 +423,20 @@ Results (0.6.0; `cases/run.jl run planar_wall -P 2`):
   runs says so (no water downstream until the upstream level reaches that
   ridge).
 
+**0.7.0: SGS holds both walls.** With connectivity (HYDRAULICS §9.3) a
+point of a face conveys only from the level at which it is connected, below
+the water, to the main basins of both cells, so the faces behind the wall are
+closed up to its crest. No water passes either wall in any SGS run; the pond
+rises to 7.07 m (A5) and 7.14 m (Cartesian) against the 4 m wall and 7.08 /
+7.15 m against the 40 m wall (level pool 7.12 / 7.16 m, crests 8.05 / 8.00 m).
+The wall may be moved by up to one cell (the faces that close are those of
+the cells it crosses).
+
 Checks: mass balance and stored volume; the design (level-pool level ≥ 0.5 m
 below the crest; the upstream level stays below the crest and the level-pool
 level in every run); no water downstream (< 1 m³ at 6 h) for the four wide
-runs and the two SGS thin runs (the latter XFAIL); the standard thin runs as
-above. Expected values are recorded for the six runs whose checks pass and
-the design values, not for the two failing SGS runs (as `sgs_strip`).
+runs and the two SGS thin runs (expected failures until 0.7.0); the standard
+thin runs as above.
 
 **A wall on a face is a different test.** In a trial with the thin wall at
 x = 998–1002 m the Cartesian face at x = 1001.1 m lay on it, and the
@@ -433,7 +450,8 @@ centre-based), so the profile is taken half a pixel (1 m) east of the face,
 on the ramp that interpolation makes of the wall's east side (8.0 → 4.99 m
 over one pixel). Sampled at the face itself it would be 7.82 m. The
 half-pixel registration applies to every DEM sample (SGS tables, face
-profiles and cell-mean elevations); it is reported, not changed here.
+profiles and cell-mean elevations); it is a known issue, to be fixed with a
+rerun of every case (PROJECT_STATE).
 
 ---
 
@@ -569,12 +587,13 @@ Results at 6 h (0.4.1; recorded values in brackets):
 | A5 local-inertial | 3.369 | 1.252 (1.25) | 0.29 m | 0.62 | 1.06 | 9 749 |
 | Cartesian SWE | 2.331 (2.331) | | | | | 5 727 (5 736) |
 | Cartesian local-inertial | 2.302 | 0.988 (0.99) | 0.13 m | 0.69 | 0.85 | 5 989 |
-| A5 SGS | 4.300 (4.299) | | | | | 7 717 |
+| A5 SGS | 1.755 (1.755) | | | | | 3 471 |
 
 (§15.11's 3.363 and 2.297 Mm³ are the log's last step line, ~100 s before
 6 h.) The checks: SWE storage and arrival within 1% and 2% of the record,
 local-inertial/SWE ratios within ±0.05, the A5 ratio above the Cartesian one
-by > 0.15, CSI ≥ 0.55 and rms Δh ≤ 0.35 m, SGS within 2%, mass balance.
+by > 0.15, CSI ≥ 0.55 and rms Δh ≤ 0.35 m, SGS within 2% of its record, mass
+balance. (SGS until 0.6.0: 4.300 Mm³, arrival 7 717 s — conveyance held back.)
 
 **The rain is a test forcing.** The 10 mm/h uniform rain comes from the damping
 series (HYDRAULICS §15.6–15.11); it is not the 2005 event's rain. It puts 60 mm
@@ -602,7 +621,13 @@ Results in the window (0.4.4; 49.5 / 52.5 / 55.5 h):
 | A5 local-inertial | 8.01 | 0.74 / 0.76 / 0.76 | 0.53–0.55 m | 0.86–0.87 | 0.87–0.89 | 4.57 |
 | Cartesian SWE | 9.36 | | | | | 4.91 |
 | Cartesian local-inertial | 7.92 | 0.86 / 0.86 / 0.85 | 0.29–0.34 m | 0.92–0.93 | 0.93–0.94 | 4.57 |
-| A5 SGS | 26.67 | | | | | 8.12 |
+| A5 SGS (0.7.0) | 5.94 | 0.52 / 0.55 / 0.57 | 0.97–0.99 m* | 0.61–0.67* | 0.63–0.69* | |
+| *A5 SGS (0.6.0)* | *26.67* | | | | | |
+
+\* SGS against SWE: mean depth V/A for CSI and bias (wet ≥ 0.1 m), water level
+where both are wet for rms Δh (`_carl_sgs_compare`): an SGS depth is measured
+from the cell's lowest ground, so its depth field is not comparable with a
+cell-mean model's.
 
 **Near the peak the local-inertial default stores less than the reference.** In
 the first 6 h with the test rain it stores more. Near the peak:
@@ -612,13 +637,41 @@ the first 6 h with the test rain it stores more. Near the peak:
   0.3–0.6 m lower over the floodplain.
 - **It is insensitive to the mesh.** The two local-inertial runs store 8.01 and
   7.92 Mm³; the two references differ by 12%.
-- **SGS holds the Eden back by metres.** Its water surface is a median 3.0 m above
-  the local-inertial one, and only 0.07 Mm³ is below the cell-mean bed. This
-  points to a conveyance problem at high stage, still to be investigated.
+- **SGS (0.7.0) conveys more than local-inertial.** Until 0.6.0 it held the Eden
+  back by metres (26.7 Mm³; the conveyance defects of §2c). Now it stores 0.57 of
+  the 22 m SWE run where local-inertial stores 0.76. The case's check "SGS no
+  further from SWE than local-inertial" fails and is an expected failure: the
+  22 m SWE run is not a sound reference (below).
 
 Output frames drift late of their nominal times (by up to ~110 s at 55 h, because
 each write is scheduled from the previous one), so frames are matched within
 300 s. `notebooks/03_carlisle.ipynb` analyses both cases.
+
+**`carlisle_peak_fine`: 5 m references (GPU).** The `carlisle_peak` event on
+the benchmark suite's 5 m Cartesian mesh (582 012 cells; `julia --project=.
+benchmarks/run.jl` builds it), local-inertial (GPU Float64, 1 h 10 min) and
+SWE (GPU Float32, 3 h 51 min). Not part of `carlisle_peak`, which must run
+on a CPU.
+
+```bash
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run carlisle_peak_fine -P 2
+```
+
+Compared on the 22 m cells (5 m results aggregated onto each coarse cell;
+water level where at least half the cell is wet; SGS wetted area from its
+tables), at 55.5 h on A5 (SGS conveyance plan §9.3a):
+
+| 22 m model | vs 5 m SWE: storage | level, median (rms) | vs 5 m LI: storage | level, median (rms) |
+|---|---|---|---|---|
+| SWE | 1.24 | +0.36 (0.54) m | 1.47 | +0.78 (0.81) m |
+| local-inertial | 0.94 | −0.16 (0.25) m | 1.12 | +0.25 (0.35) m |
+| SGS | 0.70 | −0.50 (0.54) m | 0.83 | −0.14 (0.24) m |
+
+The 22 m SWE run stores 24% more than 5 m SWE, so it is not a reference.
+SGS reproduces the fine local-inertial solution best; but local-inertial
+itself conveys more than SWE at 5 m (0.84 of its storage), and 22 m
+local-inertial lands close to 5 m SWE through compensating errors (its
+smoothed bed under-conveys). Cartesian 20 m shows the same pattern.
 
 ### Validation data
 

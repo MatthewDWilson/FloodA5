@@ -332,11 +332,11 @@ let
                                             "$(round(m["a5_sgs"]["rms_dh_$w"]; digits = 3)) m (LI $(round(m["a5_li"]["rms_dh_$w"]; digits = 3))), " *
                                             "CSI $(round(m["a5_sgs"]["csi_$w"]; digits = 3)) (LI $(round(m["a5_li"]["csi_$w"]; digits = 3)))"
                                             for w in ("w0", "wmid", "w1")), "; "),
-                        xfail = "0.7.0: SGS is stable and smooth but conveys more than local-inertial, which already " *
-                                "conveys more than SWE here (storage 0.52–0.57 of SWE against 0.74–0.76; water surface " *
-                                "a median 0.9 m below SWE against 0.5 m). The reference is SWE on cell-mean beds at the " *
-                                "same 22 m resolution, which cannot say whether the sub-grid conveyance or the smoothed " *
-                                "bed is nearer the truth: needs a fine-grid (5 m) reference (PROJECT_STATE)")],
+                        xfail = "0.7.0: SGS stores 0.52–0.57 of the 22 m SWE run (local-inertial 0.74–0.76). " *
+                                "The 22 m SWE run is not a reference: against the 5 m references (case " *
+                                "carlisle_peak_fine; plan §9.3a) it stores 24% more than 5 m SWE, SGS is closest of " *
+                                "the 22 m models to 5 m local-inertial (level −0.14 m median), and local-inertial " *
+                                "itself conveys more than SWE at 5 m. The bar is to be restated against the 5 m runs")],
         # (the SGS bar, agreed 2026-11-16, is the last check below. Until 0.7.0
         # SGS stored 2.5× SWE here, the Eden ~3 m high: cases/expected/v0.6.0/)
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
