@@ -6,3 +6,10 @@ numpy
 shapely
 geopandas
 pyarrow
+# DGGS mesh families (mesh/dggs_families.py; test/test_dggs_meshes.jl skips a
+# family whose library is missing). dggal pinned: 0.0.7's Windows wheel crashes
+# on setup (two copies of its eC runtime). healpix-geo: HEALPix cross-check only.
+h3
+dggal==0.0.6
+ecrt==0.0.6
+healpix-geo

@@ -80,12 +80,14 @@ const _EARTH_AREA = 4π * FA.R_EARTH^2
     a5_resolution(g::FA.MeshGeom) -> Int
 
 A5 resolution level of the mesh from its median cell area (an A5 cell at
-level r ≥ 1 is 1/(60·4^(r-1)) of the sphere), or 0 for Cartesian meshes and
-when the areas match no level within 25% — as `mesh.resolution` of a live
-run (0 for Cartesian). Only shown in the diagnostics panel.
+level r ≥ 1 is 1/(60·4^(r-1)) of the sphere), or 0 for non-A5 meshes
+(Cartesian, polygon families, DGGS families — whose own level is not an A5
+level) and when the areas match no level within 25% — as `mesh.resolution`
+of a live A5 run. A blank scheme (format-1 files) is taken as A5. Only shown
+in the diagnostics panel.
 """
 function a5_resolution(g::FA.MeshGeom)
-    g.id_scheme == "cartesian" && return 0
+    (isempty(g.id_scheme) || startswith(g.id_scheme, "a5-")) || return 0
     a = filter(x -> isfinite(x) && x > 0, g.area)
     isempty(a) && return 0
     med = sort(a)[cld(length(a), 2)]

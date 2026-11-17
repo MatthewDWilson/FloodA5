@@ -100,6 +100,13 @@ end
     m = FA.MeshGeom(["x"], [0.0], [0.0], [0.0], [2 * a15], Matrix{Float64}[],
                     zeros(Int32, 0, 1), Dict{String,Vector{Float64}}(), "a5-v1")
     @test RP.a5_resolution(m) == 0                                          # between levels
+    # only A5 meshes (or format-1 files without a scheme) have an A5 level
+    a18 = 4π * FA.R_EARTH^2 / (60 * 4.0^17)
+    for (scheme, lev) in (("a5-v0", 18), ("", 18), ("polygon", 0), ("igeo7", 0), ("h3", 0))
+        m = FA.MeshGeom(["x"], [0.0], [0.0], [0.0], [a18], Matrix{Float64}[],
+                        zeros(Int32, 0, 1), Dict{String,Vector{Float64}}(), scheme)
+        @test RP.a5_resolution(m) == lev
+    end
     # sources: the cells the model uses (nearest centre in degrees), wet at frame 1
     @test rd.source_indices == [RP.nearest_cell(g, SRC_INJ...), RP.nearest_cell(g, SRC_RP...),
                                 RP.nearest_cell(g, SRC_IN...)]

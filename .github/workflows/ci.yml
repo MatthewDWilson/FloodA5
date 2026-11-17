@@ -50,6 +50,8 @@ jobs:
           julia --project=ci -e 'using PyCall; println("PyCall python: ", PyCall.python); pyimport("a5"); println("pya5 ", pyimport("importlib.metadata").version("pya5"), " OK")'
 
       - name: Run test set
+        env:
+          FLOODA5_REQUIRE_DGGS: '1'   # DGGS libraries are installed here: a missing one fails
         run: bash ci/run_tests.sh ci
 
       - name: Thread-count determinism (1 vs 4 threads)

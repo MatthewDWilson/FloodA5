@@ -27,6 +27,8 @@
 #   aggregate.jl    a fine run on a coarse mesh's cells (volume, wetted
 #                   fraction, level where wet) and the like-for-like
 #                   comparison of coarse models, SGS included, with it
+#   mesh_quality.jl geometric quality of a mesh (valence, orthogonality,
+#                   skewness, area uniformity, face orientation)
 #
 # Conventions: cell vectors are in the output file's cell order; frame k is
 # the 1-based frame index; times in seconds; distances in metres.
@@ -50,5 +52,6 @@ include("noise.jl")
 include("channel.jl")
 include("sgs_audit.jl")
 include("aggregate.jl")
+include("mesh_quality.jl")
 
 end # module
