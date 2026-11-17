@@ -11,15 +11,14 @@
 #   cells  stored volume V(η) and wetted area against the analytic surface
 #          (cases/scripts/sgs_strip_geometry.jl), integrated over the cell
 #          polygon on a 0.1 m grid
-#   edges  the R–A edge flow area A_edge = ½(A_i + A_j) and hydraulic radius
-#          R_edge = ½(R_i + R_j), as the flux kernel forms them
-#          (surfacewater/kernels.jl, _face_flux_sgs!), against the face's
-#          analytic flow area and A/(wetted width), sampled every 1 cm
+#   edges  the face table (flow area A, wetted width P, conveyance
+#          K = Σ h^(5/3); A5Grid.face_apk, one table per face since 0.7.0)
+#          against the face's analytic A, P and K, sampled every 1 cm
 # Edges are grouped as "channel" (the face crosses the channel) and
 # "floodplain". For a Cartesian strip (rows along x) also the uniform-flow
 # discharge its tables give: Q(δ) = Σ over the faces of one cross-section of
-# A_edge R_edge^(2/3) √S / n at the upstream cell's level (wse_flow), so the
-# normal level the tables imply, or the most they can carry at the bed slope.
+# K √S / n (2-D form; `Q_lumped`: A (A/P)^(2/3) √S / n) at the upstream
+# cell's level, so the normal level the tables imply.
 # Writes OUT.json: per level the error statistics, curves for one cell in the
 # middle of the strip and its downstream and lateral faces, and Q(δ).
 

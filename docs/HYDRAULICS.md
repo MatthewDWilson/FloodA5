@@ -1643,3 +1643,52 @@ benefit of A5 for diagonal flow would have to show elsewhere than in
 channel conveyance at a given resolution. This series uses one location
 (51° N, 0° E); A5's local face directions vary between dodecahedron faces,
 so the orientation pattern will differ elsewhere.
+
+### 15.13 SGS conveyance (0.7.0, 2026-11)
+
+*Question.* Until 0.6.0 SGS stored 2.5× the SWE reference at the Carlisle peak
+(26.7 Mm³), with its water surface metres higher. Measurement or conveyance?
+(Plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`.)
+
+*Diagnosis* (case `sgs_strip`, `docs/TEST_CASES.md` §2c,
+`notebooks/04_sgs_strip.ipynb`). Storage was measured correctly; conveyance
+was not. Edge curves were tabulated on each cell's own levels and stopped
+growing at the cell's highest DEM sample, and the kernel averaged the two
+cells' A and R: overbank a 20 m strip's faces carried 39% (channel) and 2.5%
+(floodplain) of their true flow area. In bank the legacy donor cap, V/(2N)
+per face per step, held channel cells brim-full.
+
+*Changes* (§9): one table per face on the face's own levels, continued above
+the profile; the 2-D conveyance form K = Σ h^(5/3); positivity limiting; a
+time step from the hydraulic depth and from the faces' flow areas (cells
+holding a sliver of a channel); flow-path geometry for partly wet cells;
+connectivity (activation levels); tables from a per-cell working grid; DEM
+profiles for boundary sides and a valley-floor outflow slope; Courant 0.5.
+
+*Results.* Strip (analytic 2-D level −0.267 / +0.372 m): Cartesian 20 m
+−0.279 / +0.362 m, A5 −0.277 / +0.340 m (2-D for the A5 strip's own width
++0.290; local-inertial on the same mesh +0.390); 0.6.0: −0.001 / +4.75 m and
+still filling. Without the flow-path geometry A5 was 0.054 m high in bank;
+without the face-area time-step limit, cells holding a sliver of the channel
+oscillated and held it up by up to 0.5 m. A wall narrower than a cell holds
+(case `planar_wall`; 0.6.0 passed 58–64% of the inflow).
+
+*Carlisle at the peak* (`carlisle_peak`, `carlisle_peak_fine`). SGS is unstable
+at Courant 0.7 in deep, fast channel flow (cell-scale level oscillations);
+0.5 and 0.35 agree (5.94 / 5.96 Mm³). Against 5 m Cartesian references, with
+the 5 m results aggregated onto the 22 m cells (water level where at least
+half the cell is wet), at 55.5 h on A5:
+
+| 22 m model | vs 5 m SWE: storage | level, median (rms) | vs 5 m LI: storage | level, median (rms) |
+|---|---|---|---|---|
+| SWE | 1.24 | +0.36 (0.54) m | 1.47 | +0.78 (0.81) m |
+| local-inertial | 0.94 | −0.16 (0.25) m | 1.12 | +0.25 (0.35) m |
+| SGS | 0.70 | −0.50 (0.54) m | 0.83 | −0.14 (0.24) m |
+
+The 22 m SWE run is not a reference (24% more storage than 5 m SWE). SGS
+reproduces the fine-grid local-inertial solution best, as a sub-grid scheme
+for these equations should; but the local-inertial equations convey more than
+SWE at 5 m (0.84 of its storage, levels 0.3–0.4 m lower) — the momentum losses
+they omit — and 22 m local-inertial lands close to 5 m SWE only because its
+smoothed bed under-conveys. Open: how to judge the 22 m models against the
+5 m runs, and whether SGS needs those momentum losses.

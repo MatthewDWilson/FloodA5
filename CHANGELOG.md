@@ -73,7 +73,7 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
   √(g h)/Δx and is larger for a cell that holds only a sliver of a channel
   its faces convey. Without it such cells oscillated and held the channel up
   by up to 0.5 m on the A5 strip. The wetted area is floored at 2% of the
-  cell (`SGS_CFL_AREA_FLOOR`). The A5 strip runs take 1.6–2.2× the steps.
+  cell (`SGS_CFL_AREA_FLOOR`). The A5 strip in bank takes 24 300 steps (0.6.0: 5 650).
 
 - ⚠ **SGS tables from a working grid.** `build_sgs_tables!` covers each cell
   with a regular grid in a local metric frame (`--sgs-samples`, default 1600
@@ -132,9 +132,12 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
   median 0.89 m below SWE (local-inertial 0.53 m). SGS is smooth and
   time-step converged but conveys more than local-inertial. **The check
   "SGS no further from SWE than local-inertial" fails** and is kept as an
-  expected failure: the reference is SWE on cell-mean beds at the same 22 m,
-  which cannot say whether sub-grid conveyance or the smoothed bed is nearer
-  the truth. A fine-grid reference is needed (plan §9.3).
+  expected failure. Against 5 m references (case `carlisle_peak_fine`,
+  plan §9.3a, HYDRAULICS §15.13) the 22 m SWE run stores 24% more than 5 m
+  SWE, so it is not a reference; SGS is the 22 m model closest to the 5 m
+  local-inertial solution (level −0.14 m median, rms 0.24 m), but
+  local-inertial conveys more than SWE at 5 m, and against 5 m SWE SGS
+  stores 0.70 (22 m local-inertial 0.94, by compensating errors).
 - Checks changed where they referred to the old scheme: the strip's default
   run is compared with the 2-D analytic (was the lumped one), tolerances
   0.03 m / 5% overbank (were 0.10 m / 10%); its `--limiter positivity` jobs
@@ -155,6 +158,11 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
 ### Added
 - `cases/expected/v0.6.0/`: the SGS metrics, table diagnostics and strip
   series of the scheme up to 0.6.0, for before/after comparison.
+- **Case `carlisle_peak_fine`**: the `carlisle_peak` event on the 5 m
+  Cartesian mesh (582 012 cells), local-inertial and SWE on the GPU — the
+  fine reference for the 22 m runs (docs/TEST_CASES.md §3).
+- `notebooks/04_sgs_strip.ipynb` rewritten as diagnosis, fix and result
+  against the 0.6.0 record.
 
 SGS conveyance fix, Phase 0 (measurement; no model change).
 

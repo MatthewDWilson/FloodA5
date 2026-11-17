@@ -254,7 +254,7 @@ function _ss_checks_all()
            "(δ = −0.75 … +1 m; error relative to max(V, 5 cm over the cell))",
            m -> _ss(m, "tables_cart20", "volume_err_max") <= 0.01;
            detail = m -> "max $(_ss_r(_ss(m, "tables_cart20", "volume_err_max"); d = 4))"),
-     Check("SGS tables, A5 res 18: median V(η) error within 1% at every level (cells holding a sliver of the channel carry Halton error)",
+     Check("SGS tables, A5 res 18: median V(η) error within 1% at every level (cells holding a sliver of the channel carry sampling error)",
            m -> _ss(m, "tables_a5r18", "volume_err_median_max") <= 0.01;
            detail = m -> "worst median $(_ss_r(_ss(m, "tables_a5r18", "volume_err_median_max"); d = 4)), " *
                          "max $(_ss_r(_ss(m, "tables_a5r18", "volume_err_max"); d = 3))"),
