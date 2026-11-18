@@ -9,8 +9,21 @@ const _CARL_RUN = ["--inflow-bci", "$_CARL/carlisle_wgs84.bci", "--rainfall", "1
 # event's rain: 60 mm in 6 h over the whole domain. The *_norain runs show what the
 # river inflow alone floods in the same 6 h (early in the event: 100–230 m³/s).
 const _CARL_RUN_NORAIN = (i = findfirst(==("--rainfall"), _CARL_RUN); vcat(_CARL_RUN[1:i-1], _CARL_RUN[i+2:end]))
-_carl_wet_area(r, k, depth) = (h = FA.depth(r, k);
-    sum(r.mesh.area[i] for i in eachindex(h) if isfinite(h[i]) && h[i] > depth; init = 0.0))
+"""
+Area (m²) wetter than `depth` at frame k. Cell-mean runs: whole cells with
+h > depth. SGS runs (0.7.0): the area of each cell whose local depth exceeds
+`depth`, from its tables (`FA.wetted_fraction`) — its depth is measured from
+the cell's lowest ground, so counting whole cells by it overstates the extent
+(at 6 h 4.96 km² against 1.79 km²).
+"""
+function _carl_wet_area(r, k, depth)
+    if r.flow_model == "sgs"
+        f = FA.wetted_fraction(r, k; wet = depth)
+        return sum(r.mesh.area[i] * f[i] for i in eachindex(f) if isfinite(f[i]); init = 0.0)
+    end
+    h = FA.depth(r, k)
+    return sum(r.mesh.area[i] for i in eachindex(h) if isfinite(h[i]) && h[i] > depth; init = 0.0)
+end
 
 """
 Time (s) at which the volume leaving the domain first reaches `vol` (m³),
@@ -142,8 +155,8 @@ let
         alone) — on A5 res 18 (~22 m cells) and on a 20 m
         Cartesian grid aligned with the 5 m LiDAR averaged to 20 m, each with
         the 0.3.0 local-inertial default and with the full SWE reference
-        (`--flow-model swe`, order 2), and SGS on A5 res 18 (no reference;
-        storage only). Metrics at 6 h: storage (Σ volume), and from the log the
+        (`--flow-model swe`, order 2), and SGS on A5 res 18 (no SWE comparison
+        here; storage, and its flooded area from its tables). Metrics at 6 h: storage (Σ volume), and from the log the
         volume added and removed, the mass-balance error and the arrival time
         (50 000 m³ out); each local-inertial run against the SWE run on its
         mesh (storage ratio, rms Δh over wet cells, CSI and bias of the extent
@@ -279,7 +292,10 @@ let
         boundaries and the river initially dry. Compared over the 6 h before the
         peak (49.5, 52.5 and 55.5 h): each local-inertial run against the SWE
         reference on its mesh (storage ratio, rms Δh, CSI and bias of the extent
-        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 (no reference).
+        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 against the A5 SWE
+        run (storage, water level where both are wet, extent by mean depth
+        V/A), with the agreed bar as an expected failure (see
+        `carlisle_peak_fine` for the 5 m references).
         Uses the `carlisle` case's meshes (run `cases/run.jl prep carlisle`
         first).""",
         prep = Prep[],

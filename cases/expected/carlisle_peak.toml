@@ -45,9 +45,9 @@ storage_w0_m3 = 4.817369752784874e6
 storage_w1_m3 = 5.941697042992216e6
 storage_wmid_m3 = 5.54434466300737e6
 t_end = 199800.08575360078
-wet_area_0p1_w0_km2 = 3.3349342242730344
-wet_area_0p1_w1_km2 = 3.8669475951282837
-wet_area_0p1_wmid_km2 = 3.5639955451257324
+wet_area_0p1_w0_km2 = 2.894690707742983
+wet_area_0p1_w1_km2 = 3.3142694188704995
+wet_area_0p1_wmid_km2 = 3.0862373174549593
 
 [a5_swe]
 input_error_rel = -1.6045190071042734e-6
@@ -99,4 +99,4 @@ flooda5_version = "0.4.4"
 git_commit = "5d6a5cf1fbe06ad3011ab3d13314146e82f0a411"
 git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-16T17:12:39Z"
+recorded_utc = "2026-11-17T20:55:39Z"

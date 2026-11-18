@@ -304,7 +304,7 @@ let
             for (w, _) in _PW_WALLS for (mesh, _) in _PW_MESHES for (model, _) in _PW_MODELS]
     register!(Case(
         name = "planar_wall", tier = :standard,
-        title = "A wall with no gap across a planar slope: no water may pass below the crest (SGS hops it)",
+        title = "A wall with no gap across a planar slope: no water may pass below the crest",
         doc = "docs/TEST_CASES.md §2d",
         description = """
         The planar_embankment plane (2 × 0.5 km, 0.5% west→east, 2 m DEM) with a
@@ -324,9 +324,9 @@ let
         where the water crossed — the cells of the first row east of the wall
         that hold water at that time (count, y-range), against the stretch of
         the wall the upstream water touches. The checks state the correct
-        behaviour; the SGS thin-wall ones fail (SGS conveys through a face from
-        the DEM profile on the face line only: a barrier inside a cell is not
-        seen) and are expected failures until that is fixed; standard flow on
+        behaviour; until 0.6.0 the SGS thin-wall ones failed (SGS conveyed
+        through a face from the DEM profile on the face line only, so a barrier
+        inside a cell was not seen); connectivity (0.7.0) fixed it; standard flow on
         the thin wall is checked against the cell-mean ridge it sees. The wide
         wall holds in every run. Preparation ~10 min (2 DEMs, 8 meshes); runs
         ~1 min each on 2 threads.""",

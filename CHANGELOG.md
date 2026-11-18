@@ -154,6 +154,9 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
 - Standard flow's open-boundary slope is taken from two cells' mean
   elevations, as SGS's was.
 - The η filter is not implemented for SGS (hence its Courant 0.5).
+- SGS faces have no critical-flow limit: `planar_embankment` passes ≈ 9.8 m³/s
+  through the 4 m notch at ≈ 1.07 m of head, above critical flow (≈ 7.5 m³/s
+  for a 4 m rectangle).
 
 ### Added
 - `cases/expected/v0.6.0/`: the SGS metrics, table diagnostics and strip
@@ -163,6 +166,20 @@ unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
   fine reference for the 22 m runs (docs/TEST_CASES.md §3).
 - `notebooks/04_sgs_strip.ipynb` rewritten as diagnosis, fix and result
   against the 0.6.0 record.
+- `notebooks/01_planar.ipynb`: the `planar_wall` case (new section) and the
+  embankment against the 0.6.0 record; `notebooks/03_carlisle.ipynb`: SGS
+  compared like for like (storage, mean depth, level where both are wet,
+  wetted area from its tables) and an optional section against the 5 m
+  references.
+- **Analysis: fine-to-coarse comparison** (`analysis/aggregate.jl`):
+  `FA.assign_to_cells`, `aggregate_fine` / `aggregate_onto`, `compare_to_fine`
+  (a fine run aggregated onto a coarse mesh's cells: volume, wetted fraction,
+  level of the wet fine cells), and SGS tables read from the mesh GeoParquet
+  without Python (`load_sgs_tables`, `sgs_tables`, `wetted_fraction`,
+  `load_mesh_columns`). Tests in `test/analysis/test_aggregate.jl`.
+- ⚠ `carlisle` / `carlisle_peak`: the SGS flooded area (`wet_area_0p1*`) is
+  the area wetter than 0.1 m from its tables (was whole cells by SGS depth,
+  measured from the lowest ground: 4.96 km² at 6 h, now 1.79). Re-recorded.
 
 SGS conveyance fix, Phase 0 (measurement; no model change).
 

@@ -184,11 +184,13 @@ upstream water surface reaches the crest it sees; SGS sees the notch and passes
 water at the sill level. Metrics per output time: the upstream WSE (the highest
 WSE of the *wet* cells along the embankment's upstream foot) and the volume
 stored east of the embankment; from them the time downstream water first
-exceeds 1 m³ and the upstream WSE then. Results (0.4.1):
+exceeds 1 m³ and the upstream WSE then. Results (0.7.0; SGS up to 0.6.0 in
+italics):
 
 | | first downstream water | upstream WSE then | WSE at 6 h | downstream at 6 h |
 |---|---|---|---|---|
-| SGS | 1 082 s | 5.23 m (sill 5.0) | 6.22 m | 39 000 m³ |
+| SGS | 842 s | 5.25 m (sill 5.0) | 6.07 m | 154 700 m³ |
+| *SGS, 0.6.0* | *1 082 s* | *5.23 m* | *6.22 m* | *39 000 m³* |
 | standard | 16 202 s | 6.77 m (crest 7.0) | 6.99 m | 12 600 m³ |
 
 Standard's crest is the lowest cell-mean route across the embankment, 6.72 m:
@@ -197,15 +199,20 @@ stored volume; standard passes no water until the upstream WSE reaches that
 crest, which lies within 0.5 m of the real one; SGS passes water while the
 upstream WSE is ≥ 0.5 m below the crest and within 0.5 m of the sill; SGS has
 more water downstream at every output time before standard overtops (126 of
-them). Through the 4 m notch SGS conveys ≈ 3 m³/s at 1.1–1.2 m of head (5–6 h),
-so its upstream level keeps rising under 10 m³/s.
+them). Until 0.6.0 SGS conveyed ≈ 3 m³/s through the notch at 1.1–1.2 m of
+head and its upstream level kept rising; since 0.7.0 it passes ≈ 9.8 m³/s at
+≈ 1.07 m (5–6 h) and the pond is nearly steady. **That exceeds critical flow
+through the notch** (a 4 m rectangle: ≈ 7.5 m³/s at that head; the
+bilinearly sampled notch is a trapezoid, 2 m at the floor): the
+local-inertial face flux has no critical-flow limit (follow-up,
+PROJECT_STATE).
 
 **Where the water crosses** (metrics only, added with `planar_wall`, §2d; the
 downstream volume alone does not separate the notch from a crossing
 elsewhere). Cells by polygon: the first row of cells entirely east of the
 embankment (24), cells wholly on its top, and cells straddling its east face;
 "at the notch" = centre within 50 m of the notch's centre line, "away" =
-polygon more than 100 m from it. SGS (0.6.0): at the first downstream water
+polygon more than 100 m from it. SGS (0.6.0; the same holds in 0.7.0): at the first downstream water
 (1 082 s) four row cells hold water, y = 213–316 m (the notch is at
 248–252 m), none away from the notch; the wet stretch of the row then widens
 continuously from the notch (y = 180–403 m at 2 h, 143–417 m at 6 h; the
