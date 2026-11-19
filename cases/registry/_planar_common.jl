@@ -1,5 +1,5 @@
 # cases/registry/_planar_common.jl — helpers shared by the planar cases
-# (planar_slope.jl, planar_embankment.jl), which both generate their terrain
+# (planar_slope.jl, planar_embankment.jl, planar_wall.jl), which generate their terrain
 # with test/planar_embankment/generate_planar_embankment_dem.py. (Registry
 # files are included in name order; this one comes first.)
 
@@ -24,3 +24,11 @@ end
 "The generator's parameters (`<dir>/planar_embankment_params.json`) as a Dict."
 _planar_params(dir) = FA.FO.JSON3.read(read(joinpath(dir, "planar_embankment_params.json"), String),
                                        Dict{String,Any})
+
+"Cells' y extent (m from the DEM's south edge, generator convention) from their polygons."
+function _planar_yrange(mesh, p)
+    lat0 = Float64(p["lat0"])
+    ymin = [minimum(view(P, 2, :)) for P in mesh.polygons]
+    ymax = [maximum(view(P, 2, :)) for P in mesh.polygons]
+    return (ymin .- lat0) .* 111320.0, (ymax .- lat0) .* 111320.0
+end

@@ -372,7 +372,7 @@ pass per timestep on top of the flux loop; overhead of +11–30% wall time
 (depending on resolution) was measured in earlier testing against a shared
 kernel that was, at the time, also used by the SGS solver. That shared-kernel
 arrangement has since been superseded — SGS does not use gradient correction
-in the present codebase (§9.4 of `HYDRAULICS.md`) — so these figures are
+in the present codebase (§9.5 of `HYDRAULICS.md`) — so these figures are
 retained here for historical reference only, not as a current cost estimate.
 
 #### CLI control

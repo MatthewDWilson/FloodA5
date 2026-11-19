@@ -209,17 +209,20 @@ function _face_flux_std_list!(opts::StdOpts, M, act::Vector{Int}, n_act::Int, dt
 end
 
 """
-    SGSOpts{GC, QCC, VF, POS}
+    SGSOpts{GC, QCC, VF, POS, K2D, PG}
 
 SGS (R–A kernel) options as type parameters: gradient correction (Bool),
 consistent Q-centring (Bool; otherwise `_q_centred` with whatever partner
-signs the edge list holds), vector friction (Bool), positivity limiting (Bool).
+signs the edge list holds), vector friction (Bool), positivity limiting (Bool),
+2-D conveyance (Bool; `SGS_CONVEYANCE[]`, see `_sgs_radius`), flow-path geometry
+(Bool; `SGS_PATH[]`, see `_sgs_path`).
 """
-struct SGSOpts{GC, QCC, VF, POS} end
+struct SGSOpts{GC, QCC, VF, POS, K2D, PG} end
 
 SGSOpts(state::FlowState) =
     SGSOpts{state.gradient_correction, state.q_centre_mode === :consistent,
-            state.friction_model === :vector, state.limiter !== :legacy}()
+            state.friction_model === :vector, state.limiter !== :legacy,
+            SGS_CONVEYANCE[] === :twod, SGS_PATH[]}()
 
 function _sgs_arrays(state::FlowState, ws::StepWorkspace)
     E = state.edges
@@ -230,6 +233,8 @@ function _sgs_arrays(state::FlowState, ws::StepWorkspace)
             qvec_u = state.qvec_u, qvec_v = state.qvec_v, grad_wse = state.grad_wse,
             tables = state.sgs_tables, slot_i = ws.slot_i, slot_j = ws.slot_j, wse = ws.wse,
             flux_Q = E.flux_Q, flux_Q_prev = ws.flux_prev, edge_vol = ws.edge_vol,
+            face_A = ws.face_A, wcx = ws.wcx, wcy = ws.wcy, wfrac = ws.wfrac,
+            e_dx = ws.e_dx, e_dy = ws.e_dy,
             theta = state.q_centre_theta, alpha = state.gradient_correction_alpha,
             donor_div = _donor_edge_divisor(state),
             stats = LIMITER_STATS[], lflag = _lf_flag(), lhf = _lf_hf())   # D1b (--limiter-stats)
@@ -242,10 +247,11 @@ Phase A of `step_sgs!` for edge `e` (R–A kernel; Q in M.flux_Q[e], edge volume
 after the donor cap with Fix C back-propagation in M.edge_vol[e]). Transcribed
 from the stage-1 loop body; bit-identical to it.
 """
-@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS}, M,
-                                 dt::Float64) where {GC, QCC, VF, POS}
+@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS, K2D, PG}, M,
+                                 dt::Float64) where {GC, QCC, VF, POS, K2D, PG}
     @inbounds begin
         ci = M.ci[e]; cj = M.cj[e]
+        M.face_A[e] = 0.0                      # set below if the face is wet
         if isnan(M.elevation[ci]) || isnan(M.elevation[cj])
             M.edge_vol[e] = 0.0                # flux_Q left as is (as before)
             M.stats && (M.lflag[e] = 0x00)
@@ -269,10 +275,20 @@ from the stage-1 loop body; bit-identical to it.
             return nothing
         end
         wse_flow = max(wse_ci_eff, wse_cj_eff)
-        A_i, R_i = A5Grid.edge_area_radius(ti, M.slot_i[e], wse_flow)
-        A_j, R_j = A5Grid.edge_area_radius(tj, M.slot_j[e], wse_flow)
-        A_edge = 0.5 * (A_i + A_j)
-        R_edge = 0.5 * (R_i + R_j)
+        # One table per face (layout 3); both cells hold the same one.
+        A_edge, P_edge, K_edge = A5Grid.face_apk(ti, M.slot_i[e], wse_flow)
+        R_edge = _sgs_radius(A_edge, P_edge, K_edge, K2D)
+        L_e = M.L[e]; ct_e = M.cos_theta[e]
+        if PG                                  # flow path of partly wet cells
+            a_p, L_g = _sgs_path(M.e_dx[e], M.e_dy[e], M.nf_x[e], M.nf_y[e], L_e, ct_e,
+                                 M.wcx[ci], M.wcy[ci], M.wcx[cj], M.wcy[cj], M.wfrac[ci], M.wfrac[cj])
+            A_edge *= a_p
+            # the flux functions take the centre distance (× cos θ in the uncorrected one)
+            L_e = L_g
+            GC || (ct_e = 1.0)
+        end
+        # (for the time-step limit, which divides by the centre distance)
+        M.face_A[e] = wse_flow - z_sill > HFLOW_THRESHOLD ? A_edge * M.L[e] / L_e : 0.0
         Q_prev_eff = QCC ?
             _q_centred_consistent(M.flux_Q_prev, e, M.edges, M.qvec_u, M.qvec_v, M.theta;
                                   volumetric = true) :
@@ -285,12 +301,12 @@ from the stage-1 loop body; bit-identical to it.
             Vhat_dot = gx_f * M.skew_x[e] + gy_f * M.skew_y[e]
             dWSE_n   = M.cos_theta[e] * (wse_ci_eff - wse_cj_eff) - M.alpha * M.L[e] * Vhat_dot
             h_flow = wse_flow - z_sill
-            _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge, dWSE_n, M.L[e],
+            _manning_flux_ra_corrected(Q_prev_eff, h_flow, A_edge, R_edge, dWSE_n, L_e,
                                        0.5 * (M.manning_n[ci] + M.manning_n[cj]),
                                        dt; Q_t = Q_t, vector_friction = VF)
         else
             _manning_flux_ra(Q_prev_eff, wse_ci_eff, wse_cj_eff, z_sill, A_edge, R_edge,
-                             M.L[e], M.cos_theta[e],
+                             L_e, ct_e,
                              0.5 * (M.manning_n[ci] + M.manning_n[cj]),
                              dt; Q_t = Q_t, vector_friction = VF)
         end

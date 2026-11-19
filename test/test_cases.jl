@@ -10,6 +10,8 @@
 #     is run again; --dry-run runs nothing
 # C4  expected failures (Check xfail): reported XFAIL/XPASS, never failing a
 #     case; an ordinary failing check still fails it
+# C5  the planar_wall case (a wall with no gap; SGS hops it) is registered,
+#     well formed and carries its expected-failure marks — without running it
 
 ENV["FLOODA5_NO_VIS"] = "1"
 include(joinpath(@__DIR__, "..", "cases", "FloodA5Cases.jl"))
@@ -103,9 +105,68 @@ end
     @test FC.check(mk([FC.Check("fixed defect", m -> true; xfail = "documented")]), m; io)
     @test occursin("XPASS", String(take!(io)))
     @test !FC.check(mk([FC.Check("ordinary", m -> false), FC.Check("known", m -> false; xfail = "d")]), m; io)
-    # the registered SGS strip case marks only its SGS-behaviour checks
-    xs = [ch for ch in FC.case("sgs_strip").checks if !isempty(ch.xfail)]
-    @test !isempty(xs) && all(ch -> occursin("SGS", ch.name), xs)
+    # sgs_strip had eight expected failures until 0.7.0 (the SGS conveyance
+    # defects) and planar_wall two (the hop over a wall inside a cell); the
+    # checks stay, unweakened, and none is marked now
+    for name in ("sgs_strip", "planar_wall")
+        @test all(ch -> isempty(ch.xfail), FC.case(name).checks)
+        @test count(ch -> occursin("SGS", ch.name), FC.case(name).checks) >= 4
+    end
+end
+
+@testset "C5 — planar_wall: registered, well formed, checks unweakened (no runs)" begin
+    c = FC.case("planar_wall")
+    @test c.tier === :standard
+    # 2 walls × 2 meshes × SGS/standard, the flow model always explicit, closed, no shared inputs
+    @test length(c.jobs) == 8
+    names = [j.name for j in c.jobs]
+    @test Set(names) == Set("$(m)_$(f)_$(w)" for m in ("a5", "cart"), f in ("sgs", "std"), w in ("wide", "thin"))
+    for j in c.jobs
+        argv = FC.job_argv(c, j)
+        w = j.tags[:wall]
+        i = findfirst(==("--flow-model"), argv)
+        @test i !== nothing && argv[i+1] == j.tags[:flow_model] && j.tags[:flow_model] in ("sgs", "standard")
+        @test "--closed-boundaries" in argv
+        mesh = argv[findfirst(==("--meshload"), argv)+1]
+        @test dirname(mesh) == joinpath(FC.case_dir(c), w)        # the wall's own mesh
+        @test occursin(j.tags[:flow_model], basename(mesh))
+    end
+    # one DEM per wall, in its own directory, without a notch; SGS meshes built as SGS
+    dems = [p for p in c.prep if p.kind === :python]
+    @test length(dems) == 2
+    for p in dems
+        i = findfirst(==("--notch-width"), p.args)
+        @test i !== nothing && p.args[i+1] == "0"
+    end
+    @test length(unique(first(p.outputs) for p in dems)) == 2
+    meshes = [p for p in c.prep if p.kind === :floodmodel]
+    @test length(meshes) == 8 && all(p -> "--flow-model" in p.args && "--mesh-only" in p.args, meshes)
+    # the design: the level pool stays below the crest with margin, for both walls
+    for (w, geom) in FC._PW_WALLS
+        g = FC._pw_design(geom)
+        @test isapprox(g.crest, w == "wide" ? 8.0 : 8.05; atol = 1e-9) && g.freeboard >= FC._PW_MARGIN
+        @test isapprox(g.wse_end - g.z_foot, sqrt(213000 / 5e4); atol = 1e-9)   # the wedge formula
+    end
+    # the thin wall is narrower than a cell and inside one Cartesian 20 m column (faces at
+    # 981.1 and 1001.1 m in the generator's frame, where the 20 m are 20.02 m), not on a face
+    thin = Dict(FC._PW_WALLS)["thin"]
+    @test thin.width < 20 && thin.x - thin.width / 2 > 981.1 + 5 && thin.x + thin.width / 2 < 1001.1 - 5
+    # checks: "no water downstream" for every run but standard flow on the thin wall (cell-mean
+    # beds: checked against the ridge they see), stating the correct behaviour; expected
+    nodown = [ch for ch in c.checks if occursin("no water downstream of the wall", ch.name)]
+    @test length(nodown) == 6
+    @test count(ch -> startswith(ch.name, "standard") && occursin("thin wall", ch.name) &&
+                      occursin("cell-mean", ch.name), c.checks) == 2
+    # no expected failures since 0.7.0 (connectivity): the two SGS thin-wall
+    # checks are ordinary checks again
+    @test all(ch -> isempty(ch.xfail), c.checks)
+    @test count(ch -> startswith(ch.name, "SGS") && occursin("thin wall", ch.name), nodown) == 2
+    # a run with water downstream fails its check; a dry one passes (the check is not weakened)
+    job = "a5_sgs_thin"
+    ch = only(ch for ch in nodown if startswith(ch.name, "SGS, A5") && occursin("thin wall", ch.name))
+    @test ch.test(Dict(job => Dict("v_down_end" => 0.0)))
+    @test !ch.test(Dict(job => Dict("v_down_end" => 5.0)))
+    @test !ch.test(Dict{String,Dict{String,Float64}}())          # no metrics: not a pass
 end
 
 println("\nTest-case registry tests complete.")

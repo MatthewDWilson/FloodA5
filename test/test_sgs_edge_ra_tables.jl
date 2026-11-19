@@ -1,26 +1,24 @@
 """
-test_sgs_edge_ra_tables.jl — Stage 1 unit tests for SGS R-A hydraulic tables.
+test_sgs_edge_ra_tables.jl — unit tests of the SGS face tables (layout 3, 0.7.0).
 
-Tests the pre-computed per-edge flow area A(wse) and wetted perimeter P(wse)
-curves introduced in the sgs_ra_flux branch, and the derived lookup functions
-flow_area_from_wse, wetted_perim_from_wse, hydraulic_radius_from_wse.
+One table per face, built from the DEM profile along the face
+(`A5Grid.face_table_from_profile`) and read by `A5Grid.face_apk`: flow area A,
+wetted width P and conveyance integral K = Σ dx·h^(5/3) on the face's own
+levels, continued analytically above the tabulated range. The tests compare
+them with analytic cross-sections (no DEM needed), including far above the
+highest point of the profile — where the tables before 0.7.0 stopped growing
+(case sgs_strip) — and the two conveyance forms of `_sgs_radius`.
 
-Tests are purely synthetic — no DEM files required.  They construct SGSTable
-objects directly from known elevation profiles and verify the curves against
-analytical cross-section geometry.
+(The file keeps its name from the R–A edge curves it tested until 0.7.0.)
 
 Run:
     julia --project=. test/test_sgs_edge_ra_tables.jl
 """
 
-# Top-level imports — must be before the if block so macros are available
-# at parse time (Julia expands macros before executing any using statements).
 using Test, Printf
 
 if abspath(PROGRAM_FILE) == @__FILE__
 
-    # Load FloodModel.jl in include-only mode (suppresses main() execution)
-    # to get access to A5Grid.SGSTable and the new lookup functions.
     project_dir      = dirname(dirname(abspath(@__FILE__)))
     flood_model_path = joinpath(project_dir, "FloodModel.jl")
     isfile(flood_model_path) || error("FloodModel.jl not found at $flood_model_path")
@@ -30,215 +28,136 @@ if abspath(PROGRAM_FILE) == @__FILE__
     delete!(ENV, "FLOODMODEL_INCLUDE_ONLY")
 
     println("=" ^ 62)
-    println("SGS edge R-A hydraulic table unit tests")
+    println("SGS face table unit tests")
     println("=" ^ 62)
 
-    # ── Helper: build a synthetic SGSTable from a known edge profile ────────
-    #
-    # We construct the edge_area_curve and edge_perim_curve by hand using the
-    # same incremental algorithm as build_sgs_tables! Step 2.  This lets us
-    # verify the build logic against analytical solutions independently of
-    # the mesh/DEM pipeline.
-    #
-    # edge_profile: sorted vector of DEM elevations along the edge arc
-    # W:            total edge width (m)
-    # elev_bins:    elevation knots for the curves (n_bins vector)
-    # slot:         which adjacency slot (1–5) to fill (others stay zero)
-
-    function _make_edge_curves(edge_profile::Vector{Float64},
-                                W::Float64,
-                                elev_bins::Vector{Float64},
-                                slot::Int)
-        n_bins = length(elev_bins)
-        n_pts  = length(edge_profile)
-        dx     = W / n_pts
-
-        edge_area  = zeros(n_bins, 5)
-        edge_perim = zeros(n_bins, 5)
-
-        sorted_e = sort(edge_profile)
-        cum_A    = 0.0;  cum_P = 0.0
-        ptr      = 1;    n_wet = 0
-        prev_wse = sorted_e[1]
-
-        for k in 1:n_bins
-            wse_k  = elev_bins[k]
-            cum_A += n_wet * dx * (wse_k - prev_wse)
-            while ptr <= n_pts && sorted_e[ptr] <= wse_k
-                cum_A += dx * (wse_k - sorted_e[ptr])
-                cum_P += dx
-                n_wet += 1
-                ptr   += 1
-            end
-            edge_area[k,  slot] = cum_A
-            edge_perim[k, slot] = cum_P
-            prev_wse = wse_k
-        end
-        return edge_area, edge_perim
+    "An SGSTable whose slot `slot` (of 5) holds the face table of `profile` (width W)."
+    function _table(profile::Vector{Float64}, W::Float64, slot::Int; act = profile)
+        nf = A5Grid.SGS_FACE_LEVELS
+        z0 = fill(NaN, 5); zr = zeros(5); A = zeros(nf, 5); P = zeros(nf, 5); K = zeros(nf, 5)
+        z0[slot], zr[slot], A[:, slot], P[:, slot], K[:, slot] =
+            A5Grid.face_table_from_profile(profile, W / length(profile); act = act)
+        return A5Grid.SGSTable([0.0, 1.0], [0.0, 1.0], [0.0, 1.0], 1000.0, 0.0, 1.0, z0, zr, A, P, K)
+    end
+    "Exact (A, P, K) of a profile at level η."
+    function _exact(profile, W, η)
+        dx = W / length(profile)
+        (sum(max(η - z, 0.0) for z in profile) * dx, count(<=(η), profile) * dx,
+         sum(max(η - z, 0.0)^(5 / 3) for z in profile) * dx)
     end
 
-    function _make_table(elev_bins, edge_area, edge_perim;
-                          z_min=elev_bins[1], z_max=elev_bins[end])
-        n = length(elev_bins)
-        A5Grid.SGSTable(
-            elev_bins,
-            zeros(n),        # vol_curve  (not used in these tests)
-            zeros(n),        # area_curve (not used in these tests)
-            1000.0,          # cell_area
-            z_min,
-            z_max,
-            edge_area,
-            edge_perim,
-        )
-    end
-
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA1: Rectangular flat-bottomed trench
-    #
-    # Profile: 20 sample points all at z = 5.0 m (flat trench bottom)
-    # Edge width W = 10.0 m → dx = 0.5 m per sample
-    # At WSE = 5.0 + d:
-    #   A_expected = d × W = d × 10.0
-    #   P_expected = W = 10.0  (all segments wet, walls vertical = dx-approximation)
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA1 — Rectangular trench (flat bottom)" begin
-        z_sill = 5.0
-        W      = 10.0
-        n_pts  = 20
-        profile = fill(z_sill, n_pts)   # all samples at sill elevation
-
-        # Elevation knots: sill to sill+3m in 100 steps
-        n_bins    = 100
-        elev_bins = collect(range(z_sill, z_sill + 3.0, length=n_bins))
-        slot      = 1
-        ea, ep    = _make_edge_curves(profile, W, elev_bins, slot)
-        tbl       = _make_table(elev_bins, ea, ep; z_min=z_sill, z_max=z_sill+3.0)
-
-        # Test at several depths
-        for d in [0.1, 0.5, 1.0, 2.0, 2.9]
-            wse = z_sill + d
-            A_got = A5Grid.flow_area_from_wse(tbl, slot, wse)
-            P_got = A5Grid.wetted_perim_from_wse(tbl, slot, wse)
-            A_exp = d * W
-            P_exp = W   # flat bottom: perimeter = full width
-
-            @test isapprox(A_got, A_exp, rtol=0.02) broken=false
-            @test isapprox(P_got, P_exp, rtol=0.02) broken=false
+    @testset "F1 — flat face: A and P exact; K linear between levels (≤ 5% at 1 mm, 0.1% from 0.1 m)" begin
+        W = 10.0; z = 5.0
+        t = _table(fill(z, 20), W, 1)
+        for d in (1e-3, 0.1, 0.5, 1.0, 2.0, 10.0)
+            A, P, K = A5Grid.face_apk(t, 1, z + d)
+            @test A ≈ d * W rtol = 1e-12
+            @test P ≈ W rtol = 1e-12
+            @test K ≈ W * d^(5 / 3) rtol = (d < 0.05 ? 0.05 : 1e-3)
         end
     end
 
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA2: Dry edge — WSE at or below sill returns zero
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA2 — Dry edge: A = P = 0 below sill" begin
-        z_sill = 3.0
-        W      = 8.0
-        n_pts  = 16
-        profile   = fill(z_sill, n_pts)
-        elev_bins = collect(range(z_sill, z_sill + 2.0, length=50))
-        slot      = 2
-        ea, ep    = _make_edge_curves(profile, W, elev_bins, slot)
-        tbl       = _make_table(elev_bins, ea, ep; z_min=z_sill, z_max=z_sill+2.0)
-
-        @test A5Grid.flow_area_from_wse(tbl, slot, z_sill - 0.1)  == 0.0
-        @test A5Grid.flow_area_from_wse(tbl, slot, z_sill - 1.0)  == 0.0
-        @test A5Grid.wetted_perim_from_wse(tbl, slot, z_sill)     == 0.0
-        @test A5Grid.hydraulic_radius_from_wse(tbl, slot, z_sill - 0.1) == 0.0
+    @testset "F2 — dry at and below the sill; unused slots are dry" begin
+        t = _table(fill(3.0, 16), 8.0, 2)
+        @test A5Grid.face_apk(t, 2, 3.0) == (0.0, 0.0, 0.0)
+        @test A5Grid.face_apk(t, 2, 2.0) == (0.0, 0.0, 0.0)
+        @test A5Grid.face_apk(t, 2, 3.5)[1] > 0.0
+        for s in (1, 3, 4, 5)
+            @test A5Grid.face_apk(t, s, 100.0) == (0.0, 0.0, 0.0)
+        end
+        @test isnan(t.face_z0[1]) && t.face_z0[2] == 3.0
     end
 
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA3: Monotonically non-decreasing curves
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA3 — Monotonicity" begin
-        # Irregular profile (V-shaped channel)
-        z_sill = 2.0
-        W      = 12.0
-        n_pts  = 24
-        profile = [z_sill + abs(i - n_pts/2) * 0.1 for i in 1:n_pts]
-        sort!(profile)
+    # A channel a quarter of the face wide and 1 m deep in a flat floodplain:
+    # the strip case's cross-channel face (sgs_strip).
+    chan = vcat(fill(10.0, 300), fill(9.0, 200), fill(10.0, 300)); Wc = 20.0
 
-        elev_bins = collect(range(z_sill, z_sill + 3.0, length=100))
-        slot      = 3
-        ea, ep    = _make_edge_curves(profile, W, elev_bins, slot)
-        tbl       = _make_table(elev_bins, ea, ep; z_min=z_sill, z_max=z_sill+3.0)
-
-        A_prev = 0.0
-        P_prev = 0.0
-        for k in 1:length(elev_bins)
-            wse = elev_bins[k]
-            A   = A5Grid.flow_area_from_wse(tbl, slot, wse)
-            P   = A5Grid.wetted_perim_from_wse(tbl, slot, wse)
-            @test A >= A_prev - 1e-12   # non-decreasing
-            @test P >= P_prev - 1e-12   # non-decreasing
-            A_prev = A
-            P_prev = P
+    @testset "F3 — channel in a floodplain: A, P, K against the profile" begin
+        t = _table(chan, Wc, 3)
+        @test t.face_z0[3] == 9.0
+        @test t.face_zr[3] ≈ 3.0                       # relief 1 m + max(2·relief, 0.5)
+        for η in (9.05, 9.3, 9.73, 9.99, 10.01, 10.37, 11.0, 12.0)   # tabulated range
+            A, P, K = A5Grid.face_apk(t, 3, η); Ae, Pe, Ke = _exact(chan, Wc, η)
+            # at the bank the width jumps from 5 to 20 m inside one level interval (5 cm there)
+            @test A ≈ Ae rtol = (abs(η - 10.0) < 0.05 ? 0.03 : 0.01)
+            @test K ≈ Ke rtol = 0.02
+            η > 10.02 && @test P ≈ Pe rtol = 1e-9
+            η < 9.99 && @test P ≈ Pe rtol = 1e-9
+        end
+        for η in (12.5, 15.0, 30.0, 100.0)             # above it: the continuation
+            A, P, K = A5Grid.face_apk(t, 3, η); Ae, Pe, Ke = _exact(chan, Wc, η)
+            @test A ≈ Ae rtol = 1e-9                   # area is exact (full width)
+            @test P ≈ Wc rtol = 1e-12
+            @test K ≈ Ke rtol = 0.02
         end
     end
 
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA4: Hydraulic radius bounds
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA4 — Hydraulic radius: 0 ≤ R ≤ max_depth/2" begin
-        z_sill    = 1.0
-        W         = 5.0
-        n_pts     = 10
-        profile   = fill(z_sill, n_pts)
-        max_depth = 4.0
-        elev_bins = collect(range(z_sill, z_sill + max_depth, length=100))
-        slot      = 1
-        ea, ep    = _make_edge_curves(profile, W, elev_bins, slot)
-        tbl       = _make_table(elev_bins, ea, ep; z_min=z_sill, z_max=z_sill+max_depth)
+    @testset "F4 — nothing stops growing above the highest point" begin
+        t = _table(chan, Wc, 3)
+        Ap, Kp = 0.0, 0.0
+        for η in range(9.0, 40.0; length = 400)
+            A, P, K = A5Grid.face_apk(t, 3, η)
+            @test A >= Ap && K >= Kp
+            Ap, Kp = A, K
+        end
+        A1, _, K1 = A5Grid.face_apk(t, 3, 14.0); A2, _, K2 = A5Grid.face_apk(t, 3, 15.0)
+        @test A2 - A1 ≈ Wc rtol = 1e-9                 # dA/dη = full width, 4 m above the floodplain
+        @test K2 > 1.3K1
+    end
 
-        for d in [0.01, 0.1, 0.5, 1.0, 2.0, 3.9]
-            R = A5Grid.hydraulic_radius_from_wse(tbl, slot, z_sill + d)
-            @test R >= 0.0
-            # For a wide flat channel R = d × W / W = d — upper bound is d itself
-            @test R <= d + 1e-6
+    @testset "F5 — V section: A within 1%, K within 2% (3% and 6% at 5 cm depth)" begin
+        n = 400; W = 12.0
+        prof = [2.0 + abs(i - (n + 1) / 2) / (n / 2) * 1.5 for i in 1:n]
+        t = _table(prof, W, 1)
+        for η in (2.05, 2.5, 3.0, 3.5, 4.0, 8.0, 20.0)
+            A, P, K = A5Grid.face_apk(t, 1, η); Ae, Pe, Ke = _exact(prof, W, η)
+            sh = η < 2.1                              # 5 cm of water in the V: A = 0.01 m²
+            @test A ≈ Ae rtol = (sh ? 0.03 : 0.01)
+            @test K ≈ Ke rtol = (sh ? 0.06 : 0.02)
         end
     end
 
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA5: Backward compatibility — legacy table (zeros) returns 0.0
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA5 — Legacy table (zeros): no crash, returns 0.0" begin
-        n_bins    = 50
-        elev_bins = collect(range(0.0, 5.0, length=n_bins))
-        zero_ea   = zeros(Float64, n_bins, 5)
-        zero_ep   = zeros(Float64, n_bins, 5)
-        tbl       = _make_table(elev_bins, zero_ea, zero_ep)
-
-        for slot in 1:5
-            @test A5Grid.flow_area_from_wse(tbl, slot, 2.5)         == 0.0
-            @test A5Grid.wetted_perim_from_wse(tbl, slot, 2.5)      == 0.0
-            @test A5Grid.hydraulic_radius_from_wse(tbl, slot, 2.5)  == 0.0
-        end
+    @testset "F6 — conveyance forms (_sgs_radius)" begin
+        t = _table(chan, Wc, 3)
+        # in bank the two forms agree (a rectangle: every strip has the same depth)
+        A, P, K = A5Grid.face_apk(t, 3, 9.73)
+        @test _sgs_radius(A, P, K, true) ≈ _sgs_radius(A, P, K, false) rtol = 0.01
+        # overbank: 2-D form A·R^(2/3) = K; lumped A^(5/3)/P^(2/3) is smaller
+        A, P, K = A5Grid.face_apk(t, 3, 10.4)
+        R2 = _sgs_radius(A, P, K, true); Rl = _sgs_radius(A, P, K, false)
+        @test A * R2^(2 / 3) ≈ K rtol = 1e-12
+        @test Rl ≈ A / P rtol = 1e-12
+        @test A * Rl^(2 / 3) < 0.9K
+        @test _sgs_radius(0.0, 0.0, 0.0, true) == 0.0 && _sgs_radius(0.0, 0.0, 0.0, false) == 0.0
     end
 
-    # ────────────────────────────────────────────────────────────────────────
-    # T-EA6: Unused adjacency slots stay zero (boundary cells)
-    # ────────────────────────────────────────────────────────────────────────
-    @testset "T-EA6 — Unused adjacency slots remain zero" begin
-        z_sill    = 0.0
-        W         = 10.0
-        n_pts     = 20
-        profile   = fill(z_sill, n_pts)
-        elev_bins = collect(range(z_sill, z_sill + 3.0, length=100))
-        slot      = 2   # only slot 2 is built
-        ea, ep    = _make_edge_curves(profile, W, elev_bins, slot)
-        tbl       = _make_table(elev_bins, ea, ep; z_min=z_sill, z_max=z_sill+3.0)
+    @testset "F7 — activation levels: a point conveys only from its level" begin
+        # the floodplain half right of the channel is behind a bank at 10.8 m
+        act = vcat(fill(10.0, 300), fill(9.0, 200), fill(10.8, 300))
+        t = _table(chan, Wc, 1; act = act)
+        A, P, K = A5Grid.face_apk(t, 1, 10.5)
+        @test P ≈ 12.5 rtol = 0.02                     # channel + left floodplain only
+        A, P, K = A5Grid.face_apk(t, 1, 11.5); Ae, Pe, Ke = _exact(chan, Wc, 11.5)
+        @test P ≈ Wc rtol = 1e-9
+        @test A ≈ Ae rtol = 0.01
+        @test K ≈ Ke rtol = 0.02
+    end
 
-        # Slots 1, 3, 4, 5 were not built — should return zero
-        for s in [1, 3, 4, 5]
-            @test A5Grid.flow_area_from_wse(tbl, s, z_sill + 1.0)  == 0.0
-            @test A5Grid.wetted_perim_from_wse(tbl, s, z_sill + 1.0) == 0.0
+    @testset "F8 — fixture constructor (per-slot curves on the cell's levels)" begin
+        eb = collect(range(5.0, 8.0; length = 100)); W = 10.0
+        ea = zeros(100, 5); ep = zeros(100, 5)
+        ea[:, 2] .= W .* (eb .- 5.0); ep[:, 2] .= W; ep[1, 2] = 0.0
+        t = A5Grid.SGSTable(eb, zeros(100), zeros(100), 1000.0, 5.0, 8.0, ea, ep)
+        for d in (0.2, 1.0, 2.9, 6.0)
+            A, P, K = A5Grid.face_apk(t, 2, 5.0 + d)
+            @test A ≈ W * d rtol = 0.01
+            @test K ≈ W * d^(5 / 3) rtol = 0.02
         end
-        # Slot 2 should be non-zero above sill
-        @test A5Grid.flow_area_from_wse(tbl, 2, z_sill + 1.0)  > 0.0
-        @test A5Grid.wetted_perim_from_wse(tbl, 2, z_sill + 1.0) > 0.0
+        @test A5Grid.face_apk(t, 1, 7.0) == (0.0, 0.0, 0.0)
     end
 
     println()
     println("=" ^ 62)
-    println("All SGS edge R-A table unit tests passed.")
+    println("All SGS face table unit tests passed.")
     println("=" ^ 62)
 end

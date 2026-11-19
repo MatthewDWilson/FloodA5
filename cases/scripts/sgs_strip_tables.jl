@@ -4,22 +4,21 @@
 #
 #   FLOODA5_NO_VIS=1 julia --project=. cases/scripts/sgs_strip_tables.jl MESH.parquet PARAMS.json OUT.json
 #
-# Uses the model's own table lookups (A5Grid.sgs_table, edge_area_radius and
+# Uses the model's own table lookups (A5Grid.sgs_table, face_apk and
 # the volume curve as wse_from_volume inverts it) and compares, at water
 # levels δ above the local floodplain (z_f at the cell centre, or at the face
 # midpoint for an edge):
 #   cells  stored volume V(η) and wetted area against the analytic surface
 #          (cases/scripts/sgs_strip_geometry.jl), integrated over the cell
 #          polygon on a 0.1 m grid
-#   edges  the R–A edge flow area A_edge = ½(A_i + A_j) and hydraulic radius
-#          R_edge = ½(R_i + R_j), as the flux kernel forms them
-#          (surfacewater/kernels.jl, _face_flux_sgs!), against the face's
-#          analytic flow area and A/(wetted width), sampled every 1 cm
+#   edges  the face table (flow area A, wetted width P, conveyance
+#          K = Σ h^(5/3); A5Grid.face_apk, one table per face since 0.7.0)
+#          against the face's analytic A, P and K, sampled every 1 cm
 # Edges are grouped as "channel" (the face crosses the channel) and
 # "floodplain". For a Cartesian strip (rows along x) also the uniform-flow
 # discharge its tables give: Q(δ) = Σ over the faces of one cross-section of
-# A_edge R_edge^(2/3) √S / n at the upstream cell's level (wse_flow), so the
-# normal level the tables imply, or the most they can carry at the bed slope.
+# K √S / n (2-D form; `Q_lumped`: A (A/P)^(2/3) √S / n) at the upstream
+# cell's level, so the normal level the tables imply.
 # Writes OUT.json: per level the error statistics, curves for one cell in the
 # middle of the strip and its downstream and lateral faces, and Q(δ).
 
@@ -111,6 +110,9 @@ for i in 1:n, id in mesh.adjacency[ids[i]]
 end
 edge_ratio = Dict((c, δ) => Float64[] for c in ("channel", "floodplain"), δ in LEVELS)
 edge_rratio = Dict((c, δ) => Float64[] for c in ("channel", "floodplain"), δ in LEVELS)
+edge_kratio = Dict((c, δ) => Float64[] for c in ("channel", "floodplain"), δ in LEVELS)
+"The face table of the face i|j as the kernel reads it (the lower-index cell's slot): (A, P, K) at η."
+face_tab(i, j, η) = i < j ? A5Grid.face_apk(tabs[i], slot(i, j), η) : A5Grid.face_apk(tabs[j], slot(j, i), η)
 for (i, j) in edges
     (reach(ctr[i][1]) && reach(ctr[j][1])) || continue
     fp = face_profile(i, j); fp === nothing && continue
@@ -120,10 +122,12 @@ for (i, j) in edges
     for δ in LEVELS
         η = _ss_zf(p, xm) + δ
         Aa = sum(max(η - zz, 0.0) for zz in z) * ds; Pa = count(<(η), z) * ds
+        Ka = sum(max(η - zz, 0.0)^(5 / 3) for zz in z) * ds
         Aa < 1e-3 && continue
-        Ai, Ri = A5Grid.edge_area_radius(tabs[i], si, η); Aj, Rj = A5Grid.edge_area_radius(tabs[j], sj, η)
-        push!(edge_ratio[(cls, δ)], 0.5(Ai + Aj) / Aa)
-        push!(edge_rratio[(cls, δ)], 0.5(Ri + Rj) / (Aa / Pa))
+        At, Pt, Kt = face_tab(i, j, η)
+        push!(edge_ratio[(cls, δ)], At / Aa)
+        push!(edge_rratio[(cls, δ)], (Pt > 0 ? At / Pt : 0.0) / (Aa / Pa))
+        push!(edge_kratio[(cls, δ)], Kt / Ka)
     end
 end
 
@@ -149,15 +153,15 @@ jd, jl = pick_faces(ic)
 function face_curves(i, j)
     j == 0 && return nothing
     z, ds, xm, ym, len = face_profile(i, j)
-    si, sj = slot(i, j), slot(j, i)
-    Ai = curve(η -> A5Grid.edge_area_radius(tabs[i], si, η)[1]); Aj = curve(η -> A5Grid.edge_area_radius(tabs[j], sj, η)[1])
-    Ri = curve(η -> A5Grid.edge_area_radius(tabs[i], si, η)[2]); Rj = curve(η -> A5Grid.edge_area_radius(tabs[j], sj, η)[2])
+    At = curve(η -> face_tab(i, j, η)[1]); Pt = curve(η -> face_tab(i, j, η)[2]); Kt = curve(η -> face_tab(i, j, η)[3])
     Aa = curve(η -> sum(max(η - zz, 0.0) for zz in z) * ds)
     Pa = curve(η -> count(<(η), z) * ds)
+    Ka = curve(η -> sum(max(η - zz, 0.0)^(5 / 3) for zz in z) * ds)
     return Dict("neighbour" => j, "x_mid" => xm, "y_mid" => ym, "length_m" => len,
-                "sill" => minimum(z), "A_i" => Ai, "A_j" => Aj, "A_edge" => 0.5 .* (Ai .+ Aj), "A_analytic" => Aa,
-                "R_i" => Ri, "R_j" => Rj, "R_edge" => 0.5 .* (Ri .+ Rj),
-                "R_analytic" => [P > 0 ? A / P : 0.0 for (A, P) in zip(Aa, Pa)],
+                "sill" => minimum(z), "sill_table" => tabs[i].face_z0[slot(i, j)],
+                "top_table" => tabs[i].face_z0[slot(i, j)] + tabs[i].face_zr[slot(i, j)],
+                "A_edge" => At, "A_analytic" => Aa, "P_edge" => Pt, "P_analytic" => Pa,
+                "K_edge" => Kt, "K_analytic" => Ka,
                 "z_max_i" => tabs[i].z_max, "z_max_j" => tabs[j].z_max, "z_min_j" => tabs[j].z_min)
 end
 cell_curves = Dict("index" => ic, "x" => ctr[ic][1], "y" => ctr[ic][2], "z_floodplain" => zf_c,
@@ -174,21 +178,21 @@ cell_curves = Dict("index" => ic, "x" => ctr[ic][1], "y" => ctr[ic][2], "z_flood
 # section; each evaluated at the upstream cell's level: η_i = z_f(x_i) + δ.
 qcurve = nothing
 rows_along = [(i, j) for (i, j) in edges if abs(ctr[i][2] - ctr[j][2]) < 1.0]
-if mesh.static_vars["sgs_layout"][1] == 2 && haskey(mesh.static_vars, "cell_size_m") && !isempty(rows_along)
+if haskey(mesh.static_vars, "cell_size_m") && !isempty(rows_along)
     xs = [(ctr[i][1] + ctr[j][1]) / 2 for (i, j) in rows_along]
     xf = xs[argmin(abs.(xs .- p.L / 2))]
     sec = [(i, j) for (k, (i, j)) in enumerate(rows_along) if abs(xs[k] - xf) < 0.5]
     δs = collect(range(-p.D + 0.02, 3.0; length = 300))
-    Qd = map(δs) do δ
+    # 2-D form (the default): Q = K·√S/n; lumped: A·(A/P)^(2/3)·√S/n
+    Qof(lumped) = map(δs) do δ
         sum(sec) do (i, j)
-            up, dn = ctr[i][1] < ctr[j][1] ? (i, j) : (j, i)
-            η = _ss_zf(p, ctr[up][1]) + δ
-            A1, R1 = A5Grid.edge_area_radius(tabs[up], slot(up, dn), η)
-            A2, R2 = A5Grid.edge_area_radius(tabs[dn], slot(dn, up), η)
-            0.5(A1 + A2) * (0.5(R1 + R2))^(2 / 3) * sqrt(p.S) / NMAN
+            up = ctr[i][1] < ctr[j][1] ? i : j
+            A, P, K = face_tab(i, j, _ss_zf(p, ctr[up][1]) + δ)
+            (lumped ? (P > 0 ? A * (A / P)^(2 / 3) : 0.0) : K) * sqrt(p.S) / NMAN
         end
     end
-    global qcurve = Dict("x_face" => xf, "n_faces" => length(sec), "delta" => δs, "Q" => Qd,
+    Qd = Qof(false)
+    global qcurve = Dict("x_face" => xf, "n_faces" => length(sec), "delta" => δs, "Q" => Qd, "Q_lumped" => Qof(true),
                          "Q_max" => maximum(Qd), "delta_at_Q_max" => δs[argmax(Qd)])
 end
 
@@ -200,6 +204,7 @@ out = Dict("mesh" => MESHF, "n_cells" => n, "levels" => LEVELS,
     "wet_area_err" => Dict(string(δ) => stat(area_err[δ]) for δ in LEVELS),
     "edge_area_ratio" => Dict(c => Dict(string(δ) => stat(edge_ratio[(c, δ)]) for δ in LEVELS) for c in ("channel", "floodplain")),
     "edge_radius_ratio" => Dict(c => Dict(string(δ) => stat(edge_rratio[(c, δ)]) for δ in LEVELS) for c in ("channel", "floodplain")),
+    "edge_conveyance_ratio" => Dict(c => Dict(string(δ) => stat(edge_kratio[(c, δ)]) for δ in LEVELS) for c in ("channel", "floodplain")),
     "cell" => cell_curves, "uniform_flow" => qcurve)
 open(OUTF, "w") do f; JSON3.write(f, out); end
 @printf("%s: %d cells; V error at δ = +0.4: max %.3f; channel edge A ratio at δ = +0.4: median %.3f; floodplain %.3f\n",

@@ -467,8 +467,14 @@ struct SGSTable
     cell_area        :: Float64
     z_min            :: Float64
     z_max            :: Float64
-    edge_area_curves :: Matrix{Float64}   # (n_bins × 5) flow area per slot (m²)
-    edge_perim_curves:: Matrix{Float64}   # (n_bins × 5) wetted perimeter per slot (m)
+    # face tables (layout 3, 0.7.0): one per face, the same in both cells;
+    # column = adjacency slot, row = level sill + zr·((k−1)/(NF−1))², NF = 64
+    face_z0          :: Vector{Float64}   # (n_slots) sill = lowest activation level (m)
+    face_zr          :: Vector{Float64}   # (n_slots) height of the tabulated range (m)
+    face_A           :: Matrix{Float64}   # (NF × n_slots) flow area (m²)
+    face_P           :: Matrix{Float64}   # (NF × n_slots) wetted width (m)
+    face_K           :: Matrix{Float64}   # (NF × n_slots) Σ dx·h^(5/3) (m^(8/3))
+    wet_cx, wet_cy   :: Vector{Float64}   # (n_bins) wetted-area centroid (m from the cell centre)
 end
 ```
 
@@ -547,7 +553,7 @@ correction can be added without touching the others:
    `FlowState`, and a dispatch branch computing `q_prev_eff` in
    `step_standard!` Phase A plus a reconstruction step in Phase F.
 3. **Either kind of correction currently only reaches `step_standard!`.**
-   Extending either to `step_sgs!` is open work — see `HYDRAULICS.md` §9.4
+   Extending either to `step_sgs!` is open work — see `HYDRAULICS.md` §9.5
    for the specific known risk (interaction with the SGS dry-cell WSE
    clamp) that needs resolving first.
 

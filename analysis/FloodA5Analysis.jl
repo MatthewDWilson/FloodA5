@@ -22,6 +22,11 @@
 #   shape.jl        point-spread and planar-slope shape/direction metrics
 #   noise.jl        checkerboard / velocity-noise metrics
 #   channel.jl      straight-channel series metrics
+#   sgs_audit.jl    SGS table audit: hypsometry against terrain samples,
+#                   sub-basins of a cell, Courant exposure
+#   aggregate.jl    a fine run on a coarse mesh's cells (volume, wetted
+#                   fraction, level where wet) and the like-for-like
+#                   comparison of coarse models, SGS included, with it
 #
 # Conventions: cell vectors are in the output file's cell order; frame k is
 # the 1-based frame index; times in seconds; distances in metres.
@@ -43,5 +48,7 @@ include("compare.jl")
 include("shape.jl")
 include("noise.jl")
 include("channel.jl")
+include("sgs_audit.jl")
+include("aggregate.jl")
 
 end # module
