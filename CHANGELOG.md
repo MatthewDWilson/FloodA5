@@ -33,7 +33,9 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
-SGS conveyance (plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`).
+## [0.7.0] — 2026-11-18
+
+SGS conveyance (MINOR; plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`).
 **Breaking for SGS meshes**: tables are layout 3; SGS meshes must be rebuilt
 (`--meshgen … --flow-model sgs --mesh-only`). Standard flow and SWE are
 unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
