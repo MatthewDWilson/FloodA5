@@ -33,6 +33,33 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-11-23
+
+DGGS mesh families (WP3 part 3, branch `wp3c-dggs-meshes`; PATCH: default
+results unchanged, no solver change).
+
+- `mesh/dggs_families.py`: FloodA5 GeoParquet meshes of five discrete
+  global grids, loaded with `--meshload`: H3 (`h3`), and through DGGAL IGEO7
+  (ISEA7H, Z7 index), ISEA3H, HEALPix and rHEALPix. Level by `--res` or
+  `--target-dx`, `--list-levels`. Cells intersecting the AOI; corner vertices
+  snapped to one copy per vertex; shared-side adjacency checked against the
+  library's neighbour lists.
+- `docs/MESHES.md`: the mesh contract (what any mesh must provide), the
+  families, levels near flood-model cell sizes, and each family's geometry at
+  Carlisle. None of the DGGS is orthogonal at 55° N in FloodA5's metric
+  (H3 4.7°, rHEALPix 7°, IGEO7 10–16°, ISEA3H 13.5°, HEALPix 33°; A5 20–37°).
+- `FA.mesh_quality` (`analysis/mesh_quality.jl`): valence, area uniformity,
+  non-orthogonality, skew, centre offset, face-orientation moments, vertex
+  valence of any mesh.
+- Tests: `test/test_dggs_meshes.jl` (in CI: generator, geometry, lake at rest
+  under four options, mass conservation, HEALPix against healpix-geo),
+  `test/analysis/test_mesh_quality.jl`.
+- Python packages: `h3`, `dggal==0.0.6`, `ecrt==0.0.6`, `healpix-geo`
+  (`setup.jl`, `ci/python-requirements.txt`). dggal 0.0.7's Windows wheel
+  crashes on setup (two copies of its eC runtime in one process).
+- Replay: only A5 meshes get an A5 level in the diagnostics panel.
+- Plan and findings: `docs/notes/MeshFamilies_DGGS_Plan_2026-11.md`.
+
 ## [0.7.0] — 2026-11-18
 
 SGS conveyance (MINOR; plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`).

@@ -29,8 +29,10 @@ Key characteristics:
 - **Other mesh types through the same solver** — a rectangular Cartesian backend
   (`--meshgen-cartesian`, pure Julia; given a raster it builds a grid aligned
   cell-for-cell with it in its own projected CRS, for comparisons with LISFLOOD-FP),
-  and hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
-  (`mesh/mesh_families.py`). The solver and the SGS tables work for any number of
+  hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
+  (`mesh/mesh_families.py`), and other discrete global grids — H3, IGEO7, ISEA3H,
+  HEALPix and rHEALPix (`mesh/dggs_families.py`; the mesh contract and each family's
+  geometry: `docs/MESHES.md`). The solver and the SGS tables work for any number of
   neighbours per cell. The Cartesian grid also serves as an orthogonal reference that
   separates grid-geometry effects from solver effects.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
@@ -138,6 +140,7 @@ FloodA5/
 │   ├── a5_bridge.py           # Python bridge: pya5 calls (0.x and 1.x), GeoParquet I/O
 │   ├── migrate_mesh_ids.py    # pya5 0.x → 1.x cell-ID migration for existing meshes
 │   ├── mesh_families.py       # Hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
+│   ├── dggs_families.py       # DGGS meshes: H3, IGEO7, ISEA3H, HEALPix, rHEALPix
 │   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
 ├── surfacewater/
 │   └── flow2d.jl              # Physics kernels (Bates, Manning R-A, CFL)
@@ -488,7 +491,8 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
 - A like-for-like benchmark against LISFLOOD-FP on a matched Cartesian mesh
   (raster-aligned grids are available with `--meshgen-cartesian dem.tif`),
   and a D-Flow FM cross-check
-- Further mesh families: hexagonal DGGS (H3, IGEO7) and HEALPix
+- DGGS mesh families (generators in 0.7.1): a `--meshgen-dggs` option, SGS on them,
+  and a comparison of all families on the test cases and in a notebook
 - Analytical benchmark: Thacker (1981) planar-surface oscillation
 
 **Performance**

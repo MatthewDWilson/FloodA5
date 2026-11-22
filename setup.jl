@@ -134,7 +134,11 @@ println("\n[ 2/4 ] Installing Python packages into PyCall's Python …")
 
 using PyCall
 
-py_packages = ["pya5", "geopandas", "pyarrow", "shapely", "numpy"]
+py_packages = ["pya5", "geopandas", "pyarrow", "shapely", "numpy",
+               # DGGS mesh families (mesh/dggs_families.py, WP3 part 3). dggal is
+               # pinned: 0.0.7's Windows wheel loads two copies of its eC runtime
+               # and crashes on setup. healpix-geo only cross-checks HEALPix in tests.
+               "h3", "dggal==0.0.6", "ecrt==0.0.6", "healpix-geo"]
 
 python_exe = PyCall.python
 println("  PyCall Python: $python_exe")
