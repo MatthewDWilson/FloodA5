@@ -1,9 +1,16 @@
 # Mesh families and DGGS meshes: review and plan (WP3 part 3)
 
-2026-11-17. Branch `wp3c-dggs-meshes` (from `main` at 0.6.0). Continues WP3 of
-`FloodA5_Review_and_ForwardPlan_2026-10.md` ("Remaining: H3/IGEO7 meshes")
-and Phase 2 of `FloodA5_Generalisation_BenchmarkingPlan.md` (multi-DGGS).
-A copy goes to `projectinstructions/` once the SGS work has committed there.
+2026-11-17; updated 2026-11-23. Branch `wp3c-dggs-meshes`, built on 0.6.0 and
+rebased onto 0.7.0 after the SGS conveyance merge; **Phase A released as 0.7.1**.
+Continues WP3 of `FloodA5_Review_and_ForwardPlan_2026-10.md` ("Remaining:
+H3/IGEO7 meshes") and Phase 2 of `FloodA5_Generalisation_BenchmarkingPlan.md`
+(multi-DGGS). The same text is in the FloodA5 repository
+(`docs/notes/MeshFamilies_DGGS_Plan_2026-11.md`) and in `projectinstructions/`
+(`FloodA5_MeshFamilies_DGGS_Plan_2026-11.md`).
+
+**Status (2026-11-23).** Phase A done (§3). Phase B waits for the fixes
+flagged during the SGS work that affect it, first the DEM registration fix
+(§4, "Sequencing").
 
 ## 1. Where things stood
 
@@ -36,7 +43,9 @@ A copy goes to `projectinstructions/` once the SGS work has committed there.
 
 - Families: H3, IGEO7, ISEA3H, HEALPix, rHEALPix. Not S2.
 - Phase A: build now on a separate branch; merge after the SGS conveyance
-  work (`wps-sgs-conveyance`, 0.7.0) has merged.
+  work (`wps-sgs-conveyance`, 0.7.0) has merged. (Done: 0.7.1.)
+- 2026-11-23: the fixes flagged during the SGS work (DEM registration first)
+  come before Phase B, which they affect.
 - The plan is kept in the branch (this file) and in `projectinstructions/`.
 
 ## 3. Phase A: done on this branch (no files the SGS branch changes, except

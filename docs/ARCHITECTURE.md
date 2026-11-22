@@ -23,6 +23,7 @@ mesh/DiamondFlux.jl    Diamond face-flux reconstruction (opt-in; see HYDRAULICS.
 mesh/a5_bridge.py      Python subprocess: pya5 calls (0.x and 1.x), GeoParquet I/O
 mesh/migrate_mesh_ids.py   pya5 0.x → 1.x cell-ID migration (A5_QUIRKS.md §11)
 mesh/mesh_families.py  Generic polygon meshes: hex, rotated Cartesian, Voronoi, import
+mesh/dggs_families.py  DGGS meshes: H3, IGEO7, ISEA3H, HEALPix, rHEALPix (docs/MESHES.md)
 surfacewater/flow2d.jl Pure physics kernels (Bates, Manning R-A, CFL)
 surfacewater/kernels.jl  Per-edge time-step kernels (StdOpts/SGSOpts type parameters)
 surfacewater/reference_steps.jl  Frozen reference step functions (bit-equality tests)
