@@ -9,8 +9,21 @@ const _CARL_RUN = ["--inflow-bci", "$_CARL/carlisle_wgs84.bci", "--rainfall", "1
 # event's rain: 60 mm in 6 h over the whole domain. The *_norain runs show what the
 # river inflow alone floods in the same 6 h (early in the event: 100–230 m³/s).
 const _CARL_RUN_NORAIN = (i = findfirst(==("--rainfall"), _CARL_RUN); vcat(_CARL_RUN[1:i-1], _CARL_RUN[i+2:end]))
-_carl_wet_area(r, k, depth) = (h = FA.depth(r, k);
-    sum(r.mesh.area[i] for i in eachindex(h) if isfinite(h[i]) && h[i] > depth; init = 0.0))
+"""
+Area (m²) wetter than `depth` at frame k. Cell-mean runs: whole cells with
+h > depth. SGS runs (0.7.0): the area of each cell whose local depth exceeds
+`depth`, from its tables (`FA.wetted_fraction`) — its depth is measured from
+the cell's lowest ground, so counting whole cells by it overstates the extent
+(at 6 h 4.96 km² against 1.79 km²).
+"""
+function _carl_wet_area(r, k, depth)
+    if r.flow_model == "sgs"
+        f = FA.wetted_fraction(r, k; wet = depth)
+        return sum(r.mesh.area[i] * f[i] for i in eachindex(f) if isfinite(f[i]); init = 0.0)
+    end
+    h = FA.depth(r, k)
+    return sum(r.mesh.area[i] for i in eachindex(h) if isfinite(h[i]) && h[i] > depth; init = 0.0)
+end
 
 """
 Time (s) at which the volume leaving the domain first reaches `vol` (m³),
@@ -110,10 +123,11 @@ const _CARL_CHECKS = [
     Check("SWE arrival (50 000 m³ out) = recorded (A5 6 688, Cartesian 5 736 s) ± 2%",
           m -> abs(m["a5_swe"]["arrival_s"] / 6688 - 1) <= 0.02 && abs(m["cart_swe"]["arrival_s"] / 5736 - 1) <= 0.02;
           detail = m -> _carl_list(m, "arrival_s", ("a5_swe", "cart_swe"))),
-    # SGS has no reference: the recorded 0.3.0 run (§15.11, 4.299 Mm³; Σ volume
-    # at 21 600 s 4.300). ±2%, as the local-inertial time-step sensitivity.
-    Check("SGS 6 h storage = recorded 4.30 Mm³ ± 2%",
-          m -> abs(m["a5_sgs"]["storage_m3"] / 4.30e6 - 1) <= 0.02;
+    # SGS has no reference here: a regression pin on the recorded 0.7.0 run,
+    # ±2% as the local-inertial time-step sensitivity. (Until 0.6.0: 4.30 Mm³,
+    # 1.6× the SWE reference — conveyance held back; cases/expected/v0.6.0/.)
+    Check("SGS 6 h storage = recorded 1.755 Mm³ ± 2%",
+          m -> abs(m["a5_sgs"]["storage_m3"] / 1.755e6 - 1) <= 0.02;
           detail = m -> _carl_list(m, "storage_m3", ("a5_sgs",))),
     # The 10 mm/h rain is a test forcing: early in the event (inflow 100–230 m³/s)
     # the river alone wets little more than its channels, so most of the 6 h
@@ -141,8 +155,8 @@ let
         alone) — on A5 res 18 (~22 m cells) and on a 20 m
         Cartesian grid aligned with the 5 m LiDAR averaged to 20 m, each with
         the 0.3.0 local-inertial default and with the full SWE reference
-        (`--flow-model swe`, order 2), and SGS on A5 res 18 (no reference;
-        storage only). Metrics at 6 h: storage (Σ volume), and from the log the
+        (`--flow-model swe`, order 2), and SGS on A5 res 18 (no SWE comparison
+        here; storage, and its flooded area from its tables). Metrics at 6 h: storage (Σ volume), and from the log the
         volume added and removed, the mass-balance error and the arrival time
         (50 000 m³ out); each local-inertial run against the SWE run on its
         mesh (storage ratio, rms Δh over wet cells, CSI and bias of the extent
@@ -224,13 +238,44 @@ function _carl_peak_metrics(ctx)
         ref = get(j.tags, :reference, nothing)
         ref === nothing && continue
         for (tag, t) in (("w0", t0), ("wmid", (t0 + t1) / 2), ("w1", t1))
-            c = FA.compare(ctx.runs[ref], ctx.runs[name]; k_ref = FA.frame_at(ctx.runs[ref], t; tol = _CARL_PEAK_TOL))
+            kr = FA.frame_at(ctx.runs[ref], t; tol = _CARL_PEAK_TOL)
+            if get(j.tags, :solver, "") == "sgs"
+                merge!(out[name], _carl_sgs_compare(ctx.runs[ref], ctx.runs[name], kr, t, tag))
+                continue
+            end
+            c = FA.compare(ctx.runs[ref], ctx.runs[name]; k_ref = kr)
             abs(c.t - c.t_ref) <= _CARL_PEAK_TOL || error("$name vs $ref: frames at different times")
             merge!(out[name], Dict("storage_ratio_$tag" => c.storage_ratio, "rms_dh_$tag" => c.rms,
                                    "csi_$tag" => c.csi, "bias_$tag" => c.bias))
         end
     end
     return out
+end
+
+"""
+SGS against a reference on the same cells (0.7.0). An SGS depth is measured
+from the cell's lowest ground, a cell-mean depth from its mean bed, so the two
+are compared through quantities that mean the same in both: the stored volume,
+the mean depth volume/area (wet: ≥ 0.1 m, for CSI and bias) and the water
+level (rms over cells wet in both — for two runs on one bed this is the rms
+depth difference, `rms_dh` of the local-inertial runs).
+"""
+function _carl_sgs_compare(ref, r, kr, t, tag)
+    k = FA.frame_at(r, t; tol = _CARL_PEAK_TOL)
+    abs(r.t[k] - ref.t[kr]) <= _CARL_PEAK_TOL || error("SGS vs reference: frames at different times")
+    length(r.mesh.area) == length(ref.mesh.area) || error("SGS and its reference are on different meshes")
+    A = r.mesh.area
+    V = FA.volume(r, k); Vr = FA.volume(ref, kr); η = FA.wse(r, k); ηr = FA.wse(ref, kr)
+    ok(i) = isfinite(V[i]) && isfinite(Vr[i]) && A[i] > 0
+    wet = [ok(i) && V[i] / A[i] >= 0.1 for i in eachindex(A)]
+    wetr = [ok(i) && Vr[i] / A[i] >= 0.1 for i in eachindex(A)]
+    both = wet .& wetr
+    hit = sum(A[both]); un = sum(A[wet .| wetr])
+    dη = [η[i] - ηr[i] for i in eachindex(A) if both[i] && isfinite(η[i]) && isfinite(ηr[i])]
+    return Dict("storage_ratio_$tag" => FA.stored_volume(r, k) / FA.stored_volume(ref, kr),
+                "rms_dh_$tag" => isempty(dη) ? NaN : sqrt(sum(abs2, dη) / length(dη)),
+                "mean_dh_$tag" => isempty(dη) ? NaN : sum(dη) / length(dη),
+                "csi_$tag" => un > 0 ? hit / un : NaN, "bias_$tag" => sum(A[wet]) / max(sum(A[wetr]), eps()))
 end
 
 let
@@ -247,7 +292,10 @@ let
         boundaries and the river initially dry. Compared over the 6 h before the
         peak (49.5, 52.5 and 55.5 h): each local-inertial run against the SWE
         reference on its mesh (storage ratio, rms Δh, CSI and bias of the extent
-        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 (no reference).
+        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 against the A5 SWE
+        run (storage, water level where both are wet, extent by mean depth
+        V/A), with the agreed bar as an expected failure (see
+        `carlisle_peak_fine` for the 5 m references).
         Uses the `carlisle` case's meshes (run `cases/run.jl prep carlisle`
         first).""",
         prep = Prep[],
@@ -260,7 +308,7 @@ let
                 Job("cart_li", vcat(["--meshload", cart, "--flow-model", "standard"], _CARL_PEAK_RUN);
                     mesh = "cartesian", solver = "li", reference = "cart_swe"),
                 Job("a5_sgs", vcat(["--meshload", sgsmesh, "--flow-model", "sgs"], _CARL_PEAK_RUN);
-                    mesh = "a5", solver = "sgs")],
+                    mesh = "a5", solver = "sgs", reference = "a5_swe")],
         analyse = _carl_peak_metrics,
         checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
                         m -> all(d["mass_balance_rel"] < 1e-6 for (_, d) in m);
@@ -285,9 +333,65 @@ let
                   # the two LI runs nearly coincide (1%); the references differ by 12%
                   Check("the A5 and Cartesian local-inertial runs store within 5% of each other at 55.5 h",
                         m -> abs(m["a5_li"]["storage_w1_m3"] / m["cart_li"]["storage_w1_m3"] - 1) < 0.05;
-                        detail = m -> _carl_list(m, "storage_w1_m3", ("a5_li", "cart_li")))],
-        # no SGS check: its 6 h-before-peak storage (2.5× SWE; Eden ~3 m high) is
-        # under investigation (PROJECT_STATE) and a check would enshrine it
+                        detail = m -> _carl_list(m, "storage_w1_m3", ("a5_li", "cart_li"))),
+                  # The bar for SGS (plan of 2026-11, agreed): if a sub-grid model is no
+                  # closer to the full shallow-water reference than the cell-mean
+                  # local-inertial model on the same mesh, there is little evidence of
+                  # its benefit.
+                  Check("SGS on A5 is no further from the SWE reference than local-inertial on the same mesh, at 49.5, " *
+                        "52.5 and 55.5 h: storage, rms water-level difference and extent (CSI at 0.1 m mean depth)",
+                        m -> all(abs(m["a5_sgs"]["storage_ratio_$w"] - 1) <= abs(m["a5_li"]["storage_ratio_$w"] - 1) &&
+                                 m["a5_sgs"]["rms_dh_$w"] <= m["a5_li"]["rms_dh_$w"] &&
+                                 m["a5_sgs"]["csi_$w"] >= m["a5_li"]["csi_$w"] for w in ("w0", "wmid", "w1"));
+                        detail = m -> join(("$w: storage ÷ SWE $(round(m["a5_sgs"]["storage_ratio_$w"]; digits = 3)) " *
+                                            "(LI $(round(m["a5_li"]["storage_ratio_$w"]; digits = 3))), rms Δη " *
+                                            "$(round(m["a5_sgs"]["rms_dh_$w"]; digits = 3)) m (LI $(round(m["a5_li"]["rms_dh_$w"]; digits = 3))), " *
+                                            "CSI $(round(m["a5_sgs"]["csi_$w"]; digits = 3)) (LI $(round(m["a5_li"]["csi_$w"]; digits = 3)))"
+                                            for w in ("w0", "wmid", "w1")), "; "),
+                        xfail = "0.7.0: SGS stores 0.52–0.57 of the 22 m SWE run (local-inertial 0.74–0.76). " *
+                                "The 22 m SWE run is not a reference: against the 5 m references (case " *
+                                "carlisle_peak_fine; plan §9.3a) it stores 24% more than 5 m SWE, SGS is closest of " *
+                                "the 22 m models to 5 m local-inertial (level −0.14 m median), and local-inertial " *
+                                "itself conveys more than SWE at 5 m. The bar is to be restated against the 5 m runs")],
+        # (the SGS bar, agreed 2026-11-16, is the last check below. Until 0.7.0
+        # SGS stored 2.5× SWE here, the Eden ~3 m high: cases/expected/v0.6.0/)
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
+    ))
+end
+
+# ── carlisle_peak_fine: 5 m references for the peak (0.7.0) ────────────────
+# The 22 m runs of `carlisle_peak` cannot say which of them is nearer the
+# truth: their reference is SWE on cell-mean beds at the same resolution, and
+# an SGS cell with water in a sub-grid channel is not the same thing as a
+# cell-mean cell with that volume spread over it. A 5 m Cartesian grid
+# resolves the banks: local-inertial and SWE on it are what the 22 m models
+# (standard, SWE and SGS) should each be judged against (plan of 2026-11,
+# §9.3). GPU runs: 582 012 cells for 55.5 h is hours for local-inertial and
+# about a day for SWE; they are not part of `carlisle_peak`, which must stay
+# runnable on a CPU in under an hour. The mesh is the benchmark suite's
+# (`julia --project=. benchmarks/run.jl`, test/case_runs/perf/).
+let
+    cart5 = "{case}/../perf/carlisle_cart5.parquet"
+    gpu(prec) = ["--backend", "gpu", "--precision", prec]
+    register!(Case(
+        name = "carlisle_peak_fine", tier = :full,
+        title = "Carlisle to the Eden peak on a 5 m Cartesian grid (GPU): the fine reference for carlisle_peak",
+        doc = "docs/TEST_CASES.md §3",
+        description = """
+        The `carlisle_peak` event (55.5 h, river inflow only) on the 5 m Cartesian
+        mesh of the same domain (582 012 cells), local-inertial (GPU, Float64) and
+        SWE (GPU, Float32), output every 30 min. The reference against which the
+        22 m runs of `carlisle_peak` — standard, SWE and SGS — are compared.
+        Needs a CUDA GPU and the 5 m mesh of the benchmark suite; hours
+        (local-inertial) to about a day (SWE).""",
+        prep = Prep[],
+        jobs = [Job("cart5_li", vcat(["--meshload", cart5, "--flow-model", "standard"], _CARL_PEAK_RUN, gpu("float64"));
+                    threads = 2, mesh = "cartesian5", solver = "li"),
+                Job("cart5_swe", vcat(["--meshload", cart5, "--flow-model", "swe"], _CARL_PEAK_RUN, gpu("float32"));
+                    threads = 2, mesh = "cartesian5", solver = "swe")],
+        analyse = ctx -> Dict(name => Dict("t_end" => r.t[end], "storage_w1_m3" => FA.stored_volume(r, FA.nframes(r)))
+                              for (name, r) in ctx.runs),
+        checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
+                        m -> all(d["mass_balance_rel"] < 1e-6 for (_, d) in m))],
     ))
 end

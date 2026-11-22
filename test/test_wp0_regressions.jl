@@ -59,28 +59,42 @@ function _set_depths!(state::FlowState, h::Vector{Float64})
 end
 
 # ---------------------------------------------------------------------------
-@testset "W1 — _cfl_dt applies the SGS depth cap" begin
+@testset "W1 — _cfl_dt: SGS uses the hydraulic depth V/A_wet (0.7.0; was: the relief cap)" begin
+    # WP0 fixed `method == SGSFlow` (always false), which had left the SGS
+    # branch of _cfl_dt dead. Until 0.7.0 that branch capped the depth at the
+    # cell's relief z_max − z_min, ignoring all water above the highest ground
+    # (a cell with 2 cm of relief under 4 m of water was taken as 2 cm deep).
+    # It now takes the hydraulic depth V / A_wet.
     mesh  = _cart_mesh()
     state = initialise_flow_model(mesh, StandardFlow())
     n     = length(state.cell_ids)
-    nb    = 10
-    # Minimal per-cell SGS tables with a 0.5 m terrain range (z_min 0, z_max 0.5).
+    nb    = 11
+    # Tables with a 0.5 m terrain range whose wetted area grows linearly with
+    # the level (a plane tilted across the cell): V(η) = A·η²/(2·0.5) up to 0.5.
     tbls = Any[]
     for i in 1:n
         elev = collect(range(0.0, 0.5; length = nb))
         A    = state.cell_area[i]
-        push!(tbls, SGSTable(elev, A .* elev, fill(A, nb), A, 0.0, 0.5,
+        push!(tbls, SGSTable(elev, A .* elev .^ 2 ./ (2 * 0.5), A .* elev ./ 0.5, A, 0.0, 0.5,
                              zeros(nb, 5), zeros(nb, 5)))
     end
     state.sgs_tables = tbls
-    fill!(state.water_depth, 4.0)          # every cell "overfull": 4 m ≫ 0.5 m range
 
+    # (a) submerged cells, 4 m above the lowest ground: V = A·(0.25 + 3.5),
+    # hydraulic depth 3.75 m — not the 0.5 m relief
+    fill!(state.water_depth, 4.0)
+    state.volume .= state.cell_area .* 3.75
+    dt_std = _cfl_dt(state, StandardFlow())            # uses water_depth = 4 m
+    dt_sgs = _cfl_dt(state, SGSFlow())
+    @test isapprox(dt_sgs / dt_std, sqrt(4.0 / 3.75); rtol = 1e-10)
+
+    # (b) partly wet cells, level 0.25 m: half the cell wet, V = A·0.0625,
+    # hydraulic depth 0.125 m (half the depth at the deepest point)
+    fill!(state.water_depth, 0.25)
+    state.volume .= state.cell_area .* 0.0625
     dt_std = _cfl_dt(state, StandardFlow())
     dt_sgs = _cfl_dt(state, SGSFlow())
-    # Standard uses h = 4 m; SGS must cap at the 0.5 m terrain range → dt
-    # larger by √(4/0.5) = √8.
-    @test dt_sgs > dt_std
-    @test isapprox(dt_sgs / dt_std, sqrt(8.0); rtol = 1e-10)
+    @test isapprox(dt_sgs / dt_std, sqrt(0.25 / 0.125); rtol = 1e-10)
 end
 
 # ---------------------------------------------------------------------------

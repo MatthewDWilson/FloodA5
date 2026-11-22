@@ -24,7 +24,8 @@
 # Registry files (`cases/registry/*.jl`, included in name order) share this
 # module's namespace: prefix every helper with the case's abbreviation
 # (`_pt_` point spread, `_ps_` planar slope, `_pe_` planar embankment,
-# `_ch_` channel, `_carl_` Carlisle); `_planar_common.jl` holds shared ones.
+# `_pw_` planar wall, `_ch_` channel, `_carl_` Carlisle); `_planar_common.jl`
+# holds shared ones.
 
 module FloodA5Cases
 
@@ -257,13 +258,18 @@ end
 
 `:done` if the output completed and records exactly this job's command line.
 """
+# Windows paths are case-insensitive and take either slash (a run started
+# from d:/… is the run recorded from D:\…)
+_norm_arg(a) = Sys.iswindows() ? replace(lowercase(String(a)), '/' => '\\') : String(a)
+_same_argv(a, b) = length(a) == length(b) && all(_norm_arg(x) == _norm_arg(y) for (x, y) in zip(a, b))
+
 function job_status(c::Case, j::Job)
     p = job_output(c, j)
     isfile(p) || return :missing
     try
         FO.format_version(p) >= 2 || return :changed
         ri = FO.run_info(p)
-        ri["argv"] == job_argv(c, j) || return :changed
+        _same_argv(ri["argv"], job_argv(c, j)) || return :changed
         get(get(ri, "summary", Dict()), "completed", false) == true || return :failed
         return :done
     catch

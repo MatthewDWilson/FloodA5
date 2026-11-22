@@ -33,6 +33,198 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-18
+
+SGS conveyance (MINOR; plan: `projectinstructions/FloodA5_SGS_Conveyance_Fix_Plan_2026-11.md`).
+**Breaking for SGS meshes**: tables are layout 3; SGS meshes must be rebuilt
+(`--meshgen … --flow-model sgs --mesh-only`). Standard flow and SWE are
+unchanged. The results of the old scheme are kept in `cases/expected/v0.6.0/`
+(and tag `v0.6.0`).
+
+### Changed
+- ⚠ **SGS face tables (layout 3).** Each face has one table, built from the
+  DEM profile along the face on the face's own levels and held identically by
+  both cells: flow area A, wetted width P and the conveyance integral
+  K = Σ dx·h^(5/3) at 64 levels (denser near the sill) that reach above the
+  highest point of the profile, continued analytically above them with the
+  full face width (`A5Grid.face_table_from_profile`, `face_apk`; mesh columns
+  `sgs_face_A/P/K`, `sgs_face_zr`, with `sgs_edge_sills` their lowest level).
+  They replace the per-cell edge curves (`sgs_edge_area_curve`,
+  `sgs_edge_perim_curve`), which were tabulated on each cell's own levels and
+  stopped growing at the cell's highest DEM sample, and the ½(A_i + A_j),
+  ½(R_i + R_j) average in the kernel (case `sgs_strip`: faces carried 39% and
+  2.5% of their flow area 0.4 m above the floodplain). `edge_area_radius`,
+  `flow_area_from_wse`, `wetted_perim_from_wse`, `hydraulic_radius_from_wse`
+  are removed. Layout ≤ 2 meshes are refused (`FLOODA5_ALLOW_OLD_SGS_LAYOUT`
+  is gone); `--rerun` of an SGS output written by ≤ 0.6.0 stops with that
+  message. The SGS loop of the frozen `surfacewater/reference_steps.jl` reads
+  the face tables too (a deliberate change of that file).
+- ⚠ **SGS conveyance form**: `--sgs-conveyance 2d` (default) uses
+  R = (K/A)^(3/2), i.e. A·R^(2/3) = Σ h^(5/3) over the face profile — the
+  uniform-flow limit of the 2-D equations. `lumped` keeps one hydraulic radius
+  A/P per face (for the record: overbank it gives the level of a cell-mean
+  grid, +0.04 m on the strip).
+- ⚠ **SGS limiter**: `--scheme recommended` gives SGS `--limiter positivity`
+  and `--boundary-limiter positivity` (were `legacy`). The legacy donor cap,
+  V/(2N) per face per step, held in-bank channels brim-full.
+- ⚠ **SGS time step**: the depth of an SGS cell for the time-step limit is
+  the hydraulic depth V/A_wet (was: capped at the cell's relief
+  z_max − z_min, which ignored all water above a cell's highest ground), and
+  a second limit follows from the faces: rate ½√(g·Σ(A_f/L_f)/A_wet)
+  (`_sgs_face_rate`), which for a fully wet square cell is the usual
+  √(g h)/Δx and is larger for a cell that holds only a sliver of a channel
+  its faces convey. Without it such cells oscillated and held the channel up
+  by up to 0.5 m on the A5 strip. The wetted area is floored at 2% of the
+  cell (`SGS_CFL_AREA_FLOOR`). The A5 strip in bank takes 24 300 steps (0.6.0: 5 650).
+
+- ⚠ **SGS tables from a working grid.** `build_sgs_tables!` covers each cell
+  with a regular grid in a local metric frame (`--sgs-samples`, default 1600
+  points; was 512 Halton candidates whatever the cell or DEM) and takes the
+  storage curve from four samples per grid cell. The cell's lowest and
+  highest ground are taken over the grid and the profiles of its sides; faces
+  are sampled at midpoints, half a pixel apart in metres (a geographic DEM's
+  pixel was converted without cos φ). Volume tables on the strip: within 0.3%
+  of the terrain on Cartesian (was 0.3%), 3% at worst on A5 (was 13%).
+- ⚠ **SGS connectivity** (`--sgs-connectivity on|off` at mesh generation,
+  default on). A point of a face conveys only from the level at which it is
+  connected, below the water, to the main basins of both cells
+  (`_cell_connectivity`: the first region of ground below a rising level to
+  reach two sides of the cell). A barrier inside a cell closes the faces
+  behind it up to its crest, or to the sill of a gap through it. Until now a
+  wall narrower than a cell passed water as soon as the water reached it
+  (case `planar_wall`: 58–64% of the inflow, 2.9 m below the crest); now
+  nothing passes. `sgs_face_raise` in the mesh records the change per face.
+- ⚠ **SGS flow-path geometry** (`--sgs-path on|off`, default on). For cells
+  less than half wet the slope across a face is taken over the distance
+  between the two cells' wetted-area centroids and the face's flow area is
+  projected on that line (`_sgs_path`, `wet_centroid`; mesh columns
+  `sgs_wet_cx/cy`); fully wet cells are unchanged. A channel crossing A5
+  cells in a zig-zag was 0.054 m high in bank on the strip; now 0.010 m low.
+- ⚠ **SGS open boundaries.** Polygon sides on the mesh boundary have face
+  tables like any face (was: a rectangle of the side's width above the
+  cell's lowest ground; still the fallback where the DEM does not reach).
+  The bed slope of the normal-depth outflow is the slope of the local valley
+  floor (`_sgs_boundary_slopes`), at least 1e-4 (was: the difference of two
+  cells' mean elevations, 21% at the Eden's outlet from the Carlisle domain).
+- ⚠ **SGS Courant number**: 0.5 by default with `--flow-model sgs` (0.7
+  otherwise). At 0.7 the SGS water surface in deep, fast channel flow breaks
+  into cell-scale oscillations (Carlisle at the peak); 0.5 and 0.35 agree.
+- `mesh/repair_sgs_slot_order.py` is removed (it repaired tables to layout 2,
+  which is now refused). `visualisation/visualise_mesh.jl` reads the face
+  tables.
+- Case runner: a run's identity no longer depends on the case of a Windows
+  path or on its slash direction.
+
+### Results
+- `sgs_strip` (8 h; analytic 2-D level δ −0.267 / +0.372 m). Cartesian 20 m:
+  in bank −0.279 m, storage 3.50 m²/m (3.57); overbank +0.362 m, 26.7
+  (27.3). A5 res 18: in bank −0.277 m, 3.50; overbank +0.340 m (2-D for its
+  own width +0.290, local-inertial on the same mesh +0.390). All steady.
+  0.6.0: −0.008 m (brim-full), +4.75 m and still filling, out of bank on A5.
+  All eight expected failures of the case now pass and are ordinary checks.
+- `planar_wall`: nothing passes the 4 m wall (was 58–64% of the inflow); the
+  pond reaches 7.07–7.14 m (level pool 7.12, crest 8.05). Its two expected
+  failures are ordinary checks again.
+- `planar_embankment`: water passes at the notch (first at 842 s, upstream
+  level 5.25 m; sill 5.0, crest 7.0) and nowhere else.
+- `carlisle` (6 h, rain): SGS stores 1.755 Mm³ (0.6.0: 4.30; local-inertial
+  3.37, SWE 2.69). The regression pin is re-recorded.
+- `carlisle_peak` (55.5 h): SGS stores 5.94 Mm³ (0.6.0: 26.7), 0.57 of the
+  SWE reference where local-inertial stores 0.76; its water surface is a
+  median 0.89 m below SWE (local-inertial 0.53 m). SGS is smooth and
+  time-step converged but conveys more than local-inertial. **The check
+  "SGS no further from SWE than local-inertial" fails** and is kept as an
+  expected failure. Against 5 m references (case `carlisle_peak_fine`,
+  plan §9.3a, HYDRAULICS §15.13) the 22 m SWE run stores 24% more than 5 m
+  SWE, so it is not a reference; SGS is the 22 m model closest to the 5 m
+  local-inertial solution (level −0.14 m median, rms 0.24 m), but
+  local-inertial conveys more than SWE at 5 m, and against 5 m SWE SGS
+  stores 0.70 (22 m local-inertial 0.94, by compensating errors).
+- Checks changed where they referred to the old scheme: the strip's default
+  run is compared with the 2-D analytic (was the lumped one), tolerances
+  0.03 m / 5% overbank (were 0.10 m / 10%); its `--limiter positivity` jobs
+  are replaced by `--sgs-conveyance lumped` jobs; its A5 overbank check
+  compares SGS and local-inertial with the 2-D answer for the strip's own
+  width. Expected values of `sgs_strip`, `planar_wall`, `planar_embankment`,
+  `carlisle` and `carlisle_peak` are re-recorded.
+- Cost: the A5 strip in bank takes 24 300 steps (5 650 in 0.6.0); Carlisle
+  peak 181 000 (131 000).
+
+### Known issues (found, not changed)
+- DEM sampling is half a pixel off for pixel-is-area rasters, in every
+  engine (`_affine_to_pixel` / `_bilinear`); see plan §9.4.
+- Standard flow's open-boundary slope is taken from two cells' mean
+  elevations, as SGS's was.
+- The η filter is not implemented for SGS (hence its Courant 0.5).
+- SGS faces have no critical-flow limit: `planar_embankment` passes ≈ 9.8 m³/s
+  through the 4 m notch at ≈ 1.07 m of head, above critical flow (≈ 7.5 m³/s
+  for a 4 m rectangle).
+
+### Added
+- `cases/expected/v0.6.0/`: the SGS metrics, table diagnostics and strip
+  series of the scheme up to 0.6.0, for before/after comparison.
+- **Case `carlisle_peak_fine`**: the `carlisle_peak` event on the 5 m
+  Cartesian mesh (582 012 cells), local-inertial and SWE on the GPU — the
+  fine reference for the 22 m runs (docs/TEST_CASES.md §3).
+- `notebooks/04_sgs_strip.ipynb` rewritten as diagnosis, fix and result
+  against the 0.6.0 record.
+- `notebooks/01_planar.ipynb`: the `planar_wall` case (new section) and the
+  embankment against the 0.6.0 record; `notebooks/03_carlisle.ipynb`: SGS
+  compared like for like (storage, mean depth, level where both are wet,
+  wetted area from its tables) and an optional section against the 5 m
+  references.
+- **Analysis: fine-to-coarse comparison** (`analysis/aggregate.jl`):
+  `FA.assign_to_cells`, `aggregate_fine` / `aggregate_onto`, `compare_to_fine`
+  (a fine run aggregated onto a coarse mesh's cells: volume, wetted fraction,
+  level of the wet fine cells), and SGS tables read from the mesh GeoParquet
+  without Python (`load_sgs_tables`, `sgs_tables`, `wetted_fraction`,
+  `load_mesh_columns`). Tests in `test/analysis/test_aggregate.jl`.
+- ⚠ `carlisle` / `carlisle_peak`: the SGS flooded area (`wet_area_0p1*`) is
+  the area wetter than 0.1 m from its tables (was whole cells by SGS depth,
+  measured from the lowest ground: 4.96 km² at 6 h, now 1.79). Re-recorded.
+
+SGS conveyance fix, Phase 0 (measurement; no model change).
+
+### Added
+- **Registry case `planar_wall`** (`cases/registry/planar_wall.jl`,
+  docs/TEST_CASES.md §2d): a 3 m wall with no notch across the planar slope —
+  40 m wide, and 4 m wide (narrower than a cell, placed inside the cells of
+  both meshes) — with an inflow that provably leaves the level-pool level
+  0.84–0.93 m below the crest (wedge storage). SGS and standard flow on A5
+  res 18 and Cartesian 20 m (8 runs). Checks state the correct behaviour (no
+  water downstream of the wall). Result (0.6.0): the 40 m wall holds in every
+  run; **SGS passes the 4 m wall as soon as the water reaches it** (A5: 722 s,
+  124 660 m³ = 58.5% of the inflow downstream at 6 h; Cartesian: 962 s,
+  136 972 m³ = 64.3%), 2.9 m below the crest, wherever the water touches the
+  wall. Those two checks are expected failures (`xfail`: SGS conveys through
+  faces from the DEM profile on the face line only; a barrier inside a cell
+  is not seen) until SGS connectivity (fix plan, Phase 3). Standard flow on
+  the thin wall is checked against the cell-mean ridge it sees (5.36 /
+  5.63 m), which it overtops early. Expected values:
+  `cases/expected/planar_wall.toml` (the six passing runs and the design).
+- `planar_embankment`: metrics (no new checks) of where water crosses the
+  embankment — the first-row cells downstream that hold water at the first
+  crossing and through time, by distance from the notch, cells on the
+  embankment's top, and downstream volume by band. Result: nothing crosses
+  the 40 m embankment away from the notch in either run. The 61 existing
+  expected values are unchanged; the new keys were added with `baseline`.
+- `test/test_cases.jl` C5: `planar_wall` is registered, well formed, its
+  design holds and its expected-failure marks are in place (no simulation).
+
+### Fixed
+- `generate_planar_embankment_dem.py --notch-width 0` now guarantees no
+  notch (the `|y − y_c| ≤ w/2` test would open a pixel row whose centre lies
+  on the centre line, i.e. with an odd number of rows). Output for existing
+  arguments is unchanged.
+
+### Known issues (found, not changed)
+- DEM sampling is registered half a pixel off: `_affine_to_pixel`
+  (`mesh/A5Grid.jl`) returns corner-based pixel coordinates and `_bilinear`
+  treats them as centre-based, so every DEM sample (cell means, SGS tables,
+  face profiles) is taken half a pixel east and south of its position
+  (docs/TEST_CASES.md §2d, "A wall on a face").
+
+
 ## [0.6.0] — 2026-11-15
 
 Float32 on the device backends and a benchmark suite (MINOR). Float64

@@ -4,10 +4,10 @@ Worked, reproducible accounts of the test cases, in this order:
 
 | Notebook | Cases (`cases/run.jl`) | What it covers |
 |---|---|---|
-| `01_planar.ipynb` | `planar_slope`, `planar_embankment` | Planar-slope symmetry and the sub-grid (SGS) embankment notch: DEM generation (Python), A5 mesh generation (pya5), runs, metrics, figures |
+| `01_planar.ipynb` | `planar_slope`, `planar_embankment`, `planar_wall` | Planar-slope symmetry, the sub-grid (SGS) embankment notch, and a wall with no gap (does a barrier inside a cell hold water?): DEM generation (Python), A5 and Cartesian mesh generation, runs, metrics, figures |
 | `02_channel.ipynb` | `channel` (and `channel_series`) | The straight-channel representation series: A5 vs Cartesian, SWE vs local-inertial |
 | `03_carlisle.ipynb` | `carlisle_peak`, `carlisle` | Carlisle against the full shallow-water reference: the 6 h before the Eden peak (river inflow only), and the recorded first-6 h test window (with its 10 mm/h test rain, and without) |
-| `04_sgs_strip.ipynb` | `sgs_strip` | The sub-grid (SGS) model on a synthetic strip with a sub-cell channel, against analytic normal flow, storage and arrival times and a 2.5 m reference: how SGS represents the channel, why it holds water back (legacy donor cap in bank; edge flow areas frozen above each cell's highest DEM sample overbank), and the storage-measurement question |
+| `04_sgs_strip.ipynb` | `sgs_strip` | The sub-grid (SGS) model on a synthetic strip with a sub-cell channel, against analytic normal flow, storage and arrival times and a 2.5 m reference: the storage-measurement question, why SGS held water back until 0.6.0 (edge flow areas frozen above each cell's highest DEM sample; legacy donor cap), what 0.7.0 changed (face tables, 2-D conveyance, positivity, time step, flow-path geometry) and the result against the 0.6.0 record |
 | `05_performance.ipynb` | — (`benchmarks/`) | Performance on this machine and the others with results: step throughput on CPU threads, GPU Float64 and GPU Float32, thread scaling, Carlisle wall times, and the accuracy of GPU and Float32 runs against the CPU Float64 run. Runs the benchmarks the machine has no results for and saves them to `benchmarks/results/` |
 
 Each notebook describes every simulation and shows the exact commands (from
@@ -55,7 +55,7 @@ indent), so it changes nothing but the outputs.
 
 ## Running time
 
-The first run of a notebook makes its case runs: planar about 15 min,
+The first run of a notebook makes its case runs: planar about 35 min (three cases, 12 runs and 12 meshes),
 channel about 15 min, SGS strip about 40 min, Carlisle about 45 min (`carlisle`) plus 1.5 h (`carlisle_peak`:
 the event to the Eden peak, two SWE runs of ~85 min) on 16 cores. Later runs reuse
 them (`test/case_runs/`, git-ignored) and take a minute or two.

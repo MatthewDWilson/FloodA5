@@ -34,16 +34,18 @@ const _LEGACY = (gradient_correction = false, face_flux_method = :legacy,
     @test v == merge(_LEGACY, (gradient_correction = true, face_flux_method = :diamond_wetdry,
                                friction_model = :vector, limiter = :hybrid, cfl_mode = :local,
                                q_centre_mode = :consistent))
-    for s in (:recommended, :v02)                     # SGS: only the boundary neighbour changes in 0.3.0
-        g = scheme_options(s, :sgs)
+    for s in (:recommended, :v02)                     # SGS: the boundary neighbour (0.3.0) and
+        g = scheme_options(s, :sgs)                   # positivity limiting (0.7.0) under :recommended
         @test g == merge(_LEGACY, (friction_model = :vector, cfl_mode = :local, q_centre_theta = 1.0,
+                                   limiter = s === :recommended ? :positivity : :legacy,
                                    open_boundary = s === :recommended ? :normal : :legacy))
     end
     for f in (:standard, :sgs, :swe), s in (:legacy, :recommended, :v02)
         (s === :legacy || f === :swe) && @test scheme_options(s, f) == _LEGACY
     end
     @test scheme_boundary_limiter(:recommended, :standard) === :positivity
-    for (s, f) in ((:recommended, :sgs), (:recommended, :swe), (:v02, :standard), (:legacy, :standard))
+    @test scheme_boundary_limiter(:recommended, :sgs) === :positivity      # 0.7.0
+    for (s, f) in ((:v02, :sgs), (:recommended, :swe), (:v02, :standard), (:legacy, :standard))
         @test scheme_boundary_limiter(s, f) === :legacy
     end
     @test_throws ArgumentError scheme_options(:fast, :standard)

@@ -1,5 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
-![Version 0.6.0](https://img.shields.io/badge/Version-0.6.0-lightgrey)
+![Version 0.7.0](https://img.shields.io/badge/Version-0.7.0-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -137,7 +137,6 @@ FloodA5/
 │   ├── DiamondFlux.jl         # Diamond face-normal gradient reconstruction
 │   ├── a5_bridge.py           # Python bridge: pya5 calls (0.x and 1.x), GeoParquet I/O
 │   ├── migrate_mesh_ids.py    # pya5 0.x → 1.x cell-ID migration for existing meshes
-│   ├── repair_sgs_slot_order.py # Repair SGS tables built before the 2026-10 slot-order fix
 │   ├── mesh_families.py       # Hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
 │   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
 ├── surfacewater/
@@ -211,13 +210,16 @@ rapidly varying or supercritical flow, flow around obstacles. It is also the
 reference for the local-inertial engines (`docs/HYDRAULICS.md` §15.10). It
 typically takes 5–10 times as many time steps as `standard`.
 
-**`--flow-model sgs`** — Sub-Grid Sampling (opt-in; it was the default before
-0.5.0). WSE is derived from stored volume via a pre-computed hypsometric curve,
-and the edge flux uses a Manning hydraulic radius (R-A) formulation, so sub-cell
-channels and partial wetting are represented. It requires a DEM and a mesh built
-with `--flow-model sgs`. Its behaviour at high stage is under investigation: on
-Carlisle near the peak it holds the river about 3 m above the other engines
-(`projectinstructions/PROJECT_STATE.md`).
+**`--flow-model sgs`** — Sub-Grid Sampling (opt-in). Each cell stores water
+with a hypsometric curve from the DEM, and each face conveys it with a table
+of its own DEM profile (flow area and Σ h^(5/3)), so channels, notches and
+walls narrower than a cell are represented (`docs/HYDRAULICS.md` §9). It
+requires a DEM and a mesh built with `--flow-model sgs`; **meshes built before
+0.7.0 must be rebuilt**. It defaults to Courant 0.5. On synthetic cases it
+reaches the analytic levels within 1–2 cm. On Carlisle at the peak it
+reproduces a 5 m local-inertial solution more closely than 22 m local-inertial
+does, but like any local-inertial model it conveys more than the full SWE in
+deep, fast flow (`docs/HYDRAULICS.md` §15.13).
 
 The local-inertial engines (`standard`, `sgs`) use the Bates et al. (2010) formulation with a
 Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7)
@@ -232,11 +234,11 @@ configuration.
 |---|---|---|---|---|
 | Face gradient | diamond, two-point next to dry cells (`--gradient-correction on --face-flux-method diamond-wetdry`) | two-point | as default | two-point |
 | Friction | vector, \|q\| (`--friction-model vector`) | vector | vector | face-normal only |
-| Wet/dry limiter | positivity, one scale per donor cell, also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | per-edge (legacy) | hybrid | per-edge |
+| Wet/dry limiter | positivity, one scale per donor cell, also at open boundaries (`--limiter positivity --boundary-limiter positivity`) | positivity (0.7.0) | hybrid | per-edge |
 | Timestep | per-cell CFL (`--cfl-mode local`) | per-cell CFL | per-cell CFL | smallest cell, 99th-percentile depth |
 | Momentum smoothing | none (`--q-centre-theta 1`) | none | consistent Q-centring, θ = 0.9 | Q-centring θ = 0.9 as originally written |
 | Damping | free-surface filter at a rate that does not depend on Δt (`--eta-filter 0.05`) | none | none | none |
-| Open boundaries | free outflow at normal depth: the bed slope from the inward neighbour (`--open-boundary normal`) | normal depth | as before 0.3.0 | as before 0.3.0 |
+| Open boundaries | free outflow at normal depth: the bed slope from the inward neighbour (`--open-boundary normal`) | normal depth, the valley floor's slope; DEM profile of the side | as before 0.3.0 | as before 0.3.0 |
 
 Why these:
 - **Directional bias** has two causes: the face-normal gradient on
@@ -271,8 +273,9 @@ Why these:
 
 > **Results from before October 2026 are affected** by that Q-centring defect
 > (A5, both solvers) and, for SGS, by a table bug that attached edge sills and
-> R–A curves to the wrong neighbour for most cells. Old SGS meshes are refused
-> until rebuilt or repaired (`mesh/repair_sgs_slot_order.py`).
+> R–A curves to the wrong neighbour for most cells. **SGS results before 0.7.0**
+> are affected by its frozen overbank conveyance (`docs/HYDRAULICS.md` §15.13);
+> SGS meshes built before 0.7.0 are refused until rebuilt.
 
 Known limitations: the default leaves more velocity noise in deep channels
 than the 0.2.x scheme did (`--momentum-damping` removes it, at some cost in
