@@ -17,6 +17,12 @@
 #   S7  critical-flow limit (0.8.0): water released through the notch in the
 #       ridge; no face passes more than its critical discharge at the
 #       upstream level, which the local-inertial flux alone exceeds
+#   S8  SGS on discrete-global-grid meshes (0.8.1): H3, IGEO7 and HEALPix
+#       (mesh/dggs_families.py) over the same DEM — S1–S3's layout, slot
+#       order, lake at rest and mass balance, and an open-boundary drain
+#       (a family whose library is not installed is skipped, except in CI)
+#   S9  the command line builds SGS tables for a loaded mesh without them
+#       when --dem is given (0.8.1), and refuses without --dem
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_sgs_general.jl
 
@@ -66,20 +72,24 @@ end
     @test !haskey(MESH.array_vars, "sgs_edge_area_curve")   # the per-cell edge curves are gone
 end
 
-@testset "S2 — slot k is the k-th neighbour" begin
-    idx   = Dict(c.id => i for (i, c) in enumerate(MESH.cells))
-    sills = MESH.array_vars["sgs_edge_sills"]
-    tbl(i) = A5Grid.sgs_table(MESH, i)
+"""
+Slot-order properties of a mesh's SGS tables: (pairs, sills agreeing from both
+sides, face tables identical from both sides, perimeters within their edge, faces).
+"""
+function _slot_props(M)
+    idx   = Dict(c.id => i for (i, c) in enumerate(M.cells))
+    sills = M.array_vars["sgs_edge_sills"]
+    tbl(i) = A5Grid.sgs_table(M, i)
     n_pairs = 0; n_sym = 0; n_perim_ok = 0; n_perim = 0; n_same = 0
-    for (i, c) in enumerate(MESH.cells)
-        nbrs = MESH.adjacency[c.id]
+    for (i, c) in enumerate(M.cells)
+        nbrs = M.adjacency[c.id]
         for (k, nb) in enumerate(nbrs)
             j = idx[nb]
-            kj = findfirst(==(c.id), MESH.adjacency[nb])
+            kj = findfirst(==(c.id), M.adjacency[nb])
             kj === nothing && continue
             n_pairs += 1
             isapprox(sills[k, i], sills[kj, j]; atol = 1e-6) && (n_sym += 1)
-            edge = A5Grid._shared_edge(c.boundary, MESH.cells[j].boundary)
+            edge = A5Grid._shared_edge(c.boundary, M.cells[j].boundary)
             W = A5Grid._haversine_m(edge...)
             ti, tj = tbl(i), tbl(j)
             P = ti.face_P[end, k]
@@ -90,21 +100,26 @@ end
              ti.face_A[:, k] == tj.face_A[:, kj] && ti.face_K[:, k] == tj.face_K[:, kj]) && (n_same += 1)
         end
     end
-    @test n_pairs > 100
-    @test n_sym == n_pairs              # every edge's sill agrees from both sides
-    @test n_same == n_pairs             # … and its face table is the same table (0.7.0)
-    @test n_perim_ok == n_perim         # no curve longer than its own edge
+    return (; n_pairs, n_sym, n_same, n_perim_ok, n_perim)
 end
 
-function _sgs_state()
-    st = _quiet(() -> initialise_flow_model(MESH, SGSFlow()))
+@testset "S2 — slot k is the k-th neighbour" begin
+    p = _slot_props(MESH)
+    @test p.n_pairs > 100
+    @test p.n_sym == p.n_pairs              # every edge's sill agrees from both sides
+    @test p.n_same == p.n_pairs             # … and its face table is the same table (0.7.0)
+    @test p.n_perim_ok == p.n_perim         # no curve longer than its own edge
+end
+
+function _sgs_state(M = MESH)
+    st = _quiet(() -> initialise_flow_model(M, SGSFlow()))
     for k in eachindex(st.ghost_cell_bc); st.ghost_cell_bc[k] = Closed; end
     return st
 end
 
-@testset "S3 — SGS runs on the 6-neighbour mesh" begin
-    st = _sgs_state()
-    @test st.max_neighbours == 6
+"Lake at rest and point-source mass balance under SGS (S3, S8)."
+function _sgs_rest_and_mass(M)
+    st = _sgs_state(M)
     n  = length(st.cell_ids)
     # Lake at rest: flat WSE above every cell's terrain (volume above z_max is
     # the full-cell column; check it round-trips through wse_from_volume)
@@ -118,7 +133,7 @@ end
     @test maximum(abs, st.volume .- v0) < 1e-6 * maximum(v0)
     @test maximum(abs, st.edges.flux_Q) < 1e-8
     # Mass balance, point source
-    st2 = _sgs_state()
+    st2 = _sgs_state(M)
     src = div(n, 2); added = 0.0
     _quiet() do
         for _ in 1:200
@@ -128,6 +143,13 @@ end
     end
     @test isapprox(sum(st2.volume), added; rtol = 1e-10)
     @test minimum(st2.volume) >= 0.0
+    @test count(>(0.0), st2.volume) >= 4
+    return st
+end
+
+@testset "S3 — SGS runs on the 6-neighbour mesh" begin
+    st = _sgs_rest_and_mass(MESH)
+    @test st.max_neighbours == 6
 end
 
 @testset "S4 — SGS tables older than layout 4 are refused" begin
@@ -265,6 +287,79 @@ end
     @test w_on <= 1.0 + 1e-9               # never above critical
     @test nb_on > 0                        # … and the limit binds in this release
     @test w_off > 1.2                      # the local-inertial flux alone passes more
+end
+
+# ---------------------------------------------------------------------------
+# S8 — discrete global grids (0.8.1). A box inside the DEM, ~30 m cells.
+const DGGS_GEN = joinpath(@__DIR__, "..", "mesh", "dggs_families.py")
+_py(code) = success(pipeline(Cmd([A5Grid.PYTHON_CMD[], "-c", code]); stdout = devnull, stderr = devnull))
+const DGGS_HAVE = Dict(
+    "h3"    => _py("import h3"),
+    "dggal" => _py("import sys; sys.path.insert(0, r'$(dirname(DGGS_GEN))'); import dggs_families as d; d._dggal()"))
+const DGGS_SGS = [("h3", "h3", 6), ("igeo7", "dggal", 6), ("healpix", "dggal", 4)]
+if get(ENV, "FLOODA5_REQUIRE_DGGS", "") == "1"
+    @testset "S8 — DGGS libraries present" begin
+        @test DGGS_HAVE["h3"] && DGGS_HAVE["dggal"]
+    end
+end
+
+@testset "S8 — SGS on DGGS meshes ($fam)" for (fam, lib, valence) in DGGS_SGS
+    if !DGGS_HAVE[lib]
+        @warn "test_sgs_general: $lib not importable — S8 $fam skipped"
+        continue
+    end
+    out = joinpath(DIR, "$fam.parquet")
+    run(pipeline(Cmd([A5Grid.PYTHON_CMD[], DGGS_GEN, fam, "--bbox=0.0004,0.0004,0.0026,0.0026",
+                      "--target-dx", "30", "--out", out]); stdout = devnull))
+    M = _quiet() do
+        m = load_mesh_geoparquet(out)
+        sample_dem!(m, DEM)
+        build_sgs_tables!(m, DEM; n_bins = 40, n_samples = 256)
+        m
+    end
+    @test M.id_scheme == fam
+    @test M.static_vars["sgs_layout"][1] == 4.0
+    @test size(M.array_vars["sgs_edge_sills"], 1) == valence
+    @test size(M.array_vars["sgs_face_A"], 1) == A5Grid.SGS_FACE_LEVELS * valence
+    @test all(isfinite, M.static_vars["sgs_z_min"])            # the DEM covers every cell
+    p = _slot_props(M)
+    @test p.n_pairs > 50
+    @test p.n_sym == p.n_pairs && p.n_same == p.n_pairs && p.n_perim_ok == p.n_perim
+    st = _sgs_rest_and_mass(M)
+    @test st.max_neighbours == valence
+    # open boundaries: a flooded mesh drains, and volume leaves only through them
+    so = _quiet(() -> initialise_flow_model(M, SGSFlow()))
+    for i in eachindex(so.volume)
+        t = so.sgs_tables[i]
+        so.volume[i] = t.vol_curve[end] + t.cell_area * 0.5
+    end
+    v0 = sum(so.volume)
+    _quiet() do; for _ in 1:200; step_sgs!(so, 0.5); end; end
+    @test sum(so.volume) < v0 && so.vol_removed > 0
+    @test isapprox(sum(so.volume) + so.vol_removed, v0; rtol = 1e-10)
+    @test minimum(so.volume) >= 0.0
+end
+
+@testset "S9 — --meshload … --dem --flow-model sgs builds the tables (0.8.1)" begin
+    out = joinpath(DIR, "hex_sgs_cli.parquet")
+    with_logger(NullLogger()) do
+        redirect_stdout(devnull) do
+            main(["--meshload", HEX, "--dem", DEM, "--flow-model", "sgs", "--sgs-bins", "40",
+                  "--sgs-samples", "256", "--meshout", out, "--mesh-only"])
+        end
+    end
+    m = _quiet(() -> load_mesh_geoparquet(out))
+    @test m.static_vars["sgs_layout"][1] == 4.0 && size(m.array_vars["sgs_edge_sills"], 1) == 6
+    @test m.id_scheme == "polygon" && m.meta["mesh_family"] == "hex"
+    # the same tables as built in-process (S1: same mesh, DEM, bins, samples)
+    @test m.array_vars["sgs_vol_curve"] == MESH.array_vars["sgs_vol_curve"]
+    @test m.array_vars["sgs_face_A"] == MESH.array_vars["sgs_face_A"]
+    # without --dem the loaded mesh is still refused
+    @test_throws ErrorException with_logger(NullLogger()) do
+        redirect_stdout(devnull) do
+            main(["--meshload", HEX, "--flow-model", "sgs", "--rainfall", "10", "--sim-duration", "10"])
+        end
+    end
 end
 
 println("\nGeneral-mesh SGS tests complete.")

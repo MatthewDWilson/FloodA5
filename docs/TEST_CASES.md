@@ -918,7 +918,11 @@ python mesh/mesh_families.py import  --input any_polygons.gpkg --out imported.pa
 
 Generic meshes use the ID scheme `polygon` (row-index IDs). Adjacency is built
 from shared polygon edges, so meshes with hanging nodes are not supported.
-SGS is not yet available on these meshes (its tables are per A5 slot).
+SGS works on them (tables per neighbour slot, `test/test_sgs_general.jl`);
+from the command line, `--meshload mesh.parquet --dem dem.tif --flow-model sgs
+--meshout mesh_sgs.parquet --mesh-only` builds the tables (0.8.1). The
+discrete global grids (H3, IGEO7, ISEA3H, HEALPix, rHEALPix) are in
+`docs/MESHES.md`; §8 runs the benchmarks on all the families.
 
 A Cartesian grid aligned with a raster in its own projected CRS (for
 LISFLOOD-FP comparisons) comes from `--meshgen-cartesian dem.tif` (or `.asc`),
@@ -996,6 +1000,183 @@ The whole series takes several hours on that machine.
 The series itself is a benchmark: use it to compare schemes or meshes
 against these figures. The registry cases' checks encode the robust parts
 of them (above).
+
+---
+
+## 8. The Benchmarks on Every Mesh Family (0.8.1)
+
+Four registry cases (`cases/registry/mesh_families.jl`) run the point-spread,
+planar-slope, straight-channel and Carlisle benchmarks on eleven meshes at
+matched mean cell area, √area ≈ 22.2 m (A5 res 18):
+
+| Mesh | Generator | Cells (√ mean area) |
+|---|---|---|
+| `cart` | `--meshgen-cartesian --dx 22.2` | 22.2 m |
+| `rotcart` | `mesh_families.py rotcart --angle 30` | 22.2 m |
+| `hex` | `mesh_families.py hex` (side 13.8 m) | 22.2 m |
+| `voronoi` | `mesh_families.py voronoi --jitter 0.3 --lloyd 5` (centroidal) | 22.1 m |
+| `voronoi_jit` | `mesh_families.py voronoi --jitter 0.3 --lloyd 0` | 22.1 m |
+| `a5` | `--meshgen-dggs --dggs a5 --dx 22.2` (res 18) | 22.2 m |
+| `h3` | `--meshgen-dggs --dggs h3 --dx 22.2` (level 12) | 16.6 m (15.1 at the equator) |
+| `igeo7` | `… --dggs igeo7` (level 13) | 22.9 m |
+| `isea3h` | `… --dggs isea3h` (level 23) | 23.3 m |
+| `healpix` | `… --dggs healpix` (level 18) | 24.9 m |
+| `rhealpix` | `… --dggs rhealpix` (level 12) | 17.3 m |
+
+The global grids' levels are discrete, so H3 and rHEALPix are about 25% finer
+and HEALPix 12% coarser than the target; every job records its `cell_size_m`.
+Each case generates its own meshes in `test/case_runs/<case>/`.
+
+```bash
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_point_spread -P 3 -T 4   # ~5 min
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_planar_slope -P 3 -T 4   # ~10 min
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_channel -P 3 -T 4        # ~45 min
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_carlisle -P 3 -T 4       # ~10 h (full tier)
+```
+
+The numbers below were recorded with the branch of 0.8.1 (the expected values
+in `cases/expected/mesh_families_*.toml`). A5 and Cartesian reproduce the
+`point_spread` (A5 res 18) and `channel` expected values bit for bit.
+
+### `mesh_families_point_spread`: isotropy on a flat bed
+
+10 m³/s for 1 h at the centre of the closed, flat 1.5 km square at (0°, 0°).
+A4 and A6 are the four- and six-fold harmonics of the depth about the source
+(0 for a circle); circularity is the hull's.
+
+| Mesh | A4 | A6 | Front radius CV | Circularity |
+|---|---|---|---|---|
+| cart | 0.034 | 0 | 0.027 | 0.987 |
+| rotcart | −0.017 | 0 | 0.012 | 0.987 |
+| hex | 0 | −0.0070 | 0 | 0.996 |
+| voronoi | 0.017 | −0.0003 | 0.013 | 0.993 |
+| voronoi_jit | 0.012 | −0.0006 | 0.008 | 0.992 |
+| a5 | −0.0015 | 0.00003 | 0.028 | 0.990 |
+| h3 | 0.0001 | 0.0052 | 0.005 | 0.993 |
+| igeo7 | 0.0000 | 0.0030 | 0.013 | 0.991 |
+| isea3h | 0.0002 | 0.0072 | 0.010 | 0.992 |
+| healpix | −0.037 | 0.0006 | 0.061 | 0.983 |
+| rhealpix | 0.028 | 0.0002 | 0.016 | 0.990 |
+
+Every mesh spreads nearly circularly (> 0.98). The bias follows the face
+directions: the four-direction meshes have a four-fold term (Cartesian,
+rHEALPix, and HEALPix, whose equatorial cells are near-squares turned 45°:
+A4 < 0), the hexagonal ones a weaker six-fold term, and A5, with its spread
+face directions, neither. HEALPix has the least round front (CV 0.061).
+
+### `mesh_families_planar_slope`: directional bias on a slope
+
+`planar_slope` (0.1 m³/s on a 0.1% west→east plane at 51° N, 20 h) on every
+mesh. asym is the north/south volume asymmetry, deflection the plume's
+direction against east.
+
+| Mesh | asym 5 h | asym 20 h | deflection 20 h (°) | mean flow direction (°) | cells within ±30° |
+|---|---|---|---|---|---|
+| cart | −0.00001 | −0.00001 | −0.0001 | 0.0 | 0.97 |
+| rotcart | −0.081 | −0.055 | −0.65 | −1.9 | 0.94 |
+| hex | −0.00001 | −0.00001 | −0.0000 | 0.0 | 0.89 |
+| voronoi | −0.024 | −0.013 | 0.04 | −0.5 | 0.94 |
+| voronoi_jit | 0.010 | 0.005 | 0.07 | 1.1 | 0.98 |
+| a5 | −0.083 | 0.088 | 0.81 | 2.4 | 0.96 |
+| h3 | −0.061 | −0.044 | −0.42 | −1.0 | 0.93 |
+| igeo7 | 0.050 | 0.046 | 0.46 | −0.1 | 0.95 |
+| isea3h | −0.128 | −0.087 | −0.64 | −1.0 | 0.97 |
+| healpix | −0.104 | −0.270 | −3.34 | −0.7 | 0.77 |
+| rhealpix | −0.133 | −0.128 | −0.78 | −0.5 | 0.99 |
+
+The two meshes that are mirror-symmetric about the source row (Cartesian,
+hexagons) are symmetric to 1e-5, as they must be (a check). The Voronoi
+meshes, irregular but orthogonal, are the least biased of the rest
+(|asym| ≤ 0.024). The global grids sit between 0.04 and 0.13, as A5 does —
+except HEALPix, whose skewed polar-region rhombi (33° non-orthogonal at
+51° N, `docs/MESHES.md` §3) deflect the plume by 3.3° and give 0.27. Mean
+flow directions are within 2.4° of east on every mesh (a check). The
+fraction of moving cells within ±30° of east, which `planar_slope` checks at
+≥ 90%, is recorded but not checked here: at 22 m the plume moves only 22–160
+cells, and the radial flow next to the source decides it — the hexagons'
+four cells at ±40° (two symmetric pairs) give 0.89; HEALPix's five, lopsided,
+go with its bias.
+
+### `mesh_families_channel`: orientation dependence in a one-cell channel
+
+`channel` at 22 m (res 18, the 20 m channel about one cell wide) at 0°, 15°,
+30° and 45°, no offset, SWE and local-inertial; meshes from
+`make_channel_meshes.jl --families`. Δη is the in-channel stage error against
+normal flow (m); spread = max − min of Δη over the four orientations, the
+mesh's orientation dependence.
+
+| Mesh | LI Δη at 0 / 15 / 30 / 45° | LI rms | LI spread | SWE rms | SWE spread |
+|---|---|---|---|---|---|
+| cart | 0.74 / 0.82 / 0.99 / 1.29 | 0.98 | 0.55 | 0.91 | 0.34 |
+| rotcart | 0.93 / 0.70 / −0.09 / 0.95 | 0.76 | 1.04 | 0.80 | 0.91 |
+| hex | 0.42 / 0.70 / 0.92 / 0.87 | 0.75 | 0.50 | 0.82 | 0.45 |
+| voronoi | 0.72 / 0.70 / 0.81 / 1.14 | 0.86 | 0.44 | 0.89 | 0.28 |
+| voronoi_jit | 0.69 / 0.55 / 0.93 / 1.07 | 0.84 | 0.53 | 0.92 | 0.30 |
+| a5 | 1.06 / 1.07 / 0.97 / 1.00 | 1.03 | 0.10 | 1.06 | 0.09 |
+| h3 (16.6 m) | 0.46 / 0.57 / 0.61 / 0.57 | 0.56 | 0.15 | 0.65 | 0.18 |
+| igeo7 | 0.58 / 0.36 / 0.83 / 1.05 | 0.75 | 0.70 | 0.81 | 0.63 |
+| isea3h | 0.68 / 0.74 / 0.63 / 0.97 | 0.77 | 0.34 | 0.83 | 0.36 |
+| healpix (24.9 m) | 1.16 / 1.16 / 1.09 / 1.12 | 1.14 | 0.07 | 1.07 | 0.06 |
+| rhealpix (17.3 m) | 0.28 / 0.71 / 0.93 / 1.07 | 0.80 | 0.79 | 0.78 | 0.76 |
+
+At one cell per channel width every mesh loses conveyance (Δη > 0, the water
+too high), and each loses least where its faces line up with the channel:
+the rotated grid at 30°, Cartesian, rHEALPix and the hexagons at 0°. Hence
+the regular meshes' large spreads (0.5–1.0 m). A5 and HEALPix are nearly
+independent of orientation (0.07–0.10 m), but at about the Cartesian mean; H3
+does best overall, helped by its 25% smaller cells. SWE and local-inertial
+agree on all of this (both columns), so it is the meshes, not the
+local-inertial scheme. Water leaves the channel in few runs: local-inertial
+on Cartesian at 45° (32 m of wet floodplain per metre of reach) and on HEALPix
+at 15–45° (10–12 m; SWE 3.5 m at 30–45°).
+
+### `mesh_families_carlisle`: a real event on every mesh
+
+`carlisle_peak` (the Eden peak, 55.5 h, inflows only) on the families that
+case does not run, local-inertial and SGS (tables from the 5 m DEM); the
+planar meshes keep the cells meeting the domain polygon (`--clip`). Every
+run, with `carlisle_peak`'s A5 and 20 m Cartesian runs, is compared on its
+own cells with `carlisle_peak_fine`'s 5 m runs (HYDRAULICS §15.14). Needs
+those two cases run first; 18 runs, about 10 h on 3 × 4 threads. At 55.5 h,
+against the 5 m SWE benchmark (storage ratio, rms water-level difference,
+CSI at 0.1 m); "rms vs 5 m LI" is SGS against the 5 m local-inertial run,
+which SGS approximates; "extrema" is the fraction of fully wet cells that are
+local water-level extrema (`FA.noise_metrics`; a checkerboard).
+
+| Mesh (√ mean area) | LI storage | LI rms (m) | LI CSI | SGS storage | SGS rms (m) | SGS CSI | SGS rms vs 5 m LI | SGS extrema |
+|---|---|---|---|---|---|---|---|---|
+| cart (20.0 m) | 0.946 | 0.289 | 0.853 | – | – | – | – | – |
+| rotcart (22.2 m) | 0.953 | 0.291 | 0.845 | 0.959 | 0.417 | 0.882 | 0.526 | **0.42** |
+| hex (22.2 m) | 0.920 | 0.265 | 0.841 | 0.774 | 0.492 | 0.872 | 0.159 | 0.08 |
+| voronoi (22.2 m) | 0.929 | 0.275 | 0.840 | 0.749 | 0.544 | 0.842 | 0.209 | 0.14 |
+| voronoi_jit (22.2 m) | 0.970 | 0.268 | 0.831 | 0.756 | 0.530 | 0.843 | 0.204 | 0.008 |
+| a5 (22.2 m) | 0.943 | 0.254 | 0.848 | 0.735 | 0.515 | 0.813 | 0.159 | 0.009 |
+| h3 (16.4 m) | 0.868 | 0.283 | 0.877 | 0.714 | 0.564 | 0.815 | 0.325 | 0.18 |
+| igeo7 (22.9 m) | 0.943 | 0.269 | 0.832 | 0.823 | 0.598 | 0.829 | 0.564 | 0.17 |
+| isea3h (23.2 m) | 0.915 | 0.277 | 0.833 | 0.703 | 0.547 | 0.799 | 0.234 | 0.006 |
+| healpix (24.8 m) | 0.995 | 0.300 | 0.823 | 0.761 | 0.446 | 0.825 | 0.217 | 0.23 |
+| rhealpix (17.3 m) | 0.939 | 0.261 | 0.874 | 0.763 | 0.549 | 0.850 | 0.267 | **0.36** |
+
+Local-inertial: on a real event the mesh family matters little at matched
+cell size — storage 0.92–0.97 of the benchmark's, level rms 0.25–0.30 m, CSI
+0.82–0.85 on every ~22 m mesh. The finer H3 and rHEALPix meshes have the
+best extents (CSI 0.88); A5 the lowest level rms, by a few centimetres. All
+of them are smooth (extrema ≤ 0.008, storage rising throughout).
+
+SGS stores 0.70–0.82 of the benchmark's volume, as on A5 (§15.14: it is
+local-inertial on the 5 m geometry, and close to the 5 m local-inertial
+run). **But SGS checkerboards on most of the other meshes** — a finding of
+this case, recorded as an expected failure (`xfail`) until it is fixed:
+smooth on A5, ISEA3H and the jittered Voronoi mesh; a checkerboard over
+8–23% of the wet cells on hexagons, centroidal Voronoi, H3, IGEO7 and
+HEALPix; and over 36–42% on rHEALPix and the rotated grid, where the stored
+volume also oscillates on the rising limb (by 36% of the peak storage on
+rHEALPix, frame to frame) and Δt and the maximum depth jump (to 11 m, against
+7 m for local-inertial). The rotated grid's SGS storage (0.96) is that
+noise, not accuracy. On the smooth meshes SGS stays within 0.16–0.23 m rms
+of the 5 m local-inertial run; on the noisy ones up to 0.56 m. The pattern
+follows neither regularity nor orthogonality (ISEA3H's hexagons are smooth,
+the planar ones are not); it is open (PROJECT_STATE), for the SGS work.
 
 ---
 

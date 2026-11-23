@@ -88,10 +88,18 @@ they are no longer written or read.
 The Parquet schema metadata carries a `flooda5` key with a JSON object, e.g.
 `{"a5_id_scheme": "a5-v1", "pya5_version": "1.0.0"}` (plus `migrated_from` /
 `migrated_by` after `mesh/migrate_mesh_ids.py`). `a5_id_scheme` is `a5-v0`
-(pya5 0.x cell IDs), `a5-v1` (pya5 1.x) or `cartesian`. Files without the key
-were written before WP-M1 by pya5 0.7.x. The same cell has different IDs in the
-two A5 schemes, so FloodA5 refuses to load a mesh of the other scheme — see
-`A5_QUIRKS.md` §11.
+(pya5 0.x cell IDs), `a5-v1` (pya5 1.x), `cartesian`, `polygon` (the planar
+families of `mesh/mesh_families.py`) or a DGGS family (`h3`, `igeo7`, `isea3h`,
+`healpix`, `rhealpix`). Generated meshes add `mesh_family` and family keys —
+for DGGS meshes `dggs_library`, `dggs_level`, `dggs_refinement_ratio`,
+`dggs_equal_area`, `dggs_system`, `dggs_interior_valence` and, with a target
+size, `target_dx_m` (`docs/MESHES.md` §1). Since 0.8.1 FloodA5 keeps these keys
+when it re-saves a mesh (after DEM sampling, SGS tables) and writes them to
+the output's `/mesh` attributes. Files without the key were written before
+WP-M1 by pya5 0.7.x (or by other software): they are taken as `cartesian` if
+every cell has resolution 0, else `a5-v0`, with a warning. The same cell has
+different IDs in the two A5 schemes, so FloodA5 refuses to load a mesh of the
+other scheme — see `A5_QUIRKS.md` §11.
 
 ### Adjacency column
 
@@ -162,7 +170,7 @@ used from it (cell elevations, SGS tables).
 
 | Dataset | Shape (C order) | dtype | Description |
 |---|---|---|---|
-| `cell_ids` | (n_cells,) | string | Cell IDs. Group attr `id_scheme` (`a5-v0`, `a5-v1` or `cartesian`) |
+| `cell_ids` | (n_cells,) | string | Cell IDs. Group attr `id_scheme` (`a5-v0`, `a5-v1`, `cartesian`, `polygon` or a DGGS family); since 0.8.1 also the mesh file's other metadata as group attributes (`mesh_family`, `dggs_level`, …; booleans as 0/1) — `FO.mesh_info` |
 | `center_lons`, `center_lats` | (n_cells,) | float64 | Cell centre (degrees) |
 | `elevations` | (n_cells,) | float64 | Bed elevation (m); `NaN` if not sampled |
 | _static variables_ | (n_cells,) | float64 | The mesh's other per-cell scalars, e.g. `friction`, `sgs_z_min` |

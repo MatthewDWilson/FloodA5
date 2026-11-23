@@ -1,16 +1,16 @@
 # Mesh families and DGGS meshes: review and plan (WP3 part 3)
 
-2026-11-17; updated 2026-11-23. Branch `wp3c-dggs-meshes`, built on 0.6.0 and
-rebased onto 0.7.0 after the SGS conveyance merge; **Phase A released as 0.7.1**.
+2026-11-17; updated 2026-11-24. Branch `wp3c-dggs-meshes`, built on 0.6.0 and
+rebased onto 0.7.0 after the SGS conveyance merge; **Phase A released as 0.7.1**;
+**Phase B (branch `wp3d-dggs-phaseb`) as 0.8.1**.
 Continues WP3 of `FloodA5_Review_and_ForwardPlan_2026-10.md` ("Remaining:
 H3/IGEO7 meshes") and Phase 2 of `FloodA5_Generalisation_BenchmarkingPlan.md`
 (multi-DGGS). The same text is in the FloodA5 repository
 (`docs/notes/MeshFamilies_DGGS_Plan_2026-11.md`) and in `projectinstructions/`
 (`FloodA5_MeshFamilies_DGGS_Plan_2026-11.md`).
 
-**Status (2026-11-23).** Phase A done (§3). Phase B waits for the fixes
-flagged during the SGS work that affect it, first the DEM registration fix
-(§4, "Sequencing").
+**Status (2026-11-24).** Phases A (§3) and B (§4) done; next Phase C, the
+notebook (§5). Phase B's results are in `docs/TEST_CASES.md` §8.
 
 ## 1. Where things stood
 
@@ -129,6 +129,17 @@ Findings worth carrying forward (detail in `docs/MESHES.md` §3):
   (Phase B, or any maintenance branch).
 
 ## 4. Phase B: after the SGS merge (and after the DEM registration fix)
+
+**Done (0.8.1).** All of 7–11 below, with these differences: the flags are
+`--meshgen-dggs AOI --dggs FAMILY (--meshres N | --dx M)` (`--dggs a5` is the
+A5 generator); a file without an ID scheme is still guessed (old A5 and
+Cartesian meshes have none), with a warning; the loader never needed
+`grid_disk` for non-A5 meshes (it matches vertices), so only
+`build_sgs_tables!` refuses them; the mesh metadata is also kept through
+re-saves. SGS needed one more fix: a loaded mesh without tables can now get
+them from `--dem` (before, only `--meshgen*` built them). The planar
+families gained `--clip` (cells meeting the AOI polygon) for Carlisle's
+projected domain. Findings: `docs/TEST_CASES.md` §8.
 
 7. **CLI.**
    - Add `--meshgen-dggs FAMILY AOI (--meshres N | --target-dx M)`, through

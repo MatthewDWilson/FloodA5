@@ -586,14 +586,15 @@ def _sample_grid_coverage(geometry: dict, resolution: int) -> list:
 
 
 def mesh_to_geoparquet(cells: List[dict], output_path: str,
-                       id_scheme: Optional[str] = None):
+                       id_scheme: Optional[str] = None, **extra_md):
     """
     Write cells to GeoParquet using geopandas.
 
-    `id_scheme` ("a5-v0", "a5-v1" or "cartesian") is recorded in the schema
-    metadata (see the module docstring); default: the installed pya5's scheme,
-    which is right for meshes generated in this process. Re-saves of a loaded
-    mesh must pass the mesh's own scheme.
+    `id_scheme` ("a5-v0", "a5-v1", "cartesian", "polygon", a DGGS family) is
+    recorded in the schema metadata (see the module docstring); default: the
+    installed pya5's scheme, which is right for meshes generated in this
+    process. Re-saves of a loaded mesh must pass the mesh's own scheme, and
+    its other metadata as `extra_md` (DGGS family, level, …).
 
     Geometry column built with shapely.polygons() vectorised C API when
     Shapely ≥ 2.0 is available — avoids per-object Python overhead for the
@@ -658,7 +659,7 @@ def mesh_to_geoparquet(cells: List[dict], output_path: str,
 
     gdf = gpd.GeoDataFrame(data, geometry=geometries, crs="EPSG:4326")
     gdf.to_parquet(output_path, index=False)
-    write_id_scheme_metadata(output_path, id_scheme)
+    write_id_scheme_metadata(output_path, id_scheme, **extra_md)
 
 
 def mesh_to_geojson(cells: List[dict], output_path: str):

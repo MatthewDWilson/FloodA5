@@ -10,6 +10,13 @@
 #
 #   FLOODA5_NO_VIS=1 julia --project=. --threads 1 test/channel_bench/make_channel_meshes.jl OUTDIR [--res 17,18,19]
 #
+# --families a5,cart,… (0.8.1; default a5,cart) adds other mesh families at
+# the A5 resolution's mean cell area: hex, rotcart (30°), voronoi (centroidal:
+# 5 Lloyd steps), voronoi_jit (jittered lattice, no relaxation) through
+# mesh/mesh_families.py, matched exactly; the discrete global grids h3,
+# igeo7, isea3h, healpix, rhealpix through mesh/dggs_families.py, at the level
+# nearest that area (cases/registry/mesh_families.jl uses the same options).
+#
 # Geometry (local metric frame at the domain centre; s along the channel, n
 # across it, both in metres):
 #   bed z = Z0 − S·s − S2·max(s − SB, 0) + (|n'| > W/2 ? D + SX·(|n'| − W/2) : 0),
@@ -32,6 +39,7 @@ _arg(name, default) = (i = findfirst(==(name), ARGS); i === nothing ? default : 
 const RES    = parse.(Int, split(_arg("--res", "17,18,19,20"), ","))
 const ANGLES = parse.(Float64, split(_arg("--angles", "0,15,30,45,60,75,90"), ","))
 const OFFS   = parse.(Float64, split(_arg("--offsets", "0,0.5"), ","))   # fraction of the cell size
+const FAMS   = String.(split(_arg("--families", "a5,cart"), ","))
 const L, W, D, S, SX, Z0, Q, NMAN = 2000.0, 20.0, 2.0, 0.001, 0.005, 10.0, 20.0, 0.03
 const S2, SB = 0.02, 0.3L
 const LON0, LAT0 = 0.0, 51.0
@@ -66,6 +74,26 @@ end
 mkpath(OUT)
 qfile = "$OUT/q20.csv"; write(qfile, "t_s,Q_m3s\n0,$Q\n1000000,$Q\n")
 aoi = """{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[$(dlon(-L/2)),$(LAT0 + dlat(-L/2))],[$(dlon(L/2)),$(LAT0 + dlat(-L/2))],[$(dlon(L/2)),$(LAT0 + dlat(L/2))],[$(dlon(-L/2)),$(LAT0 + dlat(L/2))],[$(dlon(-L/2)),$(LAT0 + dlat(-L/2))]]]}}"""
+
+# Other mesh families (--families), each at mean cell size `cell` (m)
+const PLANAR = Dict(   # mesh/mesh_families.py family and options
+    "hex"         => (cell -> ["hex", "--dx", string(cell / sqrt(3sqrt(3) / 2))]),   # hexagon area = cell²
+    "rotcart"     => (cell -> ["rotcart", "--dx", string(cell), "--angle", "30"]),
+    "voronoi"     => (cell -> ["voronoi", "--dx", string(cell), "--jitter", "0.3", "--lloyd", "5", "--seed", "1"]),
+    "voronoi_jit" => (cell -> ["voronoi", "--dx", string(cell), "--jitter", "0.3", "--lloyd", "0", "--seed", "1"]))
+function family_mesh(fam, cell)
+    aoifile = "$OUT/aoi.geojson"; isfile(aoifile) || write(aoifile, aoi)
+    tmp = joinpath(mktempdir(), "$fam.parquet")
+    if haskey(PLANAR, fam)
+        A5Grid._find_python()
+        run(pipeline(Cmd([A5Grid.PYTHON_CMD[], joinpath(@__DIR__, "..", "..", "mesh", "mesh_families.py"),
+                          PLANAR[fam](cell)..., "--aoi", aoifile, "--out", tmp]); stdout = devnull))
+        return _q(() -> load_mesh_geoparquet(tmp))
+    elseif fam in DGGS_FAMILIES && fam != "a5"
+        return _q(() -> dggs_generate(fam, aoifile; target_dx = cell, output_path = tmp))
+    end
+    error("unknown mesh family $fam (a5, cart, $(join(keys(PLANAR), ", ")), $(join(DGGS_FAMILIES[2:end], ", ")))")
+end
 manifest = open("$OUT/manifest.csv", "w")
 println(manifest, "case,mesh,res,cell_m,angle,offset_m,n_cells,inflow_lat,inflow_lon,mesh_file")
 jobs = open("$OUT/jobs.txt", "w")
@@ -75,7 +103,8 @@ for res in RES
     a5 = _q(() -> A5Grid.mesh_for_aoi(aoi, res))
     cell = sqrt(mean(A5Grid._polygon_area_m2(c.boundary) for c in a5.cells))
     cart = _q(() -> generate_cartesian_mesh_bounds(dlon(-L/2), LAT0 + dlat(-L/2), dlon(L/2), LAT0 + dlat(L/2), cell; lat_ref = LAT0))
-    for (mname, m) in (("a5", a5), ("cart", cart)), α in ANGLES, of in OFFS
+    meshes = [f => (f == "a5" ? a5 : f == "cart" ? cart : family_mesh(f, cell)) for f in FAMS]
+    for (mname, m) in meshes, α in ANGLES, of in OFFS
         off = of * cell
         case = @sprintf("%s_r%d_a%02d_o%02d", mname, res, round(Int, α), round(Int, 100of))
         f = "$OUT/$case.parquet"

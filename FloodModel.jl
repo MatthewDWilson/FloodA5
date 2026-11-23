@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.8.0"
+const FLOODA5_VERSION = "0.8.1"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -99,6 +99,11 @@ using .A5Grid: SGSTable, wse_from_volume, wetted_area_from_wse,
 # for the design rationale.
 if !isdefined(Main, :generate_cartesian_mesh)
     include(joinpath(@__DIR__, "mesh", "CartesianGrid.jl"))
+end
+# Discrete-global-grid meshes (H3, IGEO7, ISEA3H, HEALPix, rHEALPix) for
+# --meshgen-dggs: a wrapper over mesh/dggs_families.py (docs/MESHES.md).
+if !isdefined(Main, :dggs_generate)
+    include(joinpath(@__DIR__, "mesh", "DGGSGrid.jl"))
 end
 
 using .VisualisationServer
@@ -1418,6 +1423,8 @@ function _write_mesh_metadata!(output::SimOutput, mesh::A5Mesh;
              static_vars = mesh.static_vars,
              # WP-M1: which ID scheme cell_ids use ("a5-v0", "a5-v1", "cartesian")
              id_scheme   = mesh.id_scheme,
+             # 0.8.1: the mesh file's other metadata (DGGS family, level, …)
+             mesh_meta   = mesh.meta,
              cell_area   = cell_area,
              polygons    = [c.boundary for c in mesh.cells],
              neighbours  = nbrs)
@@ -3837,9 +3844,13 @@ Main application entry point.
     (`mesh/CartesianGrid.jl`, cartesian-formulation branch). Covers the
     AOI's bounding box (not polygon-clipped — see that file's module
     comment), with square cells of approximately `dx_m` metres on a side.
+  - `(:generate_dggs, aoi_path, family, level_or_nothing, dx_or_nothing,
+    output_path_or_nothing)` — a discrete-global-grid mesh (H3, IGEO7,
+    ISEA3H, HEALPix, rHEALPix) via mesh/dggs_families.py (`mesh/DGGSGrid.jl`),
+    at `level` or at the level nearest `dx` metres.
   - `(:load, parquet_path, output_path_or_nothing)` — load a previously
-    generated mesh of either backend; the pipeline downstream of this
-    point doesn't distinguish between backends at all.
+    generated mesh of any family; the pipeline downstream of this point
+    doesn't distinguish between them.
 
 `dem_source` is one of:
   - `nothing`              — no DEM; elevation stays zero
@@ -3925,6 +3936,8 @@ function _mesh_save_path(mesh_source::Tuple)::Union{String,Nothing}
         return mesh_source[4]
     elseif tag === :generate_cartesian
         return mesh_source[5]
+    elseif tag === :generate_dggs
+        return mesh_source[6]
     else   # :load
         return something(mesh_source[3], mesh_source[2])
     end
@@ -3966,7 +3979,7 @@ function permute_mesh(mesh::A5Mesh, perm::Vector{Int})::A5Mesh
     sv = Dict{String,Vector{Float64}}(k => v[perm] for (k, v) in mesh.static_vars)
     av = Dict{String,Matrix{Float64}}(k => v[:, perm] for (k, v) in mesh.array_vars)
     return A5Mesh(mesh.resolution, mesh.aoi_geojson, mesh.cells[perm], sv, av,
-                  mesh.adjacency, mesh.id_scheme)
+                  mesh.adjacency, mesh.id_scheme, mesh.meta)
 end
 
 """
@@ -4216,6 +4229,16 @@ function run_flood_model(;
         tl.mesh = time() - t0
         @info "Mesh generated in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
         m
+    elseif mesh_source[1] === :generate_dggs
+        _, aoi_path, family, level, dx_m, mesh_out = mesh_source
+        @info "AOI        : $aoi_path"
+        @info "DGGS       : $family, " * (level !== nothing ? "level $level" : "level nearest $(dx_m) m cells")
+        @info "Mesh out   : $(mesh_out === nothing ? "(not saved)" : mesh_out)"
+        t0 = time()
+        m = dggs_generate(family, aoi_path; level = level, target_dx = dx_m, output_path = mesh_out)
+        tl.mesh = time() - t0
+        @info "Mesh generated in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
+        m
     else
         _, parquet_path, mesh_out = mesh_source
         @info "Loading mesh from $parquet_path..."
@@ -4225,11 +4248,15 @@ function run_flood_model(;
         @info "Mesh loaded in $(_fmt_elapsed(tl.mesh)) — $(length(m)) cells"
 
         # ── Compatibility check ──────────────────────────────────────────
-        if flow_method === :sgs && !haskey(m.array_vars, "sgs_elev_bins")
+        # 0.8.1: a loaded mesh without tables gets them from --dem (step 5) —
+        # the way to give SGS tables to meshes generated outside FloodModel.jl
+        # (mesh/mesh_families.py, imported polygons)
+        if flow_method === :sgs && !haskey(m.array_vars, "sgs_elev_bins") && dem_source === nothing
             error(
                 "Mesh at '$parquet_path' has no SGS hypsometric tables, " *
                 "but --flow-model sgs was requested.\n" *
-                "  Re-generate the mesh with:\n" *
+                "  Build them with --dem <dem.tif> (add --meshout <mesh.parquet> --mesh-only " *
+                "to save the mesh with them), or re-generate the mesh with:\n" *
                 "    --meshgen <aoi.geojson> --meshres <N> --dem <dem.tif> " *
                 "--flow-model sgs --mesh-only --meshout <mesh.parquet>"
             )
@@ -4326,8 +4353,9 @@ function run_flood_model(;
     #    mesh_only flag.  Rationale: a mesh built with --flow-model sgs should
     #    be fully ready for SGS simulation (including hypsometric tables) so the
     #    user can inspect and validate the mesh before running the model.
-    #    A mesh built without --flow-model sgs will fail a compatibility check
-    #    at --meshload time if sgs is requested (see step 2 load guard).
+    #    A mesh built without --flow-model sgs fails the compatibility check
+    #    at --meshload time if sgs is requested without --dem (step 2 load
+    #    guard); with --dem its tables are built here (0.8.1).
     if flow_method === :sgs
         if !haskey(mesh.array_vars, "sgs_elev_bins")
             dem_source !== nothing ||
@@ -4747,6 +4775,11 @@ Usage:
                                         [--output <file.h5>]
                                         [--output-interval SECS]
 
+  julia [--threads auto] FloodModel.jl  --meshgen-dggs <aoi.geojson>  --dggs <family>
+                                        (--meshres <N> | --dx <metres>)
+                                        [--meshout <file.parquet>]
+                                        [--dem <file.tif>]  ...
+
   julia FloodModel.jl --help
 
 Mesh options (choose one):
@@ -4770,6 +4803,18 @@ Mesh options (choose one):
                      Reference latitude for the --dx metres → degrees
                      conversion (default: AOI bounding-box mid-latitude).
                      Only meaningful with --meshgen-cartesian.
+  --meshgen-dggs FILE
+                     GeoJSON area of interest. Generates a mesh of the
+                     discrete global grid given by --dggs: every cell that
+                     intersects the AOI (docs/MESHES.md). Requires --dggs and
+                     one of --meshres (the grid's level) or --dx (the level
+                     whose mean cell area is nearest dx²; the levels are
+                     discrete, so the cells are only roughly dx across).
+                     Mesh generation should use --threads 1.
+  --dggs     FAMILY  h3 | igeo7 | isea3h | healpix | rhealpix (via
+                     mesh/dggs_families.py: h3, DGGAL), or a5 (via pya5, as
+                     --meshgen). List a family's levels over an AOI with
+                     python mesh/dggs_families.py FAMILY --aoi FILE --list-levels
   --mesh-only        Generate (or load) and save the mesh, then exit without
                      simulating. Implied when no water source is provided.
   --meshout  FILE    Save generated mesh (optional). Extension controls format:
@@ -5487,6 +5532,11 @@ function main(args=String[])
     dx_val,           args = _pop_flag(args, "--dx")
     cart_lat_ref_val, args = _pop_flag(args, "--cartesian-lat-ref")
 
+    # --meshgen-dggs / --dggs (0.8.1): a discrete-global-grid mesh, at
+    # --meshres N or at the level nearest --dx metres (mesh/DGGSGrid.jl)
+    meshgen_dggs_val, args = _pop_flag(args, "--meshgen-dggs")
+    dggs_val,         args = _pop_flag(args, "--dggs")
+
     # --dem / --dem-strict / --dem-method / --dem-samples / --dem-seed
     dem_val,         args = _pop_flag(args, "--dem")
     dem_strict,      args = _pop_bool(args, "--dem-strict")
@@ -5876,16 +5926,30 @@ function main(args=String[])
     # Validate mesh source
     has_gen      = meshgen_val !== nothing
     has_gen_cart = meshgen_cart_val !== nothing
+    has_gen_dggs = meshgen_dggs_val !== nothing
     has_load     = meshload_val !== nothing
 
-    n_sources = count((has_gen, has_gen_cart, has_load))
+    n_sources = count((has_gen, has_gen_cart, has_gen_dggs, has_load))
     n_sources == 0 &&
-        (println("ERROR: provide --meshgen, --meshgen-cartesian, or --meshload\n"); print_help(1))
+        (println("ERROR: provide --meshgen, --meshgen-cartesian, --meshgen-dggs, or --meshload\n"); print_help(1))
     n_sources > 1 &&
-        (println("ERROR: --meshgen, --meshgen-cartesian, and --meshload are " *
+        (println("ERROR: --meshgen, --meshgen-cartesian, --meshgen-dggs and --meshload are " *
                  "mutually exclusive\n"); print_help(1))
     has_gen && meshres_val === nothing &&
         (println("ERROR: --meshgen requires --meshres\n"); print_help(1))
+    dggs_val !== nothing && !has_gen_dggs &&
+        (println("ERROR: --dggs is used with --meshgen-dggs\n"); print_help(1))
+    if has_gen_dggs
+        dggs_val === nothing &&
+            (println("ERROR: --meshgen-dggs requires --dggs <family>\n"); print_help(1))
+        lowercase(dggs_val) in DGGS_FAMILIES ||
+            (println("ERROR: unknown --dggs family \"$dggs_val\"; expected one of " *
+                     "$(join(DGGS_FAMILIES, ", "))\n"); print_help(1))
+        (meshres_val === nothing) == (dx_val === nothing) &&
+            (println("ERROR: --meshgen-dggs requires exactly one of --meshres <N> or --dx <metres>\n"); print_help(1))
+        cart_lat_ref_val === nothing ||
+            (println("ERROR: --cartesian-lat-ref is only for --meshgen-cartesian\n"); print_help(1))
+    end
     _is_raster(p) = any(ext -> endswith(lowercase(p), ext), (".tif", ".tiff", ".asc"))
     has_gen_cart && dx_val === nothing && !_is_raster(meshgen_cart_val) &&
         (println("ERROR: --meshgen-cartesian requires --dx <metres>\n"); print_help(1))
@@ -5898,6 +5962,17 @@ function main(args=String[])
         dx_m    = dx_val !== nothing ? parse(Float64, dx_val) : NaN   # NaN: raster mode
         lat_ref = cart_lat_ref_val !== nothing ? parse(Float64, cart_lat_ref_val) : nothing
         (:generate_cartesian, meshgen_cart_val, dx_m, lat_ref, meshout_val)
+    elseif has_gen_dggs
+        fam = lowercase(dggs_val)
+        level = meshres_val !== nothing ? parse(Int, meshres_val) : nothing
+        dx_m  = dx_val !== nothing ? parse(Float64, dx_val) : nothing
+        if fam == "a5"     # the A5 generator (--meshgen), at the level nearest --dx if given
+            res = level !== nothing ? level : a5_level_for_dx(dx_m)
+            level === nothing && @info "A5: resolution $res is nearest $(dx_m) m cells"
+            (:generate, meshgen_dggs_val, res, meshout_val)
+        else
+            (:generate_dggs, meshgen_dggs_val, fam, level, dx_m, meshout_val)
+        end
     else
         (:load, meshload_val, meshout_val)
     end

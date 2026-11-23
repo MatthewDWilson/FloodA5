@@ -15,6 +15,11 @@
 #   M   mass conservation: closed point-source run, exact volume balance
 #   X   HEALPix corners against healpix-geo (WGS84), an independent library
 #       (skipped if healpix-geo is not installed)
+#   C   command line (0.8.1): --meshgen-dggs with --dx and --meshres; the
+#       mesh metadata survives a re-save and reaches the output's /mesh
+#       attributes; --rerun reproduces the run; a5 through the same flag;
+#       a mesh without neighbour lists is refused by build_sgs_tables!
+#       unless it is A5; a file without an ID scheme is loaded with a warning
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_dggs_meshes.jl
 
@@ -219,6 +224,84 @@ for a, b in zip(vlo, vla): print(' '.join(f'{float(x)!r} {float(y)!r}' for x, y 
     end
 else
     @info "test_dggs_meshes: healpix-geo (or the HEALPix mesh) not available — X skipped"
+end
+
+# ---------------------------------------------------------------------------
+# C — the command line (0.8.1)
+const AOI = joinpath(DIR, "aoi.geojson")
+let (x0, y0, x1, y1) = parse.(Float64, split(BBOX, ','))
+    write(AOI, """{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+      "geometry":{"type":"Polygon","coordinates":[[[$x0,$y0],[$x1,$y0],[$x1,$y1],[$x0,$y1],[$x0,$y0]]]}}]}""")
+end
+_main(args) = with_logger(NullLogger()) do
+    redirect_stdout(devnull) do
+        main(copy(args))
+    end
+end
+_same_results(a, b) = FO.frame_times(a) == FO.frame_times(b) &&
+    all(v -> isequal(FO.read_var(a, v), FO.read_var(b, v)), FO.frame_vars(a))
+
+@testset "C — command line" begin
+    @test a5_level_for_dx(22.2) == 18 && a5_level_for_dx(44.4) == 17
+    @test_throws ErrorException dggs_generate("s2", AOI; target_dx = 40.0)
+    @test_throws ErrorException dggs_generate("h3", AOI)                  # neither level nor dx
+    @test_throws ErrorException dggs_generate("h3", AOI; level = 12, target_dx = 40.0)
+    @test "--meshgen-dggs" in FO._DROP_FLAGS && "--dggs" in FO._DROP_FLAGS
+
+    if HAVE["h3"]
+        mout = joinpath(DIR, "cli_h3.parquet"); h5 = joinpath(DIR, "cli_h3.h5")
+        args = ["--meshgen-dggs", AOI, "--dggs", "h3", "--dx", "40", "--meshout", mout,
+                "--flow-model", "standard", "--rainfall", "40", "--sim-duration", "300",
+                "--output", h5, "--output-interval", "100"]
+        _main(args)
+        m = _quiet(() -> load_mesh_geoparquet(mout))
+        @test m.id_scheme == "h3"
+        @test m.meta["mesh_family"] == "h3" && m.meta["dggs_level"] == SUMMARY["h3"][:level]
+        @test m.meta["target_dx_m"] == 40.0
+        # the same cells as the generator run directly
+        @test [c.id for c in m.cells] == [c.id for c in MESHES["h3"].cells]
+        # the metadata reaches the output, and the run reruns from it
+        mi = FO.mesh_info(h5)
+        @test mi["id_scheme"] == "h3" && mi["mesh_family"] == "h3"
+        @test mi["dggs_level"] == SUMMARY["h3"][:level] && mi["dggs_equal_area"] == 0
+        @test mi["dggs_refinement_ratio"] == 7
+        @test FO.run_info(h5)["argv"] == args
+        h5b = joinpath(DIR, "cli_h3_rerun.h5")
+        _main(["--rerun", h5, "--output", h5b])
+        @test _same_results(h5, h5b)
+        ri = FO.run_info(h5b)
+        @test "--meshload" in ri["argv"] && !("--meshgen-dggs" in ri["argv"]) && !("--dggs" in ri["argv"])
+        @test FO.mesh_info(h5b)["mesh_family"] == "h3"
+        # a re-save (as after DEM sampling) keeps the metadata
+        again = joinpath(DIR, "cli_h3_resaved.parquet")
+        _quiet(() -> save_mesh_geoparquet(m, again))
+        m2 = _quiet(() -> load_mesh_geoparquet(again))
+        @test m2.meta == m.meta && m2.id_scheme == "h3"
+        # no neighbour lists: SGS cannot fall back to pya5's grid_disk
+        m3 = deepcopy(m); empty!(m3.adjacency)
+        err = try A5Grid.build_sgs_tables!(m3, FileDEM("nonexistent.tif")); nothing catch e; e end
+        @test err isa ErrorException && occursin("only A5 meshes", err.msg)
+        # a file without an ID scheme: the old guess (a5-v0), with a warning —
+        # here wrong, so with pya5 1.x the A5 scheme check refuses it as well
+        bare = joinpath(DIR, "cli_h3_bare.parquet")
+        @test _py("import pyarrow.parquet as pq; t = pq.read_table(r'$mout'); " *
+                  "md = {k: v for k, v in (t.schema.metadata or {}).items() if k != b'flooda5'}; " *
+                  "pq.write_table(t.replace_schema_metadata(md), r'$bare')")
+        mb = withenv("FLOODA5_ALLOW_ID_SCHEME_MISMATCH" => "1") do
+            @test_logs (:warn, r"records no cell-ID scheme") match_mode = :any load_mesh_geoparquet(bare)
+        end
+        @test mb.id_scheme == "a5-v0" && isempty(mb.meta)
+    end
+    if HAVE["dggal"]
+        mout = joinpath(DIR, "cli_healpix.parquet")
+        lev = SUMMARY["healpix"][:level]
+        _main(["--meshgen-dggs", AOI, "--dggs", "healpix", "--meshres", string(lev),
+               "--meshout", mout, "--mesh-only"])
+        m = _quiet(() -> load_mesh_geoparquet(mout))
+        @test m.id_scheme == "healpix" && m.meta["dggs_level"] == lev
+        @test m.meta["dggs_equal_area"] == true && !haskey(m.meta, "target_dx_m")
+        @test length(m.cells) == length(MESHES["healpix"].cells)
+    end
 end
 
 println("\nDGGS mesh Tier 0 tests complete.")

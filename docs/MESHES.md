@@ -22,7 +22,7 @@ It is read by `A5Grid.load_mesh_geoparquet` (the model, `--meshload`) and by
 | `resolution` | int | The family's level (A5 resolution, DGGS level); 0 for Cartesian and the planar families. |
 | `center_lon`, `center_lat` | float | The cell centre the solver uses (degrees, WGS84). |
 | `geometry` | polygon | The cell: exterior ring of its **corner vertices only**, one straight side per face. |
-| `neighbours` | list of string | IDs of the cells that share a **side** (not only a corner). Required for every non-A5 mesh: without it FloodA5 falls back to pya5's `grid_disk`, which is A5-only. |
+| `neighbours` | list of string | IDs of the cells that share a **side** (not only a corner). Required for every non-A5 mesh: without it the model finds faces by matching vertices (1 cm rounding), and building SGS tables falls back to pya5's `grid_disk`, which is A5-only — for any other mesh `build_sgs_tables!` refuses it (0.8.1). |
 | `cell_area` | float | Informational. The model recomputes areas from the polygons (`A5Grid._polygon_area_m2`). |
 | `elevation`, SGS columns, … | | Added by DEM sampling (`--dem`) and SGS builds; see `DATA_FORMATS.md`. |
 
@@ -31,7 +31,11 @@ the name: `a5-v0`, `a5-v1`, `cartesian`, `polygon`, `h3`, `igeo7`, `isea3h`,
 `healpix`, `rhealpix`), plus `mesh_family` and family-specific keys (for DGGS
 meshes: `dggs_library`, `dggs_level`, `dggs_refinement_ratio`,
 `dggs_equal_area`, `dggs_system`, `dggs_interior_valence`). Only `a5-*`
-schemes are checked against the installed pya5.
+schemes are checked against the installed pya5. FloodA5 keeps the metadata
+through re-saves and writes it to the output's `/mesh` attributes
+(`FO.mesh_info`; 0.8.1). A file without it is taken for a pre-2026-10 A5 or
+Cartesian mesh, with a warning — a DGGS mesh stripped of its metadata would be
+misread (and, with pya5 1.x, refused as an `a5-v0` mesh).
 
 Geometric rules:
 
@@ -67,21 +71,36 @@ at 55° N, and exact at the equator.
 | HEALPix (nested) | `mesh/dggs_families.py healpix` (DGGAL) | quadrilateral | 4 | yes | ×4 | `healpix` |
 | rHEALPix | `mesh/dggs_families.py rhealpix` (DGGAL) | quadrilateral | 4 | yes | ×9 | `rhealpix` |
 
-Generating and running a DGGS mesh (the generator runs in FloodA5's Python,
-Julia's Conda.jl Python with its `Library\bin` on PATH; from Julia,
-`A5Grid.PYTHON_CMD[]`):
+Generating a DGGS mesh in a run (0.8.1), like any other mesh:
+
+```bash
+julia --project=. --threads 1 FloodModel.jl --meshgen-dggs AOI.geojson --dggs igeo7 --dx 25 \
+      --dem dem.tif --meshout m.parquet --mesh-only                # or --meshres 13
+julia --project=. --threads auto FloodModel.jl --meshload m.parquet ...
+```
+
+`--dggs a5` goes to the A5 generator (`--dx` then picks the nearest A5
+resolution: 18 for 22 m). The generator itself can be run directly, in
+FloodA5's Python (Julia's Conda.jl Python with its `Library\bin` on PATH;
+from Julia, `A5Grid.PYTHON_CMD[]`):
 
 ```bash
 python mesh/dggs_families.py igeo7 --aoi AOI.geojson --list-levels        # cell size per level
 python mesh/dggs_families.py igeo7 --aoi AOI.geojson --target-dx 25 --out m.parquet
-julia --project=. --threads auto FloodModel.jl --meshload m.parquet --dem dem.tif ...
 ```
 
-`--target-dx M` picks the level whose cell area at the AOI centre is closest
-to M² (in log terms); `--res N` sets it directly. Cells are those whose
-polygon intersects the AOI (A5's rule). The generator checks its shared-side
-adjacency against the library's own neighbour list and refuses a mesh where
-they differ, or where two neighbours share other than two vertices.
+`--dx`/`--target-dx M` picks the level whose cell area at the AOI centre is
+closest to M² (in log terms); `--meshres`/`--res N` sets it directly. Cells
+are those whose polygon intersects the AOI (A5's rule). The generator checks
+its shared-side adjacency against the library's own neighbour list and
+refuses a mesh where they differ, or where two neighbours share other than
+two vertices.
+
+The planar families cover the AOI's bounding box; `mesh_families.py --clip`
+(with `--aoi`) keeps the cells that meet the AOI polygon instead, as the
+global grids do — for an AOI that is not a lon/lat box, such as a projected
+rectangle whose bounding box reaches past the DEM (cells without elevation
+are walls).
 
 ### Levels near flood-model cell sizes (at 54.9° N, −2.9° E)
 
@@ -186,7 +205,12 @@ the runtime end up in the process. 0.0.6 (pinned in `setup.jl` and
 - `test/test_dggs_meshes.jl` — DGGS families near Carlisle: generator (level
   choice, vertex snapping, reproducibility), geometry and closure, lake at
   rest under four solver options, mass conservation, HEALPix against
-  healpix-geo. A family whose library is missing is skipped, except in CI
+  healpix-geo; the command line (`--meshgen-dggs` with `--dx` and
+  `--meshres`, metadata through a re-save into the output, `--rerun`). A
+  family whose library is missing is skipped, except in CI
   (`FLOODA5_REQUIRE_DGGS=1`).
+- `test/test_sgs_general.jl` S8 — SGS tables and SGS flow on H3, IGEO7 and
+  HEALPix meshes (slot order, one table per face, lake at rest, mass balance,
+  open-boundary drain).
 - `test/analysis/test_mesh_quality.jl` — `FA.mesh_quality` on meshes with
   known answers (squares, regular hexagons, 60° rhombi).
