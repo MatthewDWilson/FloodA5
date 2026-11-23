@@ -21,7 +21,10 @@ A5 and Cartesian:
 
 hex/rotcart/voronoi cover the AOI's bounding box (or --bbox) in a local
 equirectangular plane about its centre: hex and rotcart keep whole cells whose
-centre lies inside the box; voronoi cells are clipped to it. Cell IDs are the
+centre lies inside the box; voronoi cells are clipped to it. With --clip (and
+--aoi) they instead keep every cell that intersects the AOI polygon, the rule
+of the A5 and DGGS generators (0.8.1; for AOIs that are not lon/lat boxes, e.g.
+a projected rectangle, whose bounding box reaches past the DEM). Cell IDs are the
 16-hex-digit row index. Adjacency is built from shared polygon edges (vertex
 pairs matched after rounding), so meshes with hanging nodes (T-junctions) are
 not supported — such cells would get no neighbour across the split edge.
@@ -65,17 +68,32 @@ class LocalPlane:
         return self.lon0 + np.asarray(x) / self.kx, self.lat0 + np.asarray(y) / self.ky
 
 
-def _bbox_from_args(args):
-    if args.bbox:
-        lon0, lat0, lon1, lat1 = (float(v) for v in args.bbox.split(","))
-        return lon0, lat0, lon1, lat1
-    with open(args.aoi, "r", encoding="utf-8") as f:
+def _aoi_geometry(path):
+    with open(path, "r", encoding="utf-8") as f:
         gj = json.load(f)
     import shapely
     geoms = ([shapely.geometry.shape(ft["geometry"]) for ft in gj["features"]]
              if gj.get("type") == "FeatureCollection" else
              [shapely.geometry.shape(gj.get("geometry", gj))])
-    return shapely.union_all(geoms).bounds
+    return shapely.union_all(geoms)
+
+
+def _bbox_from_args(args):
+    if args.bbox:
+        lon0, lat0, lon1, lat1 = (float(v) for v in args.bbox.split(","))
+        return lon0, lat0, lon1, lat1
+    return _aoi_geometry(args.aoi).bounds
+
+
+def clip_to_aoi(cells, plane, aoi):
+    """The cells (centre, ring in local metres) whose polygon intersects `aoi` (lon/lat)."""
+    import shapely
+    keep = []
+    for c, ring in cells:
+        lon, lat = plane.to_lonlat([v[0] for v in ring], [v[1] for v in ring])
+        if shapely.Polygon(list(zip(lon, lat))).intersects(aoi):
+            keep.append((c, ring))
+    return keep
 
 
 # ── Families (polygons in local metres) ─────────────────────────────────────
@@ -255,6 +273,8 @@ def main(argv=None):
     ap.add_argument("--lloyd", type=int, default=0)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--centre", choices=["generator", "centroid"], default="generator")
+    ap.add_argument("--clip", action="store_true",
+                    help="keep the cells intersecting the --aoi polygon (default: cover its bounding box)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
     try:
@@ -266,10 +286,14 @@ def main(argv=None):
         else:
             if not (args.aoi or args.bbox):
                 raise ValueError("give --aoi FILE or --bbox LON0,LAT0,LON1,LAT1")
+            if args.clip and not args.aoi:
+                raise ValueError("--clip needs --aoi FILE")
             lon0, lat0, lon1, lat1 = _bbox_from_args(args)
             plane = LocalPlane(0.5 * (lon0 + lon1), 0.5 * (lat0 + lat1))
             (x0, x1), (y0, y1) = plane.to_xy([lon0, lon1], [lat0, lat1])
             w, h = x1 - x0, y1 - y0
+            if args.clip:          # cover the box and a margin; keep what meets the AOI
+                w, h = w + 6 * args.dx, h + 6 * args.dx
             md = {"dx_m": args.dx}
             if args.family == "hex":
                 cells = hex_cells(w, h, args.dx)
@@ -278,6 +302,9 @@ def main(argv=None):
             else:
                 cells = voronoi_cells(w, h, args.dx, args.jitter, args.lloyd, args.seed, args.centre)
                 md.update(jitter=args.jitter, lloyd=args.lloyd, seed=args.seed, centre=args.centre)
+            if args.clip:
+                cells = clip_to_aoi(cells, plane, _aoi_geometry(args.aoi))
+                md["clip"] = "aoi"
         print(json.dumps(write_mesh(cells, plane, args.out, args.family, md)), flush=True)
     except Exception as e:
         import traceback

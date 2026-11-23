@@ -47,9 +47,11 @@ function main(argv)
     cmd = popfirst!(args)
     if cmd == "list"
         tier = _opt(args, "--tier", nothing)
-        for c in FC.cases(; tier = tier === nothing ? nothing : Symbol(tier))
+        cs = FC.cases(; tier = tier === nothing ? nothing : Symbol(tier))
+        w = maximum(c -> length(c.name), cs; init = 24)
+        for c in cs
             st = isempty(c.jobs) ? "" : string(count(j -> FC.job_status(c, j) === :done, c.jobs), "/", length(c.jobs), " runs done")
-            @printf("%-24s %-9s %-16s %s\n", c.name, c.tier, st, c.title)
+            println(rpad(c.name, w), " ", rpad(string(c.tier), 9), " ", rpad(st, 16), " ", c.title)
         end
         return 0
     elseif cmd == "show"

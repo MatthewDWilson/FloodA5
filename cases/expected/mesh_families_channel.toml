@@ -1,0 +1,847 @@
+# Expected metrics for case "mesh_families_channel" — written by `julia --project=. cases/run.jl baseline mesh_families_channel`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[chan_a5_r18_a00_o00_li]
+deta = 1.0597671994510371
+input_error_rel = -1.3473995581821158e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.446418542000989e-15
+outflow = 0.9995656120331943
+spill = 0.0
+unsteady = 3.668328107053753e-5
+
+[chan_a5_r18_a00_o00_swe]
+deta = 1.0496015964076029
+input_error_rel = 9.836016774729447e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274719e-16
+outflow = 0.9942582067045603
+spill = 0.0
+unsteady = 0.0015403747239911558
+
+[chan_a5_r18_a15_o00_li]
+deta = 1.0698707131623466
+input_error_rel = 1.8863593814549623e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.3473995581821134e-16
+outflow = 1.0016048308127532
+spill = 0.0
+unsteady = 0.01295658560158508
+
+[chan_a5_r18_a15_o00_swe]
+deta = 1.1055545930999937
+input_error_rel = -2.4253192047278086e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274835e-16
+outflow = 0.887533110676034
+spill = 0.0
+unsteady = 0.07132323773698912
+
+[chan_a5_r18_a30_o00_li]
+deta = 0.9745584904946472
+input_error_rel = 1.4821395140003274e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.772718762909919e-15
+outflow = 1.0033826196122198
+spill = 0.0
+unsteady = 0.0031507951774828024
+
+[chan_a5_r18_a30_o00_swe]
+deta = 1.075326078775431
+input_error_rel = 8.084397349092696e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.347399558182115e-16
+outflow = 0.9999261783077795
+spill = 0.0
+unsteady = 0.000583525292563225
+
+[chan_a5_r18_a45_o00_li]
+deta = 0.9966510019084937
+input_error_rel = -1.6168794698185392e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.176938630364566e-15
+outflow = 0.9985590277777782
+spill = 0.0
+unsteady = 0.00045737354428965205
+
+[chan_a5_r18_a45_o00_swe]
+deta = 1.0156437598555679
+input_error_rel = -2.6947991163642317e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.715898453637418e-15
+outflow = 1.0002648244099024
+spill = 0.0
+unsteady = 0.001104156652296684
+
+[chan_cart_r18_a00_o00_li]
+deta = 0.7382864677676757
+input_error_rel = 1.3473995581821158e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.0421986745463425e-16
+outflow = 1.0000334336342342
+spill = 0.0
+unsteady = 1.2260370496619544e-10
+
+[chan_cart_r18_a00_o00_swe]
+deta = 0.6947652068129095
+input_error_rel = -3.637978807091713e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 0.0
+outflow = 0.999936962750716
+spill = 0.0
+unsteady = 5.935440527959912e-9
+
+[chan_cart_r18_a15_o00_li]
+deta = 0.820316009464507
+input_error_rel = 1.3473995581821158e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.233758939637074e-15
+outflow = 0.9999302384576358
+spill = 0.0
+unsteady = 0.000823093346906752
+
+[chan_cart_r18_a15_o00_swe]
+deta = 0.8597104507887456
+input_error_rel = -1.6168794698185392e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.389598232728472e-16
+outflow = 0.9999371428571425
+spill = 0.0
+unsteady = 2.353059663784407e-7
+
+[chan_cart_r18_a30_o00_li]
+deta = 0.987773443774141
+input_error_rel = -2.021099337273174e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.5600591605460252e-15
+outflow = 0.9998221578184704
+spill = 0.0
+unsteady = 0.0034664947821617734
+
+[chan_cart_r18_a30_o00_swe]
+deta = 1.030747333134839
+input_error_rel = -3.0990189838188668e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.4821395140003321e-15
+outflow = 1.0014157539035204
+spill = 0.0
+unsteady = 0.0003473312748869112
+
+[chan_cart_r18_a45_o00_li]
+deta = 1.2929034304729903
+input_error_rel = 1.3473995581821158e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.762169094273334e-15
+outflow = 0.9925568181818185
+spill = 32.40079453354787
+unsteady = 0.00036812212164660796
+
+[chan_cart_r18_a45_o00_swe]
+deta = 1.0186942882781647
+input_error_rel = 3.907458718728136e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.736997790910554e-17
+outflow = 0.8853650330828768
+spill = 0.0
+unsteady = 0.14195306191612053
+
+[chan_h3_r18_a00_o00_li]
+deta = 0.4628667951627186
+input_error_rel = -2.290579248909597e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.6168794698185427e-15
+outflow = 0.9999759499759482
+spill = 0.0
+unsteady = 8.806308400202689e-5
+
+[chan_h3_r18_a00_o00_swe]
+deta = 0.5352577143796445
+input_error_rel = -5.92855805600131e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.311678586182796e-15
+outflow = 0.9999821725695281
+spill = 0.0
+unsteady = 3.3196152398051737e-6
+
+[chan_h3_r18_a15_o00_li]
+deta = 0.5694378872979763
+input_error_rel = 2.694799116364232e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.3684988954552887e-15
+outflow = 0.9998933232931728
+spill = 0.0
+unsteady = 0.002410121542271028
+
+[chan_h3_r18_a15_o00_swe]
+deta = 0.7187330044162936
+input_error_rel = -2.56005916054602e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 7.814917437456293e-15
+outflow = 1.0000057696745903
+spill = 0.0
+unsteady = 1.2987467929548302e-5
+
+[chan_h3_r18_a30_o00_li]
+deta = 0.6124799074199431
+input_error_rel = -1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.8863593814549647e-15
+outflow = 1.0002085703450878
+spill = 0.0
+unsteady = 5.717277269542964e-5
+
+[chan_h3_r18_a30_o00_swe]
+deta = 0.7103016163411836
+input_error_rel = -1.6168794698185392e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.96427902800066e-15
+outflow = 0.9999307079339413
+spill = 0.0
+unsteady = 1.4315397297570698e-5
+
+[chan_h3_r18_a45_o00_li]
+deta = 0.5702580151418452
+input_error_rel = 0.0
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.1318156288729773e-14
+outflow = 0.9997884519661545
+spill = 0.0
+unsteady = 0.00012194322112579759
+
+[chan_h3_r18_a45_o00_swe]
+deta = 0.6149569993618075
+input_error_rel = -3.2337589396370783e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.3684988954553005e-15
+outflow = 0.9998165137614672
+spill = 0.0
+unsteady = 1.3786098185253337e-6
+
+[chan_healpix_r18_a00_o00_li]
+deta = 1.1649505569825755
+input_error_rel = 4.581158497819194e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.1558392930913756e-15
+outflow = 1.004304761904762
+spill = 0.0
+unsteady = 0.00030648590471771264
+
+[chan_healpix_r18_a00_o00_swe]
+deta = 1.1035595501043027
+input_error_rel = 5.389598232728463e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.6168794698185303e-15
+outflow = 1.0000855578370982
+spill = 0.0
+unsteady = 3.382090902515067e-5
+
+[chan_healpix_r18_a15_o00_li]
+deta = 1.1596763141413113
+input_error_rel = 5.389598232728464e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.953729359364067e-15
+outflow = 1.0000403458213254
+spill = 12.32595752879663
+unsteady = 0.004095887066084478
+
+[chan_healpix_r18_a15_o00_swe]
+deta = 1.0735822815595466
+input_error_rel = -1.6168794698185392e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.467517879274167e-15
+outflow = 0.999948078920041
+spill = 0.0
+unsteady = 9.436266711881913e-5
+
+[chan_healpix_r18_a30_o00_li]
+deta = 1.092196769105474
+input_error_rel = -2.964279028000655e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.6947991163642397e-16
+outflow = 1.007781354463292
+spill = 10.565106267152371
+unsteady = 7.702256605623958e-5
+
+[chan_healpix_r18_a30_o00_swe]
+deta = 1.0450649994654828
+input_error_rel = -1.024023664218408e-14
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.92855805600137e-15
+outflow = 1.0043316548409245
+spill = 3.5217020634222256
+unsteady = 0.0002430795221096682
+
+[chan_healpix_r18_a45_o00_li]
+deta = 1.1220108196242728
+input_error_rel = -2.694799116364232e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.4821395140003278e-15
+outflow = 0.9966573816156004
+spill = 9.684680866247794
+unsteady = 0.0005477998593332867
+
+[chan_healpix_r18_a45_o00_swe]
+deta = 1.074066568467626
+input_error_rel = -9.431796907274811e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.2126596023639055e-15
+outflow = 1.0026802843922804
+spill = 3.5217020252504385
+unsteady = 0.0004689186152910807
+
+[chan_hex_r18_a00_o00_li]
+deta = 0.42023144962495773
+input_error_rel = -1.0779196465456927e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.0210993372731762e-15
+outflow = 1.0000755390743028
+spill = 0.0
+unsteady = 5.022557925116189e-9
+
+[chan_hex_r18_a00_o00_swe]
+deta = 0.5205248383007408
+input_error_rel = 1.7516194256367507e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.2337589396370724e-15
+outflow = 0.9929181286549704
+spill = 0.0
+unsteady = 0.003498259526233616
+
+[chan_hex_r18_a15_o00_li]
+deta = 0.7009628667410481
+input_error_rel = 1.3473995581821158e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.871737746728782e-15
+outflow = 0.999788619744057
+spill = 0.0
+unsteady = 0.001186309130719293
+
+[chan_hex_r18_a15_o00_swe]
+deta = 0.7642041662460693
+input_error_rel = 1.6168794698185392e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.482139514000325e-15
+outflow = 1.000063923756393
+spill = 0.0
+unsteady = 2.038891849798219e-6
+
+[chan_hex_r18_a30_o00_li]
+deta = 0.9178697021178408
+input_error_rel = 3.7727187629099246e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.3473995581821107e-16
+outflow = 1.0000000000000018
+spill = 0.0
+unsteady = 1.8468555986750346e-6
+
+[chan_hex_r18_a30_o00_swe]
+deta = 0.9712740504513112
+input_error_rel = 1.0779196465456927e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.4821395140003258e-15
+outflow = 0.9999382716049388
+spill = 0.0
+unsteady = 8.494889884858026e-6
+
+[chan_hex_r18_a45_o00_li]
+deta = 0.8742924113285235
+input_error_rel = -1.616868427246431e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.751607462850303e-15
+outflow = 0.9999576578756362
+spill = 0.0
+unsteady = 1.7911234012651933e-5
+
+[chan_hex_r18_a45_o00_swe]
+deta = 0.9523806028418116
+input_error_rel = 2.964279028000655e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.6168794698185342e-15
+outflow = 0.9999999999999987
+spill = 0.0
+unsteady = 1.4453706210115769e-5
+
+[chan_igeo7_r18_a00_o00_li]
+deta = 0.5777516721805084
+input_error_rel = 1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.0779196465456913e-15
+outflow = 0.9998074179743216
+spill = 0.0
+unsteady = 0.0019549516859624014
+
+[chan_igeo7_r18_a00_o00_swe]
+deta = 0.7134353961551366
+input_error_rel = 1.8863593814549623e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.5032388512734948e-15
+outflow = 0.9999296600234476
+spill = 0.0
+unsteady = 6.157492614455862e-6
+
+[chan_igeo7_r18_a15_o00_li]
+deta = 0.355186579033769
+input_error_rel = 9.431796907274811e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.389598232728459e-16
+outflow = 0.9999121926743597
+spill = 0.0
+unsteady = 0.0001308068051995015
+
+[chan_igeo7_r18_a15_o00_swe]
+deta = 0.44416534445896955
+input_error_rel = -6.332777923455945e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 7.410697570001684e-15
+outflow = 0.9999479287202031
+spill = 0.0
+unsteady = 2.7557695836399887e-7
+
+[chan_igeo7_r18_a30_o00_li]
+deta = 0.8272330527014498
+input_error_rel = -5.389598232728464e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.04219867454635e-16
+outflow = 0.9998133484162902
+spill = 0.0
+unsteady = 0.0004545326936338419
+
+[chan_igeo7_r18_a30_o00_swe]
+deta = 0.8711772834876046
+input_error_rel = -2.021099337273174e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.736997790910593e-15
+outflow = 1.0000574250602954
+spill = 0.0
+unsteady = 1.6208860231792244e-6
+
+[chan_igeo7_r18_a45_o00_li]
+deta = 1.0530910938490528
+input_error_rel = 2.964279028000655e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.05274834318292e-15
+outflow = 0.9997923834381285
+spill = 0.0
+unsteady = 7.567102830842443e-5
+
+[chan_igeo7_r18_a45_o00_swe]
+deta = 1.0741881759697076
+input_error_rel = 2.56005916054602e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.2232092710004857e-15
+outflow = 0.9997204100652379
+spill = 0.0
+unsteady = 2.9488958776524576e-6
+
+[chan_isea3h_r18_a00_o00_li]
+deta = 0.6767565238169015
+input_error_rel = 1.4821395140003274e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.8863593814549595e-15
+outflow = 1.0000217580504804
+spill = 0.0
+unsteady = 1.2358026890701979e-5
+
+[chan_isea3h_r18_a00_o00_swe]
+deta = 0.7772111780202652
+input_error_rel = -2.694799116364232e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.6168794698185396e-15
+outflow = 0.999900445069103
+spill = 0.0
+unsteady = 2.765456090114693e-5
+
+[chan_isea3h_r18_a15_o00_li]
+deta = 0.7362245812050865
+input_error_rel = -2.1558392930913854e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.736997790910594e-15
+outflow = 0.9998041775456937
+spill = 0.0
+unsteady = 0.004738757050260105
+
+[chan_isea3h_r18_a15_o00_swe]
+deta = 0.7874764858824875
+input_error_rel = -2.4253192047278086e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.602257835092384e-15
+outflow = 0.9999135047860681
+spill = 0.0
+unsteady = 1.9372104949066937e-6
+
+[chan_isea3h_r18_a30_o00_li]
+deta = 0.6317991614353785
+input_error_rel = 2.021099337273174e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274792e-16
+outflow = 0.9999387921653966
+spill = 0.0
+unsteady = 0.00011125092608602061
+
+[chan_isea3h_r18_a30_o00_swe]
+deta = 0.6841806072175977
+input_error_rel = 2.021099337273174e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.12011832109203e-15
+outflow = 0.9999299147295866
+spill = 0.0
+unsteady = 9.132966749536564e-8
+
+[chan_isea3h_r18_a45_o00_li]
+deta = 0.9746936039262898
+input_error_rel = -2.56005916054602e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.2337589396370866e-15
+outflow = 0.999863543324995
+spill = 0.0
+unsteady = 0.0005913703600440856
+
+[chan_isea3h_r18_a45_o00_swe]
+deta = 1.0404312670490579
+input_error_rel = 3.5032388512735015e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.5600591605460114e-15
+outflow = 1.0000409836065562
+spill = 0.0
+unsteady = 2.4951321659916204e-6
+
+[chan_rhealpix_r18_a00_o00_li]
+deta = 0.2808412152166712
+input_error_rel = -9.2970569514566e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.9642790280006824e-15
+outflow = 0.9999552143314132
+spill = 0.0
+unsteady = 1.8361978604275464e-12
+
+[chan_rhealpix_r18_a00_o00_swe]
+deta = 0.2612732996556789
+input_error_rel = -1.4821395140003274e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274825e-16
+outflow = 0.9971321270058039
+spill = 0.0
+unsteady = 0.0014118616009395346
+
+[chan_rhealpix_r18_a15_o00_li]
+deta = 0.7065680071629112
+input_error_rel = -4.042198674546348e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274849e-16
+outflow = 0.9999539594843445
+spill = 0.0
+unsteady = 0.001095576430113293
+
+[chan_rhealpix_r18_a15_o00_swe]
+deta = 0.7770052534427941
+input_error_rel = 6.332777923455945e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.0210993372731612e-15
+outflow = 0.9999715909090909
+spill = 0.0
+unsteady = 5.235670474945664e-8
+
+[chan_rhealpix_r18_a30_o00_li]
+deta = 0.9286705671644616
+input_error_rel = 2.021099337273174e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.0779196465456905e-15
+outflow = 0.9991634491634481
+spill = 0.0
+unsteady = 7.608992099594758e-5
+
+[chan_rhealpix_r18_a30_o00_swe]
+deta = 1.019345890383076
+input_error_rel = -1.4012955405094006e-14
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.8717377467288876e-15
+outflow = 1.0000863756766103
+spill = 0.0
+unsteady = 4.455117696977595e-6
+
+[chan_rhealpix_r18_a45_o00_li]
+deta = 1.072225159324586
+input_error_rel = 2.4253192047278086e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.4821395140003239e-15
+outflow = 0.9993688725490194
+spill = 0.0
+unsteady = 0.0042699767561704405
+
+[chan_rhealpix_r18_a45_o00_swe]
+deta = 0.8568448777846077
+input_error_rel = -6.602257835092368e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.198037967637774e-15
+outflow = 0.9745151550342585
+spill = 0.0
+unsteady = 0.03042508699365154
+
+[chan_rotcart_r18_a00_o00_li]
+deta = 0.932418587422513
+input_error_rel = -6.736997790910579e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.0421986745463504e-16
+outflow = 0.9998714652956299
+spill = 0.0
+unsteady = 0.0004953709889867416
+
+[chan_rotcart_r18_a00_o00_swe]
+deta = 0.9633181648368717
+input_error_rel = -6.467517879274157e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.637978807091737e-15
+outflow = 0.9998290013679904
+spill = 0.0
+unsteady = 0.0015522075432362614
+
+[chan_rotcart_r18_a15_o00_li]
+deta = 0.7041884905976367
+input_error_rel = -3.0990189838188668e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.907458718728148e-15
+outflow = 1.000000000000001
+spill = 0.0
+unsteady = 6.832317368488106e-5
+
+[chan_rotcart_r18_a15_o00_swe]
+deta = 0.7931176304636354
+input_error_rel = -3.5032388512735015e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.0421986745463617e-16
+outflow = 0.9995352079944242
+spill = 0.0
+unsteady = 1.0814952217941265e-6
+
+[chan_rotcart_r18_a30_o00_li]
+deta = -0.0868859429269071
+input_error_rel = 1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.6168794698185372e-15
+outflow = 1.0000767001874875
+spill = 0.0
+unsteady = 2.034594714928062e-12
+
+[chan_rotcart_r18_a30_o00_swe]
+deta = 0.08447671282157854
+input_error_rel = 8.623357172365542e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.3473995581821042e-15
+outflow = 0.997409715010961
+spill = 0.0
+unsteady = 0.0010033440992108789
+
+[chan_rotcart_r18_a45_o00_li]
+deta = 0.9527250034111575
+input_error_rel = -9.431796907274811e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.368498895455293e-15
+outflow = 0.9997543979894916
+spill = 0.0
+unsteady = 0.00012909286143839016
+
+[chan_rotcart_r18_a45_o00_swe]
+deta = 0.99852837020451
+input_error_rel = -3.637978807091713e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.2905792489096053e-15
+outflow = 1.0000172393977702
+spill = 0.0
+unsteady = 6.706446120663401e-7
+
+[chan_voronoi_jit_r18_a00_o00_li]
+deta = 0.6912152569192844
+input_error_rel = -3.36849889545529e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 5.389598232728481e-16
+outflow = 0.9997986020613671
+spill = 0.0
+unsteady = 5.383897279964689e-5
+
+[chan_voronoi_jit_r18_a00_o00_swe]
+deta = 0.72694752008121
+input_error_rel = 9.431796907274811e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.6947991163642066e-16
+outflow = 0.9997023140867203
+spill = 0.0
+unsteady = 7.212796231392815e-7
+
+[chan_voronoi_jit_r18_a15_o00_li]
+deta = 0.5462831352129491
+input_error_rel = 1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.77271876290992e-15
+outflow = 0.9998897545200631
+spill = 0.0
+unsteady = 0.00019738865332256245
+
+[chan_voronoi_jit_r18_a15_o00_swe]
+deta = 0.8652447160698044
+input_error_rel = 8.084397349092696e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.311678586182768e-15
+outflow = 0.9998841922408801
+spill = 0.0
+unsteady = 1.725315149347928e-5
+
+[chan_voronoi_jit_r18_a30_o00_li]
+deta = 0.9312983403057604
+input_error_rel = 2.964279028000655e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.347399558182112e-16
+outflow = 0.9994584837545125
+spill = 0.0
+unsteady = 2.6238242171072734e-5
+
+[chan_voronoi_jit_r18_a30_o00_swe]
+deta = 1.0243253318765497
+input_error_rel = -1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 6.063298011819529e-15
+outflow = 0.9975357802400736
+spill = 0.0
+unsteady = 1.4826383897159623e-5
+
+[chan_voronoi_jit_r18_a45_o00_li]
+deta = 1.0739855840703838
+input_error_rel = 6.73694963854576e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.5494984168655238e-15
+outflow = 0.9978572318425323
+spill = 0.0
+unsteady = 0.000879201023130674
+
+[chan_voronoi_jit_r18_a45_o00_swe]
+deta = 1.0181401410092379
+input_error_rel = -5.12011832109204e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 4.581158497819218e-15
+outflow = 0.997106773823192
+spill = 0.0
+unsteady = 0.000413949854157325
+
+[chan_voronoi_r18_a00_o00_li]
+deta = 0.7235712874973115
+input_error_rel = 4.042198674546348e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.8863593814549615e-15
+outflow = 0.9999390739236392
+spill = 0.0
+unsteady = 7.463566578636005e-5
+
+[chan_voronoi_r18_a00_o00_swe]
+deta = 0.7654508226232124
+input_error_rel = -3.5032388512735015e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 8.084397349092724e-15
+outflow = 0.9999881922304874
+spill = 0.0
+unsteady = 1.7131611312892758e-7
+
+[chan_voronoi_r18_a15_o00_li]
+deta = 0.6998062278687861
+input_error_rel = -4.176923648836201e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 1.0779157803448306e-15
+outflow = 0.9999184543971883
+spill = 0.0
+unsteady = 2.6933010829399695e-5
+
+[chan_voronoi_r18_a15_o00_swe]
+deta = 0.7894373117935022
+input_error_rel = -2.964279028000655e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.772718762909936e-15
+outflow = 0.9998500403737435
+spill = 0.0
+unsteady = 4.38781601830307e-6
+
+[chan_voronoi_r18_a30_o00_li]
+deta = 0.8141025664197967
+input_error_rel = 1.2126596023639043e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 8.084397349092686e-16
+outflow = 0.9994217081850539
+spill = 0.0
+unsteady = 4.009385250822173e-5
+
+[chan_voronoi_r18_a30_o00_swe]
+deta = 0.9450551289719269
+input_error_rel = 2.6947991163642317e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 9.431796907274786e-16
+outflow = 0.9999264289756656
+spill = 0.0
+unsteady = 0.0002350906069936709
+
+[chan_voronoi_r18_a45_o00_li]
+deta = 1.1433499182279743
+input_error_rel = -8.084397349092696e-16
+mass_balance_log_rel = 0.0
+mass_balance_rel = 3.3684988954552926e-16
+outflow = 0.9977712952158686
+spill = 0.0
+unsteady = 0.00016728802905380258
+
+[chan_voronoi_r18_a45_o00_swe]
+deta = 1.0476100749568926
+input_error_rel = 5.389598232728463e-15
+mass_balance_log_rel = 0.0
+mass_balance_rel = 2.4253192047277955e-15
+outflow = 1.0000391411317389
+spill = 0.0
+unsteady = 0.020347201006873927
+
+[meta]
+flooda5_version = "0.8.0"
+git_commit = "4a9d4132ed0a5192dadcc53f9e3a501d61ceff0b"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-23T12:48:04Z"
+
+[series]
+jobs_match_generator = 1.0
+li_a5_r18_rms = 1.0260125889718912
+li_a5_r18_spread = 0.09531222266769945
+li_cart_r18_rms = 0.983015884997147
+li_cart_r18_spread = 0.5546169627053146
+li_h3_r18_rms = 0.5565139302796579
+li_h3_r18_spread = 0.14961311225722446
+li_healpix_r18_rms = 1.1350948215449623
+li_healpix_r18_spread = 0.07275378787710163
+li_hex_r18_rms = 0.7541245623861252
+li_hex_r18_spread = 0.49763825249288307
+li_igeo7_r18_rms = 0.7505447814852622
+li_igeo7_r18_spread = 0.6979045148152838
+li_isea3h_r18_rms = 0.7663588957571721
+li_isea3h_r18_spread = 0.3428944424909113
+li_rhealpix_r18_rms = 0.8047058393470158
+li_rhealpix_r18_spread = 0.7913839441079147
+li_rotcart_r18_rms = 0.7550695252200721
+li_rotcart_r18_spread = 1.0396109463380645
+li_voronoi_jit_r18_rms = 0.8362065278182401
+li_voronoi_jit_r18_spread = 0.5277024488574347
+li_voronoi_r18_rms = 0.8636110508813664
+li_voronoi_r18_spread = 0.44354369035918817
+swe_a5_r18_rms = 1.0620467141484384
+swe_a5_r18_spread = 0.08991083324442584
+swe_cart_r18_rms = 0.9113148289049608
+swe_cart_r18_spread = 0.33598212632192936
+swe_h3_r18_rms = 0.6491876557824342
+swe_h3_r18_spread = 0.18347529003664909
+swe_healpix_r18_rms = 1.0742674762963627
+swe_healpix_r18_spread = 0.05849455063881992
+swe_hex_r18_rms = 0.8223983537108539
+swe_hex_r18_spread = 0.4507492121505704
+swe_igeo7_r18_rms = 0.8091821510579928
+swe_igeo7_r18_spread = 0.6300228315107381
+swe_isea3h_r18_rms = 0.8328830583886655
+swe_isea3h_r18_spread = 0.3562506598314602
+swe_rhealpix_r18_rms = 0.7818647724858264
+swe_rhealpix_r18_spread = 0.7580725907273972
+swe_rotcart_r18_rms = 0.8001894593734262
+swe_rotcart_r18_spread = 0.9140516573829315
+swe_voronoi_jit_r18_rms = 0.9169177781973218
+swe_voronoi_jit_r18_spread = 0.29737781179533973
+swe_voronoi_r18_rms = 0.8943911751931639
+swe_voronoi_r18_spread = 0.2821592523336802

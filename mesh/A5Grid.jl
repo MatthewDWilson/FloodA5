@@ -77,7 +77,7 @@ Public API
 """
 module A5Grid
 
-export A5Mesh, A5Cell
+export A5Mesh, A5Cell, PolyMesh, PolyCell
 export pya5_version, a5_id_scheme, check_id_scheme, migrate_cell_id
 export DEMSource, FileDEM
 export mesh_for_aoi, save_mesh, save_mesh_geoparquet, save_mesh_geojson, load_mesh_geoparquet
@@ -337,10 +337,19 @@ mutable struct A5Mesh
     # their scheme and load_mesh_geoparquet refuses a mismatch with the
     # installed pya5 — see check_id_scheme and mesh/migrate_mesh_ids.py.
     id_scheme::String
+    # The file's other `flooda5` schema metadata (0.8.1): for DGGS meshes the
+    # family, library, level, refinement ratio and equal-area flag
+    # (mesh/dggs_families.py, docs/MESHES.md); for planar families the family.
+    # Kept through re-saves (save_mesh_geoparquet) and written to the output's
+    # /mesh attributes. Empty for meshes generated in this process by pya5 or
+    # CartesianGrid.
+    meta::Dict{String,Any}
 end
 
 # Backwards-compatible constructors. A mesh built in this process without an
 # explicit scheme uses the installed pya5's scheme.
+A5Mesh(res, aoi, cells, sv, av, adj, scheme) =
+    A5Mesh(res, aoi, cells, sv, av, adj, scheme, Dict{String,Any}())
 A5Mesh(res, aoi, cells) =
     A5Mesh(res, aoi, cells,
            Dict{String,Vector{Float64}}(),
@@ -354,6 +363,11 @@ A5Mesh(res, aoi, cells, sv, av) =
     A5Mesh(res, aoi, cells, sv, av, Dict{String,Vector{String}}())
 A5Mesh(res, aoi, cells, sv, av, adj) =
     A5Mesh(res, aoi, cells, sv, av, adj, a5_id_scheme())
+
+# The mesh types hold any polygon mesh (A5, Cartesian, planar families, DGGS);
+# the A5 names are historical. New code may use the neutral aliases.
+const PolyMesh = A5Mesh
+const PolyCell = A5Cell
 
 Base.length(m::A5Mesh) = length(m.cells)
 Base.iterate(m::A5Mesh, s=1) = s > length(m.cells) ? nothing : (m.cells[s], s+1)
@@ -1404,7 +1418,8 @@ out = '$(out_fwd)'
 
 import pyarrow.parquet as _pq
 _raw_md = (_pq.read_schema('$(path_fwd)').metadata or {}).get(b'flooda5')
-id_scheme = json.loads(_raw_md.decode()).get('a5_id_scheme') if _raw_md else None
+mesh_meta = json.loads(_raw_md.decode()) if _raw_md else {}
+id_scheme = mesh_meta.get('a5_id_scheme')
 
 BASE_COLS = {'cell_id', 'resolution', 'center_lon', 'center_lat', 'geometry'}
 extra_cols = [c for c in gdf.columns if c not in BASE_COLS]
@@ -1467,7 +1482,8 @@ with open(os.path.join(out, 'manifest.json'), 'w') as f:
                'resolution': [int(r) for r in gdf['resolution']],
                'scalar_cols': scalar_cols, 'array_cols': array_cols,
                'array_lens': array_lens, 'adjacency': adjacency,
-               'n_coords': int(len(coords)), 'id_scheme': id_scheme}, f)
+               'n_coords': int(len(coords)), 'id_scheme': id_scheme,
+               'meta': mesh_meta}, f)
 """
     tmp_script = tempname() * ".py"
     write(tmp_script, py_code)
@@ -1523,14 +1539,28 @@ with open(os.path.join(out, 'manifest.json'), 'w') as f:
         @info "Loaded adjacency for $(length(adjacency)) cells from parquet neighbours column"
     end
 
-    # Cell-ID scheme: recorded in the file since WP-M1. Older files are pya5
-    # 0.7.x A5 meshes ("a5-v0"), or Cartesian meshes (resolution 0).
+    # Cell-ID scheme: recorded in the file since WP-M1 (2026-10) by every
+    # generator. A file without one predates that — a pya5 0.7.x A5 mesh
+    # ("a5-v0") or a Cartesian mesh (resolution 0) — and is guessed, with a
+    # warning: a mesh written by other software would be guessed wrongly.
     sch = get(raw, "id_scheme", nothing)
-    id_scheme = sch !== nothing ? String(sch) :
-                (!isempty(cells) && all(c -> c.resolution == 0, cells)) ? "cartesian" : "a5-v0"
+    id_scheme = if sch !== nothing
+        String(sch)
+    else
+        guess = (!isempty(cells) && all(c -> c.resolution == 0, cells)) ? "cartesian" : "a5-v0"
+        @warn "$path records no cell-ID scheme (written before 2026-10, or not by FloodA5): " *
+              "assuming \"$guess\". Re-save it with FloodA5 to record one."
+        guess
+    end
     check_id_scheme(id_scheme, path)
 
-    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars, adjacency, id_scheme)
+    # The rest of the file's flooda5 metadata (DGGS family, level, …). The ID
+    # scheme is the id_scheme field; pya5_version is rewritten on every save.
+    meta = Dict{String,Any}(String(k) => (v isa AbstractString ? String(v) : v)
+                            for (k, v) in get(raw, "meta", Dict())
+                            if !(String(k) in ("a5_id_scheme", "pya5_version")))
+
+    mesh = A5Mesh(res, aoi_geojson, cells, static_vars, array_vars, adjacency, id_scheme, meta)
 
     parts = String[]
     !isempty(scalar_cols) && push!(parts, "scalar: [$(join(scalar_cols, ", "))]")
@@ -1612,6 +1642,7 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
     tag        = _tmp_tag()       # unique: concurrent saves in one checkout
     tmp_cells  = joinpath(BRIDGE_DIR, "_tmp_save_cells_$tag.json")
     tmp_out    = joinpath(BRIDGE_DIR, "_tmp_save_$tag.parquet")
+    tmp_meta   = joinpath(BRIDGE_DIR, "_tmp_save_meta_$tag.json")
     path_fwd   = replace(path, "\\" => "/")
     tmp_fwd    = replace(tmp_out, "\\" => "/")
 
@@ -1619,8 +1650,10 @@ function save_mesh_geoparquet(mesh::A5Mesh, path::String)
         open(tmp_cells, "w") do io
             JSON3.write(io, cells_data)
         end
+        write(tmp_meta, JSON3.write(mesh.meta))
 
         tmp_cells_fwd = replace(tmp_cells, "\\" => "/")
+        tmp_meta_fwd  = replace(tmp_meta, "\\" => "/")
         py_code = """
 import sys, json
 sys.argv = ['a5_bridge.py']
@@ -1631,7 +1664,9 @@ spec.loader.exec_module(bridge)
 
 with open('$(tmp_cells_fwd)', 'r') as f:
     cells = json.load(f)
-bridge.mesh_to_geoparquet(cells, '$(tmp_fwd)', id_scheme='$(mesh.id_scheme)')
+with open('$(tmp_meta_fwd)', 'r') as f:
+    meta = json.load(f)
+bridge.mesh_to_geoparquet(cells, '$(tmp_fwd)', id_scheme='$(mesh.id_scheme)', **meta)
 print('ok')
 """
         tmp_script = joinpath(BRIDGE_DIR, "_tmp_save_$tag.py")
@@ -1657,6 +1692,7 @@ print('ok')
               (isempty(info_parts) ? "" : " — " * join(info_parts, ", "))
     finally
         isfile(tmp_cells) && rm(tmp_cells)
+        isfile(tmp_meta)  && rm(tmp_meta)
         isfile(tmp_out)   && rm(tmp_out)
     end
 end
@@ -2478,7 +2514,8 @@ Slot k of a cell is the k-th entry of its neighbour list `mesh.adjacency[id]`
 (the order `initialise_flow_model` uses for `adj_matrix`); boundary sides
 take the slots without an in-mesh neighbour (`boundary_side_slots`).
 `n_slots` is the longest neighbour list, so any valence is supported. If the
-mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only).
+mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only;
+for any other mesh that is an error).
 
 Output scalars in `mesh.static_vars`: "sgs_cell_area", "sgs_z_min",
 "sgs_z_max", "sgs_n_bins", "sgs_layout" (4), "sgs_connectivity" (1 or 0),
@@ -2490,9 +2527,16 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
                             halton_seed::Int=0,        # unused since 0.7.0 (kept for callers)
                             edge_spacing_m::Union{Float64,Nothing}=nothing,
                             connectivity::Bool=true)
-    dem_path = _resolve_dem_path(dem_source, mesh)
     n = length(mesh.cells)
     n == 0 && error("Cannot build SGS tables on an empty mesh.")
+    # pya5's grid_disk (the fallback below) understands A5 cell IDs only; every
+    # other generator writes a neighbours column (the mesh contract,
+    # docs/MESHES.md §1).
+    isempty(mesh.adjacency) && !startswith(mesh.id_scheme, "a5-") &&
+        error("build_sgs_tables!: the mesh (id scheme \"$(mesh.id_scheme)\") has no " *
+              "neighbour lists, and only A5 meshes can compute them (pya5 grid_disk). " *
+              "Load it from a GeoParquet file with a `neighbours` column, or regenerate it.")
+    dem_path = _resolve_dem_path(dem_source, mesh)
 
     @info "SGS pre-processing: $(basename(dem_path)), $n cells, $n_bins bins, " *
           "working grid ≈ $n_samples points/cell, connectivity $(connectivity ? "on" : "off")..."
@@ -2535,7 +2579,7 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     end
 
     # Neighbour lists define the slots
-    if isempty(mesh.adjacency)
+    if isempty(mesh.adjacency)      # A5 only (checked above)
         @info "  No adjacency on the mesh — computing it via grid_disk..."
         gd = grid_disk_neighbours_batch([c.id for c in mesh.cells])
         in_mesh_ids = Set(c.id for c in mesh.cells)

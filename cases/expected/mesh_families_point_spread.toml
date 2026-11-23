@@ -1,0 +1,173 @@
+# Expected metrics for case "mesh_families_point_spread" — written by `julia --project=. cases/run.jl baseline mesh_families_point_spread`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5]
+A4 = -0.0014849843490250376
+A6 = 3.209338594700116e-5
+cell_size_m = 22.294605417326633
+circularity = 0.9902702314159489
+cv_radius = 0.027635162946898183
+input_error_rel = 0.0
+mass_balance_rel = 2.021099337273174e-16
+max_neighbours = 5.0
+n_cells = 4703.0
+n_wet = 1447.0
+ratio_1cm = 0.9994842743186559
+storage_m3 = 36000.0
+t = 3600.0
+
+[cart]
+A4 = 0.03377233694171876
+A6 = -7.66393209648625e-12
+cell_size_m = 22.19999997403781
+circularity = 0.9865711585303639
+cv_radius = 0.02645493709068977
+input_error_rel = 0.0
+mass_balance_rel = 2.021099337273174e-16
+max_neighbours = 4.0
+n_cells = 4624.0
+n_wet = 1449.0
+ratio_1cm = 1.0301575072754254
+storage_m3 = 36000.000000000065
+t = 3600.0
+
+[h3]
+A4 = 9.752005668338101e-5
+A6 = 0.005206738738854559
+cell_size_m = 15.117503560043838
+circularity = 0.993497030614118
+cv_radius = 0.005363087814858513
+input_error_rel = 0.0
+mass_balance_rel = 2.627429138455126e-15
+max_neighbours = 6.0
+n_cells = 10088.0
+n_wet = 2991.0
+ratio_1cm = 0.9964637374688371
+storage_m3 = 35999.99999999991
+t = 3600.0
+
+[healpix]
+A4 = -0.036493312345544704
+A6 = 0.0005502639410556615
+cell_size_m = 24.926126622349415
+circularity = 0.9826033480767964
+cv_radius = 0.06127109828892568
+input_error_rel = 0.0
+mass_balance_rel = 6.063298011819521e-16
+max_neighbours = 4.0
+n_cells = 3844.0
+n_wet = 1173.0
+ratio_1cm = 0.9752968796137104
+storage_m3 = 35999.99999999993
+t = 3600.0
+
+[hex]
+A4 = -9.060292682484376e-11
+A6 = -0.006950493477065447
+cell_size_m = 22.200000111555777
+circularity = 0.9964280320720376
+cv_radius = 1.554109479319419e-16
+input_error_rel = 0.0
+mass_balance_rel = 1.6168794698185392e-15
+max_neighbours = 6.0
+n_cells = 4563.0
+n_wet = 1483.0
+ratio_1cm = 0.9999999999999999
+storage_m3 = 35999.999999999956
+t = 3600.0
+
+[igeo7]
+A4 = -7.002883743059734e-6
+A6 = 0.002983237129964051
+cell_size_m = 22.995776645214008
+circularity = 0.9914283453705272
+cv_radius = 0.01256979292916521
+input_error_rel = 0.0
+mass_balance_rel = 1.2126596023639043e-15
+max_neighbours = 6.0
+n_cells = 4432.0
+n_wet = 1376.0
+ratio_1cm = 0.9962238862408052
+storage_m3 = 36000.00000000006
+t = 3600.0
+
+[isea3h]
+A4 = 0.00021548224801550044
+A6 = 0.007223019528472771
+cell_size_m = 23.32872010588616
+circularity = 0.9916681604389245
+cv_radius = 0.00985029134408882
+input_error_rel = 0.0
+mass_balance_rel = 2.021099337273174e-16
+max_neighbours = 6.0
+n_cells = 4246.0
+n_wet = 1341.0
+ratio_1cm = 0.98788768430007
+storage_m3 = 36000.000000000044
+t = 3600.0
+
+[meta]
+flooda5_version = "0.8.0"
+git_commit = "4a9d4132ed0a5192dadcc53f9e3a501d61ceff0b"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-23T12:47:42Z"
+
+[rhealpix]
+A4 = 0.027844069618997498
+A6 = 0.00023734192667860813
+cell_size_m = 17.38820132879513
+circularity = 0.9898011737747989
+cv_radius = 0.015605784463080113
+input_error_rel = 0.0
+mass_balance_rel = 0.0
+max_neighbours = 4.0
+n_cells = 7600.0
+n_wet = 2289.0
+ratio_1cm = 1.0280573795368042
+storage_m3 = 35999.99999999985
+t = 3600.0
+
+[rotcart]
+A4 = -0.016886168601684754
+A6 = 3.828128750381784e-12
+cell_size_m = 22.199999974356484
+circularity = 0.986571158530364
+cv_radius = 0.012328153549075753
+input_error_rel = 0.0
+mass_balance_rel = 4.042198674546348e-16
+max_neighbours = 4.0
+n_cells = 4565.0
+n_wet = 1449.0
+ratio_1cm = 1.0
+storage_m3 = 36000.00000000002
+t = 3600.0
+
+[voronoi]
+A4 = 0.01729792593802042
+A6 = -0.00031130324522842803
+cell_size_m = 22.059111157402775
+circularity = 0.9934486548566628
+cv_radius = 0.01253571792684797
+input_error_rel = 0.0
+mass_balance_rel = 8.084397349092696e-16
+max_neighbours = 8.0
+n_cells = 4624.0
+n_wet = 1472.0
+ratio_1cm = 1.0074072373874183
+storage_m3 = 36000.0
+t = 3600.0
+
+[voronoi_jit]
+A4 = 0.012001130517142685
+A6 = -0.0006237000727951687
+cell_size_m = 22.059111157402846
+circularity = 0.991686711567387
+cv_radius = 0.00849078462027534
+input_error_rel = 0.0
+mass_balance_rel = 1.8189894035458565e-15
+max_neighbours = 8.0
+n_cells = 4624.0
+n_wet = 1469.0
+ratio_1cm = 1.004446933726637
+storage_m3 = 35999.99999999998
+t = 3600.0

@@ -33,6 +33,43 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+DGGS mesh families, Phase B (WP3 part 3, branch `wp3d-dggs-phaseb`; PATCH:
+default results unchanged, no solver change).
+
+- `--meshgen-dggs AOI --dggs FAMILY (--meshres N | --dx M)`: a mesh of H3,
+  IGEO7, ISEA3H, HEALPix or rHEALPix in any run (`mesh/DGGSGrid.jl` over
+  `mesh/dggs_families.py`); `--dx` picks the level whose mean cell area is
+  nearest M². `--dggs a5` is the A5 generator (`--dx` → the nearest A5
+  resolution). Both flags are mesh-generation flags for `--rerun`
+  (`FO._DROP_FLAGS`).
+- The mesh file's `flooda5` metadata (DGGS family, library, level, refinement
+  ratio, equal-area flag, target size; the planar family) is kept on the mesh
+  (`A5Mesh.meta`), through re-saves (DEM sampling, SGS tables — before, a
+  re-save dropped it), and written to the output's `/mesh` attributes;
+  `FO.mesh_info(path)` reads them.
+- A mesh file that records no cell-ID scheme is still taken for an old A5 or
+  Cartesian mesh, now with a warning. `build_sgs_tables!` refuses a non-A5
+  mesh without neighbour lists (it used to call pya5's `grid_disk` with its
+  IDs).
+- `--meshload MESH --dem DEM --flow-model sgs` builds the SGS tables of a
+  loaded mesh that has none (it used to refuse it): the command-line route
+  to SGS on the planar families and imported meshes (with `--meshout …
+  --mesh-only` to save them). Without `--dem` such a mesh is still refused.
+- `PolyMesh`/`PolyCell`: neutral aliases of `A5Mesh`/`A5Cell`.
+- `mesh/mesh_families.py --clip`: keep the cells that meet the AOI polygon
+  (the A5/DGGS rule) instead of covering its bounding box.
+  `test/channel_bench/make_channel_meshes.jl --families`: the channel series
+  on other mesh families.
+- Cases (`cases/registry/mesh_families.jl`, docs/TEST_CASES.md §8): point
+  spread, planar slope, straight channel (0–45°) and Carlisle to the Eden peak
+  (against the 5 m references) on eleven meshes at ~22 m — Cartesian, rotated
+  Cartesian, hexagons, centroidal and jittered Voronoi, A5, H3, IGEO7,
+  ISEA3H, HEALPix, rHEALPix.
+- Tests: `test/test_dggs_meshes.jl` C (command line, metadata, `--rerun`),
+  `test/test_sgs_general.jl` S8 (SGS on H3, IGEO7, HEALPix), S9 (SGS tables
+  for a loaded mesh from the command line).
+- The compiled `a5_bridge` `.pyc` files are no longer tracked.
+
 ## [0.8.0] — 2026-11-23
 
 DEM registration and the SGS critical-flow limit (MINOR, result-changing;

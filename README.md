@@ -31,8 +31,8 @@ Key characteristics:
   cell-for-cell with it in its own projected CRS, for comparisons with LISFLOOD-FP),
   hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
   (`mesh/mesh_families.py`), and other discrete global grids — H3, IGEO7, ISEA3H,
-  HEALPix and rHEALPix (`mesh/dggs_families.py`; the mesh contract and each family's
-  geometry: `docs/MESHES.md`). The solver and the SGS tables work for any number of
+  HEALPix and rHEALPix (`--meshgen-dggs AOI --dggs FAMILY --dx M`; the mesh contract
+  and each family's geometry: `docs/MESHES.md`). The solver and the SGS tables work for any number of
   neighbours per cell. The Cartesian grid also serves as an orthogonal reference that
   separates grid-geometry effects from solver effects.
 - **Geographic coordinates throughout** — mesh generation, geometry, and output all
@@ -141,6 +141,7 @@ FloodA5/
 │   ├── migrate_mesh_ids.py    # pya5 0.x → 1.x cell-ID migration for existing meshes
 │   ├── mesh_families.py       # Hexagonal, rotated-Cartesian, Voronoi and imported polygon meshes
 │   ├── dggs_families.py       # DGGS meshes: H3, IGEO7, ISEA3H, HEALPix, rHEALPix
+│   ├── DGGSGrid.jl            # --meshgen-dggs (runs dggs_families.py)
 │   └── a5_mesh_diagnostic.py  # Mesh diagnostic utilities
 ├── surfacewater/
 │   └── flow2d.jl              # Physics kernels (Bates, Manning R-A, CFL)

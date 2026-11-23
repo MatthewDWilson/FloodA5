@@ -175,6 +175,18 @@ function _write_mesh!(f, c, mesh_source)
     n = length(c.ids)
     g["cell_ids"] = c.ids
     attributes(g)["id_scheme"] = c.id_scheme
+    # The mesh file's other metadata (0.8.1; docs/DATA_FORMATS.md §2): scalar
+    # values as attributes of /mesh (DGGS: mesh_family, dggs_level, …)
+    if haskey(c, :mesh_meta) && c.mesh_meta !== nothing
+        for (k, v) in c.mesh_meta
+            k in ("id_scheme", "a5_id_scheme") && continue
+            if v isa Bool
+                attributes(g)[k] = Int8(v)            # HDF5 has no boolean attributes
+            elseif v isa Union{Integer,AbstractFloat,AbstractString}
+                attributes(g)[k] = v isa AbstractString ? String(v) : v
+            end
+        end
+    end
     g["center_lons"] = c.center_lons
     g["center_lats"] = c.center_lats
     g["elevations"]  = c.elevations
@@ -366,6 +378,17 @@ read_series(f::HDF5.File, var::AbstractString, cell::Integer) = vec(read_series(
 cell_table(f::HDF5.File) = (ids = read(f["mesh/cell_ids"]), lon = read(f["mesh/center_lons"]),
                             lat = read(f["mesh/center_lats"]), elevation = read(f["mesh/elevations"]))
 
+"""
+    mesh_info(f) → Dict
+
+The attributes of `/mesh`: `id_scheme` (all files that record it) and,
+since 0.8.1, the mesh file's other metadata — for DGGS meshes
+`mesh_family`, `dggs_library`, `dggs_level`, `dggs_refinement_ratio`,
+`dggs_equal_area` (0/1), `dggs_system`, `dggs_interior_valence`,
+`target_dx_m`; for planar families `mesh_family` (docs/DATA_FORMATS.md §2).
+"""
+mesh_info(f::HDF5.File) = attrs_dict(f["mesh"])
+
 """`cell_area(f)` → plan area (m²) per cell (format 2)."""
 cell_area(f::HDF5.File) = (_need_v2(f, "cell areas"); read(f["mesh/cell_area"]))
 
@@ -421,7 +444,7 @@ attrs_dict(obj) = Dict{String,Any}(k => read(attributes(obj)[k]) for k in keys(a
 
 for fn in (:format_version, :n_frames, :frame_times, :frame_at, :frame_vars, :has_var,
            :read_frame, :read_var, :read_series, :cell_table, :cell_area, :cell_polygons,
-           :cell_neighbours, :run_info)
+           :cell_neighbours, :run_info, :mesh_info)
     @eval $fn(path::AbstractString, args...) = _reader(f -> $fn(f, args...), path)
 end
 
@@ -462,6 +485,7 @@ extract_mesh(path::AbstractString, dir::AbstractString) = _reader(f -> extract_m
 const _BOOL_FLAGS = Set(["--closed-boundaries", "--dem-strict", "--limiter-stats", "--mesh-only"])
 # Mesh-generation and output flags: dropped (the rerun loads the embedded mesh).
 const _DROP_FLAGS = Set(["--meshgen", "--meshres", "--meshgen-cartesian", "--dx",
+                         "--meshgen-dggs", "--dggs",
                          "--cartesian-lat-ref", "--meshout", "--meshload", "--dem",
                          "--dem-method", "--dem-samples", "--dem-seed", "--dem-strict",
                          "--sgs-bins", "--sgs-samples", "--sgs-connectivity", "--mesh-only", "--output",
