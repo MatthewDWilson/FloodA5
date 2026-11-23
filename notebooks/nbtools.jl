@@ -95,9 +95,13 @@ function strip!(path)
     return changed || read(path, String) != before
 end
 
-"Run a notebook headless (copy → nbconvert --execute) and return the executed copy's path."
+"""
+Run a notebook headless (copy → nbconvert --execute) and return the executed
+copy's path. The kernel is `julia-flooda5` (the checkout it was installed
+for), or `\$FLOODA5_NB_KERNEL` — e.g. a kernel installed for a worktree.
+"""
 function execute(path; out = joinpath(dirname(NB_DIR), "test", "notebook_runs", basename(path)),
-                 timeout = 7200)
+                 timeout = 7200, kernel = get(ENV, "FLOODA5_NB_KERNEL", KERNEL))
     jup = _jupyter()
     mkpath(dirname(out))
     d = dirname(dirname(jup))                        # …/envs/jupyter
@@ -105,7 +109,7 @@ function execute(path; out = joinpath(dirname(NB_DIR), "test", "notebook_runs", 
     env = copy(ENV)
     env["PATH"] = join([d, joinpath(d, "Library", "bin"), dirname(jup), get(ENV, "PATH", "")], sep)
     cmd = `$jup nbconvert --to notebook --execute --ExecutePreprocessor.timeout=$timeout
-           --ExecutePreprocessor.kernel_name=$KERNEL --output $(abspath(out)) $(abspath(path))`
+           --ExecutePreprocessor.kernel_name=$kernel --output $(abspath(out)) $(abspath(path))`
     run(Cmd(setenv(cmd, env); dir = dirname(NB_DIR)))
     return out
 end

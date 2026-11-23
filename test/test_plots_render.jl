@@ -70,6 +70,14 @@ end
     check_png("timeseries_one_run", FP.timeseries(li, [(SRC[1], SRC[2]), (0.0025, 0.0014)]))
     check_png("storage_plot", FP.storage_plot([li, swe]))
     check_png("mass_balance", FP.mass_balance_plot(li))
+    # any per-cell values on a window of cells; a mesh drawn by its outlines
+    hk = FA.depth(li, FA.nframes(li))
+    win = FP.cells_within(li, SRC[1], SRC[2], 60)
+    @test !isempty(win) && length(win) < length(li.mesh)
+    check_png("cellmap_values", FP.cellmap(li, hk .- mean(hk); cells = win, origin = SRC))
+    check_png("cellmap_vector_var", FP.fieldmap(li; var = hk, colorbar_label = "depth (m)"))
+    check_png("cellmap_outline", FP.cellmap(li.mesh; outline = true, coords = :lonlat))
+    @test_throws ErrorException FP.cellmap(li, hk[1:end-1])
     # composed: two panels sharing a projection, points marked, themed
     FP.activate!()
     fig = Figure(size = (900, 420))

@@ -311,6 +311,72 @@ function fieldmaps(runs::AbstractVector, times::AbstractVector; var = :depth, co
 end
 fieldmaps(r::FA.Run, times::AbstractVector; kw...) = fieldmaps([r], times; kw...)
 
+# ───────────────────────────── any per-cell values ─────────────────────────
+
+"""
+    cellmap!(gp, mesh_or_run, values = nothing; cells = nothing, coords = :local,
+             origin = :centre, colormap = DIVERGING, colorrange = nothing,
+             fillcolor = BASEMAP_GREY, outline = false, outline_color = INK2,
+             colorbar = true, colorbar_label = "", title = "", subtitle = "",
+             width = nothing, axis = (;)) -> MapPanel
+
+Draw per-cell `values` (one per mesh cell; NaN cells in `fillcolor`) on the
+cells `cells` (default all; e.g. `cells_within(r, lon, lat, 300)`), or, with
+`values = nothing`, the cells alone in `fillcolor` — with `outline = true` their
+sides, for pictures of a mesh. `colorrange` defaults to `default_range` of
+the values drawn (symmetric about 0 if they take both signs). `coords` and
+`origin` as in `fieldmap!` (`:local`: metres about `origin`).
+
+    res = FA.wse_residual(r, k)
+    w = FP.cells_within(r, -2.95, 54.9, 400)
+    FP.cellmap!(fig[1, 1], r, res.r; cells = w, colorrange = (-0.1, 0.1))
+"""
+function cellmap!(gp, mr, values = nothing; cells = nothing, coords = :local, origin = :centre,
+                  colormap = DIVERGING, colorrange = nothing, fillcolor = BASEMAP_GREY,
+                  outline::Bool = false, outline_color = INK2, colorbar::Bool = true,
+                  colorbar_label = "", title = "", subtitle = "", width = nothing, axis = (;))
+    m = mr isa FA.Run ? mr.mesh : mr
+    idx = cells === nothing ? collect(eachindex(m.polygons)) : collect(cells)
+    isempty(idx) && error("cellmap!: no cells to draw")
+    values === nothing || length(values) == length(m.polygons) ||
+        error("cellmap!: $(length(values)) values for $(length(m.polygons)) cells")
+    mc = coords isa MapCoords ? coords :
+         origin isa Tuple ? MapCoords(coords, origin[1], origin[2]) : map_coords(m; coords, origin)
+    polys = project_polygons(mc, m; cells = idx)
+    v = values === nothing ? fill(NaN, length(idx)) : Float64[values[i] for i in idx]
+    rng = colorrange !== nothing ? (Float64(colorrange[1]), Float64(colorrange[2])) :
+          values === nothing ? (0.0, 1.0) : default_range(v, v)
+    showbar = colorbar && values !== nothing
+    ax = _map_axis(showbar ? gp[1, 1] : gp, mc, polys; title, subtitle, width, axis...)
+    _draw_flat!(ax, polys, fillcolor)
+    _draw_cells!(ax, polys, v, colormap, rng)
+    if outline
+        pts = Point2f[]
+        for P in polys
+            for j in axes(P, 2); push!(pts, Point2f(P[1, j], P[2, j])); end
+            P[:, 1] == P[:, end] || push!(pts, Point2f(P[1, 1], P[2, 1]))
+            push!(pts, Point2f(NaN, NaN))
+        end
+        lines!(ax, pts; color = outline_color, linewidth = 0.6)
+    end
+    showbar && _colorbar!(gp[1, 2], colormap, rng, v; label = colorbar_label)
+    return MapPanel(ax, mc, rng, colormap)
+end
+
+"""
+    cellmap(mesh_or_run, values = nothing; width = 560, kw...) -> Figure
+
+One `cellmap!`, `width` pixels wide.
+"""
+function cellmap(mr, values = nothing; width = 560, kw...)
+    _themed() do
+        fig = Figure()
+        cellmap!(fig[1, 1], mr, values; width, kw...)
+        resize_to_layout!(fig)
+        fig
+    end
+end
+
 # ───────────────────────────── comparisons ─────────────────────────────────
 
 """

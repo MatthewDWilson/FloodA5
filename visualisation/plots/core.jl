@@ -129,8 +129,10 @@ const EXTENT_LABELS = ["Wet in both (hit)", "Reference only (miss)", "Run only (
 Axis/colourbar label and unit of a map variable, and whether dry cells
 (depth ≤ `dry_threshold`) are masked. Variables: `:depth`, `:wse`, `:speed`,
 `:volume`, `:elevation`, or any per-frame output variable name (as a Symbol
-or String, e.g. `"saturation"`).
+or String, e.g. `"saturation"`); or a vector of per-cell values (e.g.
+`FA.wse_residual(r, k).r`), drawn as given — NaN cells are not drawn.
 """
+var_spec(::AbstractVector) = (label = "Value", unit = "", masked = false)
 function var_spec(var)
     v = Symbol(var)
     v === :depth     && return (label = "Depth", unit = "m", masked = true)
@@ -148,8 +150,13 @@ var_label(var) = (s = var_spec(var); isempty(s.unit) ? s.label : "$(s.label) ($(
     frame_values(run, var, k) -> Vector{Float64}
 
 Per-cell values of `var` (see `var_spec`) at frame `k`: `FA.depth`, `FA.wse`
-(SGS-aware), `FA.speed`, `FA.volume`, the mesh elevation, or `FA.field`.
+(SGS-aware), `FA.speed`, `FA.volume`, the mesh elevation, or `FA.field`; a
+vector `var` is returned as it is (one value per cell).
 """
+function frame_values(r::FA.Run, var::AbstractVector, k::Integer)
+    length(var) == length(r.mesh) || error("frame_values: $(length(var)) values for $(length(r.mesh)) cells")
+    return Float64.(var)
+end
 function frame_values(r::FA.Run, var, k::Integer)
     v = Symbol(var)
     v === :depth     && return FA.depth(r, k)
@@ -225,8 +232,15 @@ end
     default_range(var, values; mask = nothing) -> (lo, hi)
 
 `robust_range` with the variable's convention: magnitudes (depth, speed,
-volume, saturation) from 0; elevation and WSE between quantiles.
+volume, saturation) from 0; elevation and WSE between quantiles; given
+values (a vector `var`) symmetric about 0 if they take both signs, else
+from 0.
 """
+function default_range(var::AbstractVector, values::AbstractVector; mask = nothing)
+    fin = filter(isfinite, values)
+    return !isempty(fin) && minimum(fin) < 0 < maximum(fin) ? robust_range(values; mask, symmetric = true) :
+                                                              robust_range(values; mask, lo = 0.0)
+end
 default_range(var, values::AbstractVector; mask = nothing) =
     Symbol(var) in (:elevation, :wse) ? robust_range(values; mask, nice = false) :
                                         robust_range(values; mask, lo = 0.0)
@@ -432,6 +446,18 @@ function project_polygons(mc::MapCoords, m::FA.MeshGeom; cells = eachindex(m.pol
     end
     return out
 end
+
+"""
+    cells_within(mesh_or_run, lon, lat, halfwidth_m) -> Vector{Int}
+
+The cells whose centres lie in the square of half-width `halfwidth_m`
+(metres) about (lon, lat) — a window for `cellmap!`.
+"""
+function cells_within(m::FA.MeshGeom, lon::Real, lat::Real, halfwidth_m::Real)
+    x, y = FA.local_xy(m, lon, lat)
+    return [i for i in eachindex(x) if abs(x[i]) <= halfwidth_m && abs(y[i]) <= halfwidth_m]
+end
+cells_within(r::FA.Run, lon::Real, lat::Real, halfwidth_m::Real) = cells_within(r.mesh, lon, lat, halfwidth_m)
 
 """
     axis_labels(mc) -> (xlabel, ylabel)

@@ -215,7 +215,9 @@ end
 # The domain is a British National Grid rectangle, so the planar families
 # keep the cells that meet it (--clip), as A5 and the DGGS do: their bounding
 # box would reach past the DEM, and cells without elevation are walls.
-const _MF_CARL_FAMS = ["rotcart", "hex", "voronoi", "voronoi_jit", "h3", "igeo7", "isea3h", "healpix", "rhealpix"]
+# Cartesian at 22.2 m too (0.8.2): carlisle_peak's is 20 m and local-inertial
+# only, and Cartesian SGS is the classic sub-grid case (LISFLOOD-FP's).
+const _MF_CARL_FAMS = ["cart", "rotcart", "hex", "voronoi", "voronoi_jit", "h3", "igeo7", "isea3h", "healpix", "rhealpix"]
 const _MF_CARL_PEAK = ("a5_li", "a5_sgs", "cart_li")     # from carlisle_peak
 const _MF_CARL_RISE = 40 * 3600.0                          # rising limb from here to the peak
 const _MF_CARL_EXTREMA = 0.05    # checkerboard: fraction of wet cells that are local level extrema
@@ -307,7 +309,8 @@ let
         doc = "docs/TEST_CASES.md §8",
         description = """
         The `carlisle_peak` event (55.5 h, river inflow only) at ~22 m on the
-        mesh families that case does not run — rotated Cartesian, hexagons,
+        mesh families: Cartesian at 22.2 m (`carlisle_peak`'s is 20 m and
+        local-inertial only), rotated Cartesian, hexagons,
         centroidal and jittered Voronoi (cells meeting the domain polygon),
         H3, IGEO7, ISEA3H, HEALPix and rHEALPix (16.6–24.9 m) — with the
         local-inertial default and with SGS (tables from the 5 m DEM). Every
@@ -317,7 +320,7 @@ let
         52.5 and 55.5 h: storage ratio, median and rms water-level difference,
         CSI at 0.1 m (`swe5_*`, `li5_*`). Needs `carlisle_peak` and
         `carlisle_peak_fine` run first. CPU: about 20 min per
-        local-inertial run and 25 min per SGS run on 4 threads (18 runs), plus
+        local-inertial run and 25–50 min per SGS run on 4 threads (20 runs), plus
         about an hour of mesh and SGS-table preparation.""",
         prep = prep, jobs = jobs,
         analyse = _mf_carl_metrics,
@@ -347,11 +350,11 @@ let
                         detail = m -> _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "noise_extrema_w1"; digits = 3) *
                                       " | storage drops: " *
                                       _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "storage_drop_rel"; digits = 3),
-                        xfail = "SGS checkerboards on most non-A5 meshes (docs/TEST_CASES.md §8): smooth on A5, " *
-                                "ISEA3H and jittered Voronoi, checkerboarded on hex and centroidal Voronoi (0.08–0.14), " *
-                                "H3, IGEO7, HEALPix (0.17–0.23), rHEALPix and rotated Cartesian (0.36–0.42, with " *
-                                "storage oscillating on the rising limb); local-inertial is smooth on all. An open " *
-                                "SGS finding (PROJECT_STATE), not a Phase B change")],
+                        xfail = "SGS checkerboards on most meshes (docs/TEST_CASES.md §8; notebook 06 §8): smooth " *
+                                "only on A5, ISEA3H and jittered Voronoi; checkerboarded on hex and centroidal " *
+                                "Voronoi (0.08–0.14), H3, IGEO7, HEALPix (0.17–0.23), rHEALPix, Cartesian and " *
+                                "rotated Cartesian (0.36–0.42, with storage oscillating on the rising limb); " *
+                                "local-inertial is smooth on all. An open SGS finding (PROJECT_STATE)")],
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end

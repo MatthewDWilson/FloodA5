@@ -44,7 +44,9 @@ ENV["FLOODA5_CASES_DIR"] = ROOT
     for s in (:python_command, :python_env, :planar_params, :planar_point, :PLANAR_SLOPE_BAND,
               :EMBANKMENT_WET_DEPTH, :embankment_xrange, :log_mass_balance, :channel_series_table,
               :sgs_strip_params, :sgs_strip_analytic, :sgs_strip_zf, :sgs_strip_zrel, :sgs_strip_conveyance,
-              :sgs_strip_storage, :sgs_strip_profile, :sgs_strip_tables, :SGS_STRIP_REACH, :SGS_STRIP_N)
+              :sgs_strip_storage, :sgs_strip_profile, :sgs_strip_tables, :SGS_STRIP_REACH, :SGS_STRIP_N,
+              :MESH_FAMILIES, :MESH_FAMILIES_DX, :MESH_FAMILIES_CARLISLE, :CHECKERBOARD_EXTREMA,
+              :CARLISLE_RISE, :CARLISLE_PEAK_WINDOW)
         @test isdefined(FC, s)
     end
     @test FC.planar_point() == FC._planar_point()
@@ -94,6 +96,22 @@ end
     mv(FC.job_output(c, j), FC.job_output(c, j) * ".away")
     @test FC.job_status(c, j) === :missing
     mv(FC.job_output(c, j) * ".away", FC.job_output(c, j))
+
+    # A run made in another checkout (worktree) of the repository is the same
+    # job: its {repo} paths are rebased onto this one; case-root paths are not.
+    sep = Sys.iswindows() ? "\\" : "/"
+    other = joinpath(dirname(FC.REPO), "FloodA5-otherworktree")
+    rec = [joinpath(other, "test", "carlisle", "x.bci"), "--sgs-bins", joinpath(FC.case_root(), "c", "m.parquet")]
+    @test FC._rebase_argv(rec, other * sep) ==
+          [joinpath(FC.REPO, "test", "carlisle", "x.bci"), "--sgs-bins", rec[3]]
+    @test FC._rebase_argv(rec, FC.REPO) == rec                     # same checkout: unchanged
+    @test FC._rebase_argv(rec, "") == rec                          # cwd not recorded
+    # a case root inside the recording checkout stays put
+    withenv("FLOODA5_CASES_DIR" => joinpath(other, "test", "case_runs")) do
+        inroot = joinpath(other, "test", "case_runs", "c", "m.parquet")
+        @test FC._rebase_argv([inroot], other) == [inroot]
+    end
+    @test FC._same_argv(FC._rebase_argv([lowercase(other) * sep * "a.tif"], other), [joinpath(FC.REPO, "a.tif")])
 end
 
 @testset "C4 — expected failures (xfail)" begin

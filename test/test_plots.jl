@@ -85,6 +85,22 @@ end
     @test FP.var_label(:speed) == "Speed (m/s)"
     @test FP.var_label("saturation") == "saturation"
     @test FP.var_spec(:depth).masked && !FP.var_spec(:elevation).masked
+    # a vector of per-cell values: drawn as given, symmetric range if signed
+    fr = fake_run()
+    vals = collect(range(-0.3, 0.2; length = length(fr.mesh))); vals[3] = NaN
+    @test !FP.var_spec(vals).masked && FP.var_label(vals) == "Value"
+    @test isequal(FP.frame_values(fr, vals, 1), vals)
+    @test_throws ErrorException FP.frame_values(fr, vals[1:end-1], 1)
+    lo, hi = FP.default_range(vals, vals)
+    @test lo == -hi && hi >= 0.2
+    @test FP.default_range(abs.(vals), abs.(vals))[1] == 0.0
+    # a window of cells for cellmap!: centres within the square
+    fr9 = fake_run(n = 5, dx = 0.001)
+    c0 = 13                                                   # the centre cell of 5 × 5
+    @test FP.cells_within(fr9, fr9.mesh.lon[c0], fr9.mesh.lat[c0], 1.0) == [c0]
+    w3 = FP.cells_within(fr9, fr9.mesh.lon[c0], fr9.mesh.lat[c0], 120.0)  # ±1 cell (64 m E–W, 111 m N–S apart)
+    @test length(w3) == 9 && c0 in w3
+    @test length(FP.cells_within(fr9.mesh, fr9.mesh.lon[c0], fr9.mesh.lat[c0], 1e6)) == 25
     @test FP.hhmm(7210.0) == "02:00"
     @test FP.hhmm(1082.0) == "00:18"
     @test FP.hhmm(0.0) == "00:00"
