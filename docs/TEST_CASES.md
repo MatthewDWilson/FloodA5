@@ -184,28 +184,31 @@ upstream water surface reaches the crest it sees; SGS sees the notch and passes
 water at the sill level. Metrics per output time: the upstream WSE (the highest
 WSE of the *wet* cells along the embankment's upstream foot) and the volume
 stored east of the embankment; from them the time downstream water first
-exceeds 1 m³ and the upstream WSE then. Results (0.7.0; SGS up to 0.6.0 in
+exceeds 1 m³ and the upstream WSE then. Results (0.8.0; earlier SGS in
 italics):
 
 | | first downstream water | upstream WSE then | WSE at 6 h | downstream at 6 h |
 |---|---|---|---|---|
-| SGS | 842 s | 5.25 m (sill 5.0) | 6.07 m | 154 700 m³ |
+| SGS | 962 s | 5.26 m (sill 5.0) | 6.41 m | 114 900 m³ |
+| *SGS, 0.7.x (no critical-flow limit)* | *842 s* | *5.25 m* | *6.07 m* | *154 700 m³* |
 | *SGS, 0.6.0* | *1 082 s* | *5.23 m* | *6.22 m* | *39 000 m³* |
-| standard | 16 202 s | 6.77 m (crest 7.0) | 6.99 m | 12 600 m³ |
+| standard | 16 442 s | 6.78 m (crest 7.0) | 7.00 m | 9 600 m³ |
 
-Standard's crest is the lowest cell-mean route across the embankment, 6.72 m:
+Standard's crest is the lowest cell-mean route across the embankment, 6.74 m:
 the notch lowers the means of the cells it crosses. Checks: mass balance and
 stored volume; standard passes no water until the upstream WSE reaches that
 crest, which lies within 0.5 m of the real one; SGS passes water while the
 upstream WSE is ≥ 0.5 m below the crest and within 0.5 m of the sill; SGS has
-more water downstream at every output time before standard overtops (126 of
+more water downstream at every output time before standard overtops (129 of
 them). Until 0.6.0 SGS conveyed ≈ 3 m³/s through the notch at 1.1–1.2 m of
-head and its upstream level kept rising; since 0.7.0 it passes ≈ 9.8 m³/s at
-≈ 1.07 m (5–6 h) and the pond is nearly steady. **That exceeds critical flow
-through the notch** (a 4 m rectangle: ≈ 7.5 m³/s at that head; the
-bilinearly sampled notch is a trapezoid, 2 m at the floor): the
-local-inertial face flux has no critical-flow limit (follow-up,
-PROJECT_STATE).
+head and its upstream level kept rising; in 0.7.x it passed ≈ 9.8 m³/s at
+≈ 1.07 m (5–6 h), more than critical flow through the notch (a 4 m
+rectangle: ≈ 7.5 m³/s at that head): the local-inertial face flux had no
+critical-flow limit. Since 0.8.0 SGS faces are limited to critical flow
+(`--sgs-critical`, HYDRAULICS §9.2, §15.14): 8.24 m³/s at 1.38 m of head
+between 5 and 6 h, and a further check holds it to the broad-crested-weir
+discharge 1.705·W·H^1.5 of the 4 m notch (+2%; 11.07 m³/s at that head;
+`q_down_5to6h`, `head_5to6h`).
 
 **Where the water crosses** (metrics only, added with `planar_wall`, §2d; the
 downstream volume alone does not separate the notch from a crossing
@@ -277,7 +280,8 @@ conveyance. Notebook: `notebooks/04_sgs_strip.ipynb`.
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run sgs_strip -P 2     # ~40 min the first time
 ```
 
-**Terrain** (`cases/scripts/sgs_strip_dem.jl`, 0.5 m DEM, EPSG:4326 in the
+**Terrain** (`cases/scripts/sgs_strip_dem.jl`, 0.5 m DEM with the analytic
+terrain at the pixel centres (since 0.8.0; at the corners before), EPSG:4326 in the
 Cartesian generator's metric frame about 0°E 51°N; geometry and analytic
 hydraulics in `cases/scripts/sgs_strip_geometry.jl`): a strip 4000 m long
 and 60 m wide on a 0.1% slope, a 5 m × 1 m rectangular channel on its centre
@@ -306,8 +310,9 @@ true volume only where cells are partly wet (in bank: 2.2× here).
 `cases/scripts/sgs_strip_tables.jl` (a preparation step) compares the SGS
 tables with the terrain directly.
 
-Results (0.7.0; measuring reach x = 1000–2000 m, last frame; storage in m²/m;
-the 0.6.0 SGS values are in `cases/expected/v0.6.0/`):
+Results (0.7.0, unchanged to the digits shown in 0.8.0; measuring reach
+x = 1000–2000 m, last frame; storage in m²/m; the 0.6.0 SGS values are in
+`cases/expected/v0.6.0/`):
 
 | | 3 m³/s δ (m) | storage | 20 m³/s δ (m) | storage | dS/dt ÷ Q at 20 m³/s |
 |---|---|---|---|---|---|
@@ -437,7 +442,10 @@ closed up to its crest. No water passes either wall in any SGS run; the pond
 rises to 7.07 m (A5) and 7.14 m (Cartesian) against the 4 m wall and 7.08 /
 7.15 m against the 40 m wall (level pool 7.12 / 7.16 m, crests 8.05 / 8.00 m).
 The wall may be moved by up to one cell (the faces that close are those of
-the cells it crosses).
+the cells it crosses). 0.8.0 (DEM at pixel centres): the same, 7.06 / 7.14 m
+and 7.08 / 7.15 m; the thin wall's cell-mean ridge is 5.39 m on A5 (was 5.36)
+and 5.64 m Cartesian (5.63), and standard flow on A5 crosses it at 2 882 s
+with the water at 5.48 m.
 
 Checks: mass balance and stored volume; the design (level-pool level ≥ 0.5 m
 below the crest; the upstream level stays below the crest and the level-pool
@@ -449,16 +457,15 @@ thin runs as above.
 x = 998–1002 m the Cartesian face at x = 1001.1 m lay on it, and the
 Cartesian SGS run held the water until the upstream level reached 6.31 m
 (16 442 s; 15 000 m³ downstream at 6 h), then passed it along the whole wall
-at once. 6.31 m is the lowest elevation of that face's profile as sampled:
-the DEM is sampled bilinearly (`_bilinear` in `mesh/A5Grid.jl`) with pixel
-values placed at pixel corners rather than centres (`_affine_to_pixel`
-returns corner-based coordinates and `_bilinear` treats them as
-centre-based), so the profile is taken half a pixel (1 m) east of the face,
-on the ramp that interpolation makes of the wall's east side (8.0 → 4.99 m
-over one pixel). Sampled at the face itself it would be 7.82 m. The
-half-pixel registration applies to every DEM sample (SGS tables, face
-profiles and cell-mean elevations); it is a known issue, to be fixed with a
-rerun of every case (PROJECT_STATE).
+at once. 6.31 m is the lowest elevation of that face's profile as sampled
+up to 0.7.1: the DEM was sampled with pixel values placed at pixel corners
+rather than centres (`_affine_to_pixel` returns corner-based coordinates and
+`_bilinear` treated them as centre-based), so the profile was taken half a
+pixel (1 m) east of the face, on the ramp that interpolation makes of the
+wall's east side (8.0 → 4.99 m over one pixel). Sampled at the face itself
+it is 7.82 m. The half-pixel registration applied to every DEM sample (SGS
+tables, face profiles and cell-mean elevations); fixed in 0.8.0, with every
+case rerun.
 
 ---
 
@@ -586,15 +593,19 @@ FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run carlisle -P 1 -T 4
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl show carlisle    # the commands, to copy
 ```
 
-Results at 6 h (0.4.1; recorded values in brackets):
+Results at 6 h (0.8.0; recorded values in brackets):
 
 | run | storage (Mm³) | vs SWE: storage | rms Δh | CSI | bias | arrival (s) |
 |---|---|---|---|---|---|---|
-| A5 SWE | 2.690 (2.690) | | | | | 6 685 (6 688) |
-| A5 local-inertial | 3.369 | 1.252 (1.25) | 0.29 m | 0.62 | 1.06 | 9 749 |
+| A5 SWE | 2.641 (2.641) | | | | | 6 676 (6 676) |
+| A5 local-inertial | 3.297 | 1.248 (1.25) | 0.28 m | 0.61 | 1.06 | 9 647 |
 | Cartesian SWE | 2.331 (2.331) | | | | | 5 727 (5 736) |
 | Cartesian local-inertial | 2.302 | 0.988 (0.99) | 0.13 m | 0.69 | 0.85 | 5 989 |
-| A5 SGS | 1.755 (1.755) | | | | | 3 471 |
+| A5 SGS | 1.775 (1.775) | | | | | 3 570 |
+
+The A5 values moved in 0.8.0 with the DEM sampled at pixel centres (0.4.1–0.7.1:
+A5 SWE 2.690 Mm³ and 6 688 s, local-inertial 3.369, SGS 1.755); the Cartesian
+mesh takes the raster's pixels and its runs are bit-identical.
 
 (§15.11's 3.363 and 2.297 Mm³ are the log's last step line, ~100 s before
 6 h.) The checks: SWE storage and arrival within 1% and 2% of the record,
@@ -607,8 +618,8 @@ series (HYDRAULICS §15.6–15.11); it is not the 2005 event's rain. It puts 60 
 (0.88 Mm³) on every cell in 6 h, while the inflows are still low (Eden 100–230
 m³/s). It is only 15% of the water added, but it makes most of the 6 h flooded
 area. Two extra runs, `a5_li_norain` and `cart_li_norain`, repeat the
-local-inertial runs without it. The area deeper than 0.1 m at 6 h is 3.06 km²
-with rain and 1.25 km² without on A5, and 2.32 against 0.95 km² on Cartesian
+local-inertial runs without it. The area deeper than 0.1 m at 6 h is 3.02 km²
+with rain and 1.19 km² without on A5, and 2.32 against 0.95 km² on Cartesian
 (check: without rain < 60% of with rain). The 6 h maps of this case show mostly
 rain-on-grid, not river flooding.
 
@@ -616,20 +627,27 @@ rain-on-grid, not river flooding.
 simulates the event from t = 0 to the Eden's peak (1 273 m³/s at 55.5 h; the
 model has no start-time option) and compares the solvers at 49.5, 52.5 and
 55.5 h. It has no rain, outputs every 1800 s, and reuses the `carlisle` meshes
-(run `cases/run.jl prep carlisle` first). Its runs are the same five:
-local-inertial and SWE on each mesh, and SGS on A5. The two SWE runs over 55.5 h
+(run `cases/run.jl prep carlisle` first). Its runs are the same five —
+local-inertial and SWE on each mesh, and SGS on A5 — and SGS without the
+critical-flow limit (`a5_sgs_nocrit`, `--sgs-critical off`: the 0.7.x
+hydraulics on the same tables). The two SWE runs over 55.5 h
 take several hours on CPU, at 6 threads each.
 
-Results in the window (0.4.4; 49.5 / 52.5 / 55.5 h):
+Results in the window (0.8.0; 49.5 / 52.5 / 55.5 h):
 
 | run | storage at 55.5 h (Mm³) | ÷ SWE | rms Δh | CSI | bias | area > 0.1 m at 55.5 h (km²) |
 |---|---|---|---|---|---|---|
-| A5 SWE | 10.51 | | | | | 5.16 |
-| A5 local-inertial | 8.01 | 0.74 / 0.76 / 0.76 | 0.53–0.55 m | 0.86–0.87 | 0.87–0.89 | 4.57 |
+| A5 SWE | 10.68 | | | | | 5.21 |
+| A5 local-inertial | 8.00 | 0.73 / 0.74 / 0.75 | 0.57–0.59 m | 0.86–0.88 | 0.87–0.89 | 4.63 |
 | Cartesian SWE | 9.36 | | | | | 4.91 |
 | Cartesian local-inertial | 7.92 | 0.86 / 0.86 / 0.85 | 0.29–0.34 m | 0.92–0.93 | 0.93–0.94 | 4.57 |
-| A5 SGS (0.7.0) | 5.94 | 0.52 / 0.55 / 0.57 | 0.97–0.99 m* | 0.61–0.67* | 0.63–0.69* | |
+| A5 SGS | 6.25 | 0.55 / 0.57 / 0.58 | 0.99–1.02 m* | 0.68–0.71* | 0.70–0.73* | 3.55* |
+| A5 SGS, no critical-flow limit | 5.98 | 0.53 / 0.55 / 0.56 | 1.00–1.03 m* | 0.64–0.67* | 0.66–0.69* | 3.36* |
+| *A5 SGS (0.7.x)* | *5.94* | *0.52 / 0.55 / 0.57* | *0.97–0.99 m* | *0.61–0.67* | *0.63–0.69* | |
 | *A5 SGS (0.6.0)* | *26.67* | | | | | |
+
+(0.4.4–0.7.1, before the DEM registration fix: A5 SWE 10.51 Mm³, A5
+local-inertial 8.01, 0.74–0.76; the Cartesian runs are bit-identical.)
 
 \* SGS against SWE: mean depth V/A for CSI and bias (wet ≥ 0.1 m), water level
 where both are wet for rms Δh (`_carl_sgs_compare`): an SGS depth is measured
@@ -642,43 +660,57 @@ the first 6 h with the test rain it stores more. Near the peak:
 - **It conveys more.** Its water is faster where the reference is ≥ 3 m deep:
   1.34× on A5 and 1.15× on Cartesian at 55.5 h. It lets more water out and stands
   0.3–0.6 m lower over the floodplain.
-- **It is insensitive to the mesh.** The two local-inertial runs store 8.01 and
-  7.92 Mm³; the two references differ by 12%.
-- **SGS (0.7.0) conveys more than local-inertial.** Until 0.6.0 it held the Eden
-  back by metres (26.7 Mm³; the conveyance defects of §2c). Now it stores 0.57 of
-  the 22 m SWE run where local-inertial stores 0.76. The case's check "SGS no
-  further from SWE than local-inertial" fails and is an expected failure: the
-  22 m SWE run is not a sound reference (below).
+- **It is insensitive to the mesh.** The two local-inertial runs store 8.00 and
+  7.92 Mm³; the two references differ by 14%.
+- **SGS conveys more than local-inertial.** Until 0.6.0 it held the Eden
+  back by metres (26.7 Mm³; the conveyance defects of §2c). It stores 0.58 of
+  the 22 m SWE run (0.56 without the critical-flow limit of 0.8.0) where
+  local-inertial stores 0.75. The 22 m SWE run is not a sound reference
+  (below): since 0.8.0 the SGS bar is checked against the 5 m SWE benchmark in
+  `carlisle_peak_fine` (until 0.7.1 it was an expected failure here).
 
 Output frames drift late of their nominal times (by up to ~110 s at 55 h, because
 each write is scheduled from the previous one), so frames are matched within
 300 s. `notebooks/03_carlisle.ipynb` analyses both cases.
 
-**`carlisle_peak_fine`: 5 m references (GPU).** The `carlisle_peak` event on
+**`carlisle_peak_fine`: the 5 m benchmark (GPU).** The `carlisle_peak` event on
 the benchmark suite's 5 m Cartesian mesh (582 012 cells; `julia --project=.
 benchmarks/run.jl` builds it), local-inertial (GPU Float64, 1 h 10 min) and
 SWE (GPU Float32, 3 h 51 min). Not part of `carlisle_peak`, which must run
-on a CPU.
+on a CPU. **The 5 m SWE run is the benchmark** for the 22 m models (decided
+2026-11-23; it replaces the 22 m SWE runs). The 5 m mesh takes the raster's
+pixels, so the DEM registration fix of 0.8.0 does not change it. The case's
+analysis compares every 22 m run of `carlisle_peak` (run that first) with
+both 5 m runs at 49.5, 52.5 and 55.5 h (`_carl_fine_metrics`, entries
+`vs5:<job>`).
 
 ```bash
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run carlisle_peak_fine -P 2
 ```
 
 Compared on the 22 m cells (5 m results aggregated onto each coarse cell;
-water level where at least half the cell is wet; SGS wetted area from its
-tables), at 55.5 h on A5 (SGS conveyance plan §9.3a):
+water level where at least half the cell is wet; CSI of the extent at 0.1 m;
+SGS wetted area from its tables), at 55.5 h (0.8.0; HYDRAULICS §15.14):
 
-| 22 m model | vs 5 m SWE: storage | level, median (rms) | vs 5 m LI: storage | level, median (rms) |
-|---|---|---|---|---|
-| SWE | 1.24 | +0.36 (0.54) m | 1.47 | +0.78 (0.81) m |
-| local-inertial | 0.94 | −0.16 (0.25) m | 1.12 | +0.25 (0.35) m |
-| SGS | 0.70 | −0.50 (0.54) m | 0.83 | −0.14 (0.24) m |
+| 22 m model | vs 5 m SWE: storage | level median (rms) | CSI | vs 5 m LI: storage | level median (rms) | CSI |
+|---|---|---|---|---|---|---|
+| SWE, A5 | 1.26 | +0.39 (0.56) m | 0.81 | 1.49 | +0.82 (0.84) m | 0.78 |
+| SWE, Cartesian | 1.12 | +0.15 (0.29) m | 0.85 | 1.33 | +0.55 (0.58) m | 0.82 |
+| local-inertial, A5 | 0.94 | −0.18 (0.25) m | 0.85 | 1.12 | +0.24 (0.34) m | 0.84 |
+| local-inertial, Cartesian | 0.95 | −0.22 (0.29) m | 0.85 | 1.12 | +0.20 (0.32) m | 0.85 |
+| SGS, A5, no critical-flow limit | 0.71 | −0.49 (0.53) m | 0.77 | 0.84 | −0.14 (0.23) m | 0.81 |
+| **SGS, A5** | **0.74** | **−0.47 (0.52) m** | **0.81** | **0.87** | **−0.12 (0.16) m** | **0.85** |
 
-The 22 m SWE run stores 24% more than 5 m SWE, so it is not a reference.
-SGS reproduces the fine local-inertial solution best; but local-inertial
-itself conveys more than SWE at 5 m (0.84 of its storage), and 22 m
-local-inertial lands close to 5 m SWE through compensating errors (its
-smoothed bed under-conveys). Cartesian 20 m shows the same pattern.
+The 22 m SWE runs store 12–26% more than 5 m SWE, so they are not
+references. SGS reproduces the fine local-inertial solution best (level and
+extent at all three times); but the local-inertial equations themselves store
+0.84 of SWE's volume at 5 m, and 22 m local-inertial lands close to 5 m SWE
+through compensating errors (its smoothed beds store ~1.15× the 5 m
+local-inertial run). Checks: mass; every 22 m run compared; and the agreed
+SGS bar — no further from 5 m SWE than local-inertial on the same mesh in
+storage, rms level and CSI at all three times — an **expected failure**: the
+gap is the hydraulics (local-inertial), not the SGS geometry. Closing it
+needs a hydraulic formulation with momentum on the SGS geometry.
 
 ### Validation data
 

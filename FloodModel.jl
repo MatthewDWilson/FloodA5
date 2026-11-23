@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.7.1"
+const FLOODA5_VERSION = "0.8.0"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -2560,12 +2560,15 @@ function initialise_flow_model(mesh::A5Mesh,
         # conveyance integral on the face's own levels). Older tables hold
         # per-cell edge curves that stop at the cell's highest DEM sample
         # (layout 2) or are in the wrong slot order (no layout): refused.
+        # Layout 4 (0.8.0): DEM sampled at pixel centres (layout 3 tables are
+        # half a pixel off) and the critical integral face_C. Refused below 4.
         layout = haskey(mesh.static_vars, "sgs_layout") ? Float64(first(mesh.static_vars["sgs_layout"])) : 1.0
-        if layout < 3 || !haskey(mesh.array_vars, "sgs_face_A")
-            error("This mesh's SGS tables are layout $(round(Int, layout)); FloodA5 ≥ 0.7.0 " *
-                  "needs layout 3 (face tables). Rebuild the SGS tables: " *
-                  "--meshgen … --flow-model sgs --mesh-only (or build_sgs_tables!). " *
-                  "Results of the old tables: tag v0.6.0, cases/expected/v0.6.0/.")
+        if layout < 4 || !haskey(mesh.array_vars, "sgs_face_C")
+            error("This mesh's SGS tables are layout $(round(Int, layout)); FloodA5 ≥ 0.8.0 " *
+                  "needs layout 4 (DEM sampled at pixel centres; critical-flow tables). " *
+                  "Rebuild the SGS tables: --meshgen … --flow-model sgs --mesh-only " *
+                  "(or build_sgs_tables!). Results of older tables: tags v0.6.0 / v0.7.1, " *
+                  "cases/expected/v0.6.0/ and v0.7.1/.")
         end
         sgs_tables = [sgs_table(mesh, i) for i in 1:n]
 
@@ -3013,6 +3016,10 @@ function _apply_ghost_fluxes_sgs!(state::FlowState, dt::Float64)
             Q_out, q_stored = _manning_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
                 A_ge, R_ge, ge.L, state.manning_n[ci], dt)
+            if SGS_CRITICAL[]                  # critical outflow (0.8.0)
+                Q_c = _sgs_ghost_crit_q(tbl, ge.slot, wse_ci, ge.sill, ge.width)
+                Q_out > Q_c && (Q_out = Q_c; q_stored = Q_c)
+            end
         else
             Q_out, q_stored = _bates_ghost_flux(
                 ge.flux_prev, wse_ci, wse_ghost, ge.sill,
@@ -4079,6 +4086,7 @@ function run_flood_model(;
     sgs_samples      :: Int     = 1600,
     sgs_connectivity :: Bool    = true,     # 0.7.0: face activation levels (mesh generation)
     sgs_path         :: Bool    = true,     # 0.7.0: flow-path geometry of partly wet cells
+    sgs_critical     :: Bool    = true,     # 0.8.0: critical-flow limit on SGS faces
     manning_n        :: Float64 = 0.03,
     friction_source             = nothing,
     # ── Non-orthogonal gradient correction (flow-direction-fixes) ──────────
@@ -4283,6 +4291,11 @@ function run_flood_model(;
             @warn "No DEM provided and mesh has no saved elevation data. " *
                   "The model will run with flat terrain (z=0 everywhere). " *
                   "Use --dem <file.tif> to sample elevation data."
+        elseif mesh_source[1] === :load && !haskey(mesh.static_vars, "dem_registration")
+            @warn "This mesh has no dem_registration column: if its elevations were " *
+                  "sampled from a DEM by FloodA5 before 0.8.0 they are half a pixel " *
+                  "east and south of their positions (CHANGELOG 0.8.0). Regenerate it " *
+                  "with --meshgen … --dem to sample at pixel centres."
         end
     end
 
@@ -4586,7 +4599,7 @@ function run_flood_model(;
             "eta_filter" => eta_filter, "momentum_damping" => momentum_damping,
             "momentum_damping_scale" => momentum_damping_scale,
             "open_boundary" => open_boundary, "boundary_limiter" => boundary_limiter,
-            "sgs_conveyance" => sgs_conveyance, "sgs_path" => sgs_path,
+            "sgs_conveyance" => sgs_conveyance, "sgs_path" => sgs_path, "sgs_critical" => sgs_critical,
             "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
             "manning_n" => manning_n, "friction" => friction_source,
             "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
@@ -4627,6 +4640,7 @@ function run_flood_model(;
         throw(ArgumentError("sgs_conveyance must be :twod or :lumped"))
     SGS_CONVEYANCE[] = sgs_conveyance
     SGS_PATH[] = sgs_path
+    SGS_CRITICAL[] = sgs_critical
     limiter_stats && _lstats_reset!(flow_state.edges.n_edges)
     tl.source_setup = time() - t0_src
     @info "Starting simulation: duration=$(sim_duration)s  dt_max=$(dt_max)s  courant=$(courant)  " *
@@ -4795,8 +4809,9 @@ Flow model options:
                        sgs       Sub-grid sampling: local-inertial with each cell's
                                  hypsometric curve and edge sills from the DEM
                                  (partial wetting, sub-cell channels). Needs a
-                                 mesh built with --flow-model sgs. Opt-in: its
-                                 behaviour at high stage is under investigation.
+                                 mesh built with --flow-model sgs. Opt-in: at the
+                                 Carlisle peak it stores 0.74 of the 5 m SWE
+                                 benchmark (local-inertial hydraulics).
   --sgs-bins N       Elevation bins for SGS hypsometric curves (default: 100).
   --sgs-samples N    Working-grid points per cell (its bounding box) for the
                      SGS tables (default: 1600; the grid is never coarser
@@ -4814,6 +4829,12 @@ Flow model options:
                      direction, so a channel crossing cells obliquely keeps
                      its own length and width. off: centre-to-centre
                      distance and the face's full cut (as for a wet cell).
+  --sgs-critical on|off
+                     (SGS) on (default, 0.8.0): no face passes more than
+                     critical flow — each strip of the face at its own
+                     critical depth below the upstream cell's level (a weir
+                     or notch passes at most its weir discharge; the outflow
+                     edges too). off: the local-inertial flux alone (0.7.x).
   --manning-n N      Global Manning's roughness coefficient (default: 0.03).
   --friction FILE    GeoTIFF friction raster. Per-cell Manning's n sampled at
                      cell centres; overrides --manning-n where finite.
@@ -5501,8 +5522,9 @@ function main(args=String[])
     q_centre_mode_val,      args = _pop_flag(args, "--q-centre-mode")
 
     # Default flow method: standard (local-inertial with the --scheme defaults)
-    # since 0.5.0; sgs before. SGS is opt-in until its behaviour at high stage is
-    # understood (PROJECT_STATE, "SGS at the Carlisle peak").
+    # since 0.5.0; sgs before. SGS is opt-in: with local-inertial hydraulics it
+    # is further from the 5 m SWE benchmark at the Carlisle peak than standard
+    # (HYDRAULICS §15.14).
     flow_method  = flow_method_val !== nothing ? Symbol(flow_method_val) : :standard
     sgs_bins     = sgs_bins_val     !== nothing ? parse(Int, sgs_bins_val)      : 100
     sgs_samples  = sgs_samples_val  !== nothing ? parse(Int, sgs_samples_val)   : 1600
@@ -5512,6 +5534,8 @@ function main(args=String[])
     sgs_connectivity = sgs_onoff("--sgs-connectivity", sgs_conn_val)
     sgs_path_val, args = _pop_flag(args, "--sgs-path")
     sgs_path = sgs_onoff("--sgs-path", sgs_path_val)
+    sgs_crit_val, args = _pop_flag(args, "--sgs-critical")
+    sgs_critical = sgs_onoff("--sgs-critical", sgs_crit_val)
     manning_n    = manning_n_val    !== nothing ? parse(Float64, manning_n_val) : 0.03
 
     q_centre_theta = q_centre_theta_val !== nothing ?
@@ -5896,6 +5920,7 @@ function main(args=String[])
         sgs_samples     = sgs_samples,
         sgs_connectivity = sgs_connectivity,
         sgs_path        = sgs_path,
+        sgs_critical    = sgs_critical,
         manning_n       = manning_n,
         friction_source = friction_source,
         q_centre_theta            = q_centre_theta,

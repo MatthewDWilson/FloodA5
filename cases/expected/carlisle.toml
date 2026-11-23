@@ -1,53 +1,53 @@
 # Expected metrics for case "carlisle" — written by `julia --project=. cases/run.jl baseline carlisle`.
 # Tolerances are in cases/registry (Case.rtol / Case.atol).
 [a5_li]
-arrival_s = 9748.652484179494
-bias = 1.0630984952120384
-csi = 0.6179428724688213
-input_error_rel = -2.3925218169004335e-5
-mass_balance_log_rel = 2.396427417554957e-5
-mass_balance_rel = 1.9902037479263098e-14
-rms_dh = 0.29314333222075406
-speed_ratio_deep = 1.1850399606325057
-storage_m3 = 3.3693268179978193e6
-storage_ratio = 1.2523551811960767
+arrival_s = 9646.966857377498
+bias = 1.0610938040844582
+csi = 0.6078034291886054
+input_error_rel = -2.388549762494584e-5
+mass_balance_log_rel = 2.391214748292997e-5
+mass_balance_rel = 8.102410193433277e-15
+rms_dh = 0.2808265411357428
+speed_ratio_deep = 1.103935875667826
+storage_m3 = 3.29660489559122e6
+storage_ratio = 1.2484173635473403
 t = 21600.0
-vol_added_m3 = 5.8879313e6
-vol_removed_m3 = 2.5239122e6
-wet_area_0p1_km2 = 3.062525158171027
+vol_added_m3 = 5.8924026e6
+vol_removed_m3 = 2.6009973e6
+wet_area_0p1_km2 = 3.0201611695964288
 
 [a5_li_norain]
-arrival_s = 7131.590676037821
-input_error_rel = -3.140426928193724e-5
-mass_balance_log_rel = 3.1427204348027414e-5
-mass_balance_rel = 6.750321105843588e-15
-storage_m3 = 1.971964511501865e6
+arrival_s = 7066.509480671612
+input_error_rel = -3.144263268935011e-5
+mass_balance_log_rel = 3.144218364396278e-5
+mass_balance_rel = 7.582552765958877e-15
+storage_m3 = 1.9168530988084832e6
 t = 21600.0
-vol_added_m3 = 5.0211275e6
-vol_removed_m3 = 3.0504554e6
-wet_area_0p1_km2 = 1.2536794942987188
+vol_added_m3 = 5.034637600000001e6
+vol_removed_m3 = 3.1177572e6
+wet_area_0p1_km2 = 1.1925965379485888
 
 [a5_sgs]
-arrival_s = 3470.7636274884335
-input_error_rel = -1.2267941407914549e-5
-mass_balance_log_rel = 1.2283159456316528e-5
-mass_balance_rel = 6.379590608097912e-14
-storage_m3 = 1.7551887935419546e6
+arrival_s = 3570.4649889685606
+input_error_rel = -1.2283218031711137e-5
+mass_balance_log_rel = 1.2282607158303452e-5
+mass_balance_rel = 7.3707478312054e-14
+storage_m3 = 1.7752254773162312e6
 t = 21600.0
-vol_added_m3 = 5.9023902e6
-vol_removed_m3 = 4.1489685e6
-wet_area_0p1_km2 = 1.7938202357893205
+vol_added_m3 = 5.910797199999999e6
+vol_removed_m3 = 4.1364564e6
+wet_area_0p1_km2 = 1.814749753237339
 
 [a5_swe]
-arrival_s = 6684.701450109334
-input_error_rel = -3.698633219143899e-6
-mass_balance_log_rel = 3.700803395411071e-6
-mass_balance_rel = 1.3372640069876737e-15
-storage_m3 = 2.690392365191402e6
+arrival_s = 6676.094574218267
+input_error_rel = -3.4688100269510747e-6
+mass_balance_log_rel = 3.4631127809133494e-6
+mass_balance_rel = 9.439508468134058e-16
+storage_m3 = 2.640627238813802e6
 t = 21600.0
-vol_added_m3 = 5.917634e6
-vol_removed_m3 = 3.2275549e6
-wet_area_0p1_km2 = 2.8807544257117517
+vol_added_m3 = 5.91953e6
+vol_removed_m3 = 3.2789161e6
+wet_area_0p1_km2 = 2.846272115309491
 
 [cart_li]
 arrival_s = 5988.784520546506
@@ -88,8 +88,8 @@ vol_removed_m3 = 3.5730526e6
 wet_area_0p1_km2 = 2.7306696201394365
 
 [meta]
-flooda5_version = "0.4.3"
-git_commit = "2dc1095ec17ffd5f1f9a2cca246658308a7814ee"
+flooda5_version = "0.7.1"
+git_commit = "4f397aea1c95ff457c674d1b3b6d9dc08c968848"
 git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-17T20:54:46Z"
+recorded_utc = "2026-11-23T10:23:56Z"

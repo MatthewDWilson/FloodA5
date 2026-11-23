@@ -85,7 +85,7 @@ export mesh_to_geojson_string
 export sample_dem!, sample_dem_centroid!, sample_dem_mean!, check_dem_coverage
 export build_sgs_tables!, SGSTable
 export wse_from_volume, wetted_area_from_wse, wet_centroid, sgs_table
-export face_apk, face_table_from_profile, SGS_FACE_LEVELS, boundary_side_slots
+export face_apk, face_crit, face_table_from_profile, SGS_FACE_LEVELS, boundary_side_slots
 export cell_to_boundary, cell_to_lonlat, lonlat_to_cell
 export cell_to_children, cell_to_parent, get_resolution, grid_disk_neighbours
 export load_aoi, mesh_summary
@@ -618,8 +618,19 @@ end
     _bilinear(band, col_f, row_f, nx, ny, nodata_val) → Float64
 
 Bilinear interpolation from an in-memory raster array at fractional pixel
-(col_f, row_f) (0-based).  Returns NaN for out-of-bounds or nodata corners;
-falls back to nearest-neighbour if any of the 2×2 window corners are nodata.
+(col_f, row_f) (0-based, *corner*-based as `_affine_to_pixel` returns them:
+pixel (c, r) covers [c, c+1) × [r, r+1)). A pixel's value is its value at
+its centre (c + ½, r + ½) — GDAL's pixel-is-area convention; GDAL also
+reports AREA_OR_POINT = Point rasters with a corner-based geotransform — so
+the interpolation runs between pixel centres, and within half a pixel of the
+raster's edge the value is constant across the edge (nearest centre).
+
+Returns NaN outside the raster. If any of the 2×2 centres is nodata, the
+value of the pixel containing the point (NaN if that is nodata).
+
+0.8.0 (⚠ moves every DEM-sampled elevation): until 0.7.1 the corner-based
+coordinates were used as centre-based ones, so every sample was taken half a
+pixel east and south of its point (north-up rasters).
 """
 @inline function _bilinear(band::Matrix{Float64},
                             col_f::Float64, row_f::Float64,
@@ -627,22 +638,27 @@ falls back to nearest-neighbour if any of the 2×2 window corners are nodata.
                             nodata_val::Float64)::Float64
     (col_f < 0 || col_f >= nx || row_f < 0 || row_f >= ny) && return NaN
 
-    c0 = clamp(floor(Int, col_f), 0, nx - 2)
-    r0 = clamp(floor(Int, row_f), 0, ny - 2)
-    fc = col_f - c0
-    fr = row_f - r0
+    nd = nodata_val
+    isnd(v) = !isnan(nd) && v == nd
+    if nx < 2 || ny < 2
+        v = band[floor(Int, col_f) + 1, floor(Int, row_f) + 1]
+        return isnd(v) ? NaN : v
+    end
+
+    u = col_f - 0.5; w = row_f - 0.5            # centre-based coordinates
+    c0 = clamp(floor(Int, u), 0, nx - 2)
+    r0 = clamp(floor(Int, w), 0, ny - 2)
+    fc = clamp(u - c0, 0.0, 1.0)
+    fr = clamp(w - r0, 0.0, 1.0)
 
     # ArchGDAL band array: band[col+1, row+1] (1-based, column-major)
     v00 = band[c0+1, r0+1];  v10 = band[c0+2, r0+1]
     v01 = band[c0+1, r0+2];  v11 = band[c0+2, r0+2]
 
-    nd = nodata_val
-    isnd(v) = !isnan(nd) && v == nd
-
     if isnd(v00) || isnd(v10) || isnd(v01) || isnd(v11)
-        # Fall back to nearest neighbour — avoids propagating nodata into
+        # The pixel containing the point — avoids propagating nodata into
         # an otherwise valid interpolation neighbourhood
-        v = band[c0 + round(Int, fc) + 1, r0 + round(Int, fr) + 1]
+        v = band[floor(Int, col_f) + 1, floor(Int, row_f) + 1]
         return isnd(v) ? NaN : v
     end
 
@@ -660,6 +676,9 @@ function _store_elevation!(mesh::A5Mesh, elevations::Vector{Float64},
                             var_name::String)
     mesh.static_vars[var_name] = elevations
     if var_name == "elevation"
+        # 0.8.0: elevations sampled at pixel centres (see `_bilinear`); meshes
+        # without this column were sampled half a pixel off if from a DEM
+        mesh.static_vars["dem_registration"] = fill(1.0, length(elevations))
         mesh.cells = [A5Cell(c.id, c.resolution, c.center_lon, c.center_lat,
                               c.boundary, elevations[i])
                       for (i, c) in enumerate(mesh.cells)]
@@ -1775,8 +1794,10 @@ struct SGSTable
     #   face_A[k, s]  flow area            Σ dx·max(η − z_p, 0)         (m²)
     #   face_P[k, s]  wetted width         Σ dx·[z_p ≤ η]               (m)
     #   face_K[k, s]  conveyance integral  Σ dx·max(η − z_p, 0)^(5/3)   (m^(8/3))
-    # Above the top level `face_apk` continues them analytically with the
-    # full width face_P[NF, s].
+    #   face_C[k, s]  critical integral    Σ dx·max(η − z_p, 0)^(3/2)   (m^(5/2))
+    #                 (layout 4, 0.8.0; `face_crit`)
+    # Above the top level `face_apk` / `face_crit` continue them analytically
+    # with the full width face_P[NF, s].
     face_z0 :: Vector{Float64}   # (n_slots) lowest point of the face = its sill (m)
     face_zr :: Vector{Float64}   # (n_slots) height of the tabulated range (m)
     face_A  :: Matrix{Float64}   # (NF × n_slots)
@@ -1787,10 +1808,25 @@ struct SGSTable
     # the water of a partly wet cell is (`wet_centroid`). Zeros: the centre.
     wet_cx  :: Vector{Float64}   # (n_bins)
     wet_cy  :: Vector{Float64}   # (n_bins)
+    face_C  :: Matrix{Float64}   # (NF × n_slots), layout 4 (see above)
 end
 SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K) =
     SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K,
              zeros(length(elev_bins)), zeros(length(elev_bins)))
+"""
+Layout-3 form (no `face_C`): the critical integral is approximated from A and
+P as if the wet part of the face had a uniform depth, C ≈ P·(A/P)^(3/2) — a
+lower bound of the profile's own Σ h^(3/2) (fixtures; real tables are built
+with `face_table_from_profile`).
+"""
+SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K,
+         wet_cx, wet_cy) =
+    SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max, face_z0, face_zr, face_A, face_P, face_K,
+             wet_cx, wet_cy, _face_C_uniform(face_A, face_P))
+
+"Critical integral of a uniform-depth section with flow area A and wetted width P (element-wise)."
+_face_C_uniform(A::AbstractMatrix, P::AbstractMatrix) =
+    [P[k] > 1e-12 ? Float64(P[k]) * (max(Float64(A[k]), 0.0) / P[k])^1.5 : 0.0 for k in CartesianIndices(A)]
 
 "Levels per face table (see `SGSTable`)."
 const SGS_FACE_LEVELS = 64
@@ -1799,11 +1835,12 @@ const SGS_FACE_LEVELS = 64
 @inline _face_level(k::Int, nf::Int) = ((k - 1) / (nf - 1))^2
 
 """
-    face_table_from_profile(z, dx; nf = SGS_FACE_LEVELS) → (z0, zr, A, P, K)
+    face_table_from_profile(z, dx; nf = SGS_FACE_LEVELS) → (z0, zr, A, P, K, C)
 
 The face table of a profile: elevations `z` (m) of points that each stand for
-a width `dx` (m) of the face. `A`, `P`, `K` are the flow area, wetted width
-and conveyance integral Σ dx·h^(5/3) at the `nf` levels
+a width `dx` (m) of the face. `A`, `P`, `K`, `C` are the flow area, wetted
+width, conveyance integral Σ dx·h^(5/3) and critical integral Σ dx·h^(3/2)
+(0.8.0) at the `nf` levels
 z0 + zr·((k−1)/(nf−1))². z0 is the lowest point; the range zr is the relief
 of the profile plus max(2·relief, 0.5 m), so that the tabulated part covers
 the levels at which the shape of the profile still matters to K (a channel in
@@ -1816,22 +1853,22 @@ then taken over the activation levels.
 """
 function face_table_from_profile(z::AbstractVector{<:Real}, dx::Real;
                                  act::AbstractVector{<:Real} = z, nf::Int = SGS_FACE_LEVELS)
-    A = zeros(nf); P = zeros(nf); K = zeros(nf)
-    isempty(z) && return NaN, 0.0, A, P, K
+    A = zeros(nf); P = zeros(nf); K = zeros(nf); C = zeros(nf)
+    isempty(z) && return NaN, 0.0, A, P, K, C
     z0 = Float64(minimum(act)); relief = Float64(maximum(act)) - z0
     zr = relief + max(2.0 * relief, 0.5)
     for k in 1:nf
         η = k == nf ? z0 + zr : z0 + zr * _face_level(k, nf)
-        a = 0.0; w = 0.0; c = 0.0
+        a = 0.0; w = 0.0; c = 0.0; q = 0.0
         for i in eachindex(z)
             act[i] <= η || continue
             h = η - Float64(z[i])
             w += 1.0
-            h > 0.0 && (a += h; c += h^(5 / 3))
+            h > 0.0 && (a += h; c += h^(5 / 3); q += h * sqrt(h))
         end
-        A[k] = a * dx; P[k] = w * dx; K[k] = c * dx
+        A[k] = a * dx; P[k] = w * dx; K[k] = c * dx; C[k] = q * dx
     end
-    return z0, zr, A, P, K
+    return z0, zr, A, P, K, C
 end
 
 """
@@ -1874,13 +1911,49 @@ below the sill and for a slot without a table.
 end
 
 """
+    face_crit(table, slot, wse) → C
+
+Critical integral Σ dx·max(wse − a_p, 0)^(3/2) (m^(5/2)) of the face in
+adjacency `slot` at level `wse` (a_p the points' activation levels), from the
+face table as `face_apk` reads A, P, K: linear between levels; above the top
+level C = W·(d + c)^(3/2) with W = P_top and c set by C at the top level.
+`√g·(2/3)^(3/2)·C` is the discharge of the face at critical flow with the
+energy level `wse`, each strip of the face at its own critical depth
+(`_sgs_critical_q`, 0.8.0). Zero at or below the sill and for a slot without
+a table.
+"""
+@inline function face_crit(t, slot::Int, wse::Float64)::Float64
+    @inbounds z0 = t.face_z0[slot]
+    d = wse - z0
+    d > 0.0 || return 0.0
+    fC = t.face_C; fP = t.face_P
+    nf = size(fC, 1)
+    @inbounds zr = t.face_zr[slot]
+    @inbounds Pt = fP[nf, slot]
+    Pt > 0.0 || return 0.0
+    if d >= zr
+        @inbounds Ct = fC[nf, slot]
+        c = cbrt(Ct / Pt)^2
+        x = d - zr + c
+        return Pt * x * sqrt(x)
+    end
+    u  = sqrt(d / zr) * (nf - 1)
+    lo = min(unsafe_trunc(Int, u), nf - 2)
+    r0 = (lo / (nf - 1))^2; r1 = ((lo + 1) / (nf - 1))^2
+    f  = (d / zr - r0) / (r1 - r0)
+    f  = f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f)
+    @inbounds return fC[lo + 1, slot] + f * (fC[lo + 2, slot] - fC[lo + 1, slot])
+end
+
+"""
     SGSTable(elev_bins, vol_curve, area_curve, cell_area, z_min, z_max,
              edge_area_curves, edge_perim_curves)
 
 Test-fixture form (the pre-layout-3 fields): per-slot flow area and wetted
 width tabulated on the cell's own levels (n_bins × n_slots). They are
 resampled to face tables; with no profile to integrate, K is the
-single-radius conveyance A^(5/3)/P^(2/3). The sill of a slot is the highest
+single-radius conveyance A^(5/3)/P^(2/3) and C the uniform-depth critical
+integral P·(A/P)^(3/2). The sill of a slot is the highest
 level at which its area is still zero.
 """
 function SGSTable(elev_bins::Vector{Float64}, vol_curve::Vector{Float64}, area_curve::Vector{Float64},
@@ -2359,7 +2432,8 @@ end
                       connectivity=true)
 
 Pre-compute the sub-grid (SGS) tables of every cell and face and store them
-in `mesh.array_vars` / `mesh.static_vars` (layout 3, 0.7.0).
+in `mesh.array_vars` / `mesh.static_vars` (layout 4, 0.8.0: the DEM sampled
+at pixel centres, and the faces' critical integrals `sgs_face_C`).
 
 **Working grid.** Each cell is covered by a regular grid in a local metric
 frame, spaced min(DEM pixel, √(bounding box / `n_samples`)), and the DEM is
@@ -2396,7 +2470,7 @@ Output arrays in `mesh.array_vars`:
                       north of the cell centre)
   "sgs_edge_sills"  — (n_slots × n_cells) sill per slot = lowest level of the face table
   "sgs_face_zr"     — (n_slots × n_cells) height of the tabulated range (m)
-  "sgs_face_A", "sgs_face_P", "sgs_face_K" — (NF·n_slots × n_cells) face tables
+  "sgs_face_A", "sgs_face_P", "sgs_face_K", "sgs_face_C" — (NF·n_slots × n_cells) face tables
                       (see `SGSTable`), column-major (level fastest)
   "sgs_face_raise"  — (n_slots × n_cells) sill − lowest point of the profile (m)
 
@@ -2407,7 +2481,7 @@ take the slots without an in-mesh neighbour (`boundary_side_slots`).
 mesh has no adjacency, it is computed with `grid_disk_neighbours` (A5 only).
 
 Output scalars in `mesh.static_vars`: "sgs_cell_area", "sgs_z_min",
-"sgs_z_max", "sgs_n_bins", "sgs_layout" (3), "sgs_connectivity" (1 or 0),
+"sgs_z_max", "sgs_n_bins", "sgs_layout" (4), "sgs_connectivity" (1 or 0),
 "sgs_n_grid" (grid points used per cell).
 """
 function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
@@ -2484,6 +2558,7 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     face_A_mat     = zeros(Float64, nf, n_slots, n)
     face_P_mat     = zeros(Float64, nf, n_slots, n)
     face_K_mat     = zeros(Float64, nf, n_slots, n)
+    face_C_mat     = zeros(Float64, nf, n_slots, n)
     cell_areas     = Vector{Float64}(undef, n)
     z_mins         = fill(NaN, n)
     z_maxs         = fill(NaN, n)
@@ -2638,11 +2713,12 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     function _store!(slot, ci, z, act, W)
         ok = [q for q in eachindex(z) if isfinite(z[q])]
         length(ok) >= 2 || return false
-        z0, zr, fa, fp, fk = face_table_from_profile(z[ok], W / length(ok); act = act[ok], nf = nf)
+        z0, zr, fa, fp, fk, fc = face_table_from_profile(z[ok], W / length(ok); act = act[ok], nf = nf)
         edge_sills_mat[slot, ci] = z0
         face_zr_mat[slot, ci]    = zr
         face_raise_mat[slot, ci] = z0 - minimum(z[ok])
         face_A_mat[:, slot, ci] .= fa; face_P_mat[:, slot, ci] .= fp; face_K_mat[:, slot, ci] .= fk
+        face_C_mat[:, slot, ci] .= fc
         return true
     end
     n_raised = 0; n_faces = 0; max_raise = 0.0
@@ -2674,6 +2750,7 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
                 face_A_mat[:, slot, ci] .= view(face_A_mat, :, slot_nb, cj)
                 face_P_mat[:, slot, ci] .= view(face_P_mat, :, slot_nb, cj)
                 face_K_mat[:, slot, ci] .= view(face_K_mat, :, slot_nb, cj)
+                face_C_mat[:, slot, ci] .= view(face_C_mat, :, slot_nb, cj)
                 continue
             end
             z  = side_z[ci][ki]; ai = side_act[ci][ki]; aj = side_act[cj][kj]
@@ -2713,12 +2790,13 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     mesh.array_vars["sgs_face_A"]     = reshape(face_A_mat, nf*n_slots, n)
     mesh.array_vars["sgs_face_P"]     = reshape(face_P_mat, nf*n_slots, n)
     mesh.array_vars["sgs_face_K"]     = reshape(face_K_mat, nf*n_slots, n)
+    mesh.array_vars["sgs_face_C"]     = reshape(face_C_mat, nf*n_slots, n)
 
     mesh.static_vars["sgs_cell_area"]    = cell_areas
     mesh.static_vars["sgs_z_min"]        = z_mins
     mesh.static_vars["sgs_z_max"]        = z_maxs
     mesh.static_vars["sgs_n_bins"]       = fill(Float64(n_bins), n)
-    mesh.static_vars["sgs_layout"]       = fill(3.0, n)   # 3: face tables (2: per-cell edge curves)
+    mesh.static_vars["sgs_layout"]       = fill(4.0, n)   # 4 (0.8.0): + critical integral, pixel-centre DEM; 3: face tables; 2: per-cell edge curves
     mesh.static_vars["sgs_connectivity"] = fill(connectivity ? 1.0 : 0.0, n)
     mesh.static_vars["sgs_n_grid"]       = n_grid
 
@@ -2770,6 +2848,8 @@ function sgs_table(mesh::A5Mesh, i::Int)::SGSTable
         fcol("sgs_face_A"), fcol("sgs_face_P"), fcol("sgs_face_K"),
         haskey(mesh.array_vars, "sgs_wet_cx") ? mesh.array_vars["sgs_wet_cx"][:, i] : zeros(n_bins),
         haskey(mesh.array_vars, "sgs_wet_cy") ? mesh.array_vars["sgs_wet_cy"][:, i] : zeros(n_bins),
+        haskey(mesh.array_vars, "sgs_face_C") ? fcol("sgs_face_C") :
+            _face_C_uniform(fcol("sgs_face_A"), fcol("sgs_face_P")),
     )
 end
 

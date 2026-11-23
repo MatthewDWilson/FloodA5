@@ -4,7 +4,9 @@ test_sgs_edge_ra_tables.jl — unit tests of the SGS face tables (layout 3, 0.7.
 One table per face, built from the DEM profile along the face
 (`A5Grid.face_table_from_profile`) and read by `A5Grid.face_apk`: flow area A,
 wetted width P and conveyance integral K = Σ dx·h^(5/3) on the face's own
-levels, continued analytically above the tabulated range. The tests compare
+levels, continued analytically above the tabulated range, and (layout 4,
+0.8.0) the critical integral C = Σ dx·h^(3/2) read by `A5Grid.face_crit` for
+the critical-flow limit (`_sgs_critical_q`). The tests compare
 them with analytic cross-sections (no DEM needed), including far above the
 highest point of the profile — where the tables before 0.7.0 stopped growing
 (case sgs_strip) — and the two conveyance forms of `_sgs_radius`.
@@ -35,10 +37,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     function _table(profile::Vector{Float64}, W::Float64, slot::Int; act = profile)
         nf = A5Grid.SGS_FACE_LEVELS
         z0 = fill(NaN, 5); zr = zeros(5); A = zeros(nf, 5); P = zeros(nf, 5); K = zeros(nf, 5)
-        z0[slot], zr[slot], A[:, slot], P[:, slot], K[:, slot] =
+        C = zeros(nf, 5)
+        z0[slot], zr[slot], A[:, slot], P[:, slot], K[:, slot], C[:, slot] =
             A5Grid.face_table_from_profile(profile, W / length(profile); act = act)
-        return A5Grid.SGSTable([0.0, 1.0], [0.0, 1.0], [0.0, 1.0], 1000.0, 0.0, 1.0, z0, zr, A, P, K)
+        return A5Grid.SGSTable([0.0, 1.0], [0.0, 1.0], [0.0, 1.0], 1000.0, 0.0, 1.0, z0, zr, A, P, K,
+                               zeros(2), zeros(2), C)
     end
+    "Exact critical integral Σ dx·h^(3/2) of a profile at level η."
+    _exact_c(profile, W, η) = sum(max(η - z, 0.0)^1.5 for z in profile) * W / length(profile)
     "Exact (A, P, K) of a profile at level η."
     function _exact(profile, W, η)
         dx = W / length(profile)
@@ -154,6 +160,36 @@ if abspath(PROGRAM_FILE) == @__FILE__
             @test K ≈ W * d^(5 / 3) rtol = 0.02
         end
         @test A5Grid.face_apk(t, 1, 7.0) == (0.0, 0.0, 0.0)
+        # no profile: the uniform-depth critical integral P·(A/P)^(3/2)
+        @test A5Grid.face_crit(t, 2, 6.0) ≈ W * 1.0^1.5 rtol = 0.02
+    end
+
+    @testset "F9 — critical integral and critical discharge (0.8.0)" begin
+        # flat face: C = W·H^(3/2); the critical discharge is the
+        # broad-crested-weir discharge √g (2/3)^(3/2) W H^(3/2) = 1.705 W H^(3/2)
+        W = 4.0; z = 5.0
+        t = _table(fill(z, 16), W, 3)
+        for H in (0.1, 0.5, 1.07, 3.0, 12.0)
+            @test A5Grid.face_crit(t, 3, z + H) ≈ W * H^1.5 rtol = 2e-3
+        end
+        @test _sgs_critical_q(A5Grid.face_crit(t, 3, z + 1.07)) ≈ 1.7047 * W * 1.07^1.5 rtol = 2e-3
+        @test 7.4 < _sgs_critical_q(A5Grid.face_crit(t, 3, z + 1.07)) < 7.6   # the notch of planar_embankment
+        @test A5Grid.face_crit(t, 3, z) == 0.0 && A5Grid.face_crit(t, 3, z - 1.0) == 0.0
+        @test A5Grid.face_crit(t, 1, z + 1.0) == 0.0                          # unused slot
+        # channel in a floodplain: within 2% of the profile at every level
+        prof = [i in 9:12 ? 9.0 : 10.0 + 0.01 * i for i in 1:40]; Wc = 20.0
+        tc = _table(prof, Wc, 2)
+        for η in (9.05, 9.5, 10.0, 10.2, 11.0, 14.0, 30.0)
+            @test A5Grid.face_crit(tc, 2, η) ≈ _exact_c(prof, Wc, η) rtol = 0.02
+        end
+        # activation levels: a point passes critical flow only from its level
+        act = copy(prof); act[1:20] .= 12.0
+        ta = _table(prof, Wc, 2; act = act)
+        @test A5Grid.face_crit(ta, 2, 11.5) ≈ _exact_c(prof[21:end], Wc / 2, 11.5) rtol = 0.02
+        # the critical integral grows with the level (the limit never closes a
+        # face that is wetter)
+        cs = [A5Grid.face_crit(tc, 2, η) for η in range(8.9, 40.0; length = 400)]
+        @test all(diff(cs) .>= 0.0)
     end
 
     println()

@@ -88,8 +88,11 @@ end
 _carl_fmt(x) = string(round(x; sigdigits = 4))
 _carl_list(m, key, jobs) = join(("$j $(_carl_fmt(m[j][key]))" for j in jobs), ", ")
 
-# Recorded 6 h values (HYDRAULICS §15.10–15.11; runs test/wp1_runs/r1b, bcnb, 0.2.6/0.3.0)
-const _CARL_SWE_STORAGE = Dict("a5_swe" => 2.690e6, "cart_swe" => 2.331e6)
+# Recorded 6 h values (HYDRAULICS §15.10–15.11; runs test/wp1_runs/r1b, bcnb, 0.2.6/0.3.0).
+# A5 re-recorded in 0.8.0 (DEM sampled at pixel centres, §15.14): SWE 2.690 →
+# 2.641 Mm³, arrival 6 688 → 6 676 s, SGS 1.755 → 1.775 Mm³. The Cartesian mesh
+# takes the raster's pixels and is unchanged.
+const _CARL_SWE_STORAGE = Dict("a5_swe" => 2.641e6, "cart_swe" => 2.331e6)
 const _CARL_LI_RATIO = Dict("a5_li" => 1.25, "cart_li" => 0.99)
 
 const _CARL_CHECKS = [
@@ -101,7 +104,7 @@ const _CARL_CHECKS = [
     # The reference is converged in its own parameters (Courant 0.7 vs 0.35, eddy
     # viscosity: storage equal to 3 digits; twin rms 0.3 mm): 1% allows for
     # round-off-level changes of the bed (mesh regeneration) and the code since 0.2.6.
-    Check("SWE 6 h storage = recorded (A5 2.690, Cartesian 2.331 Mm³) ± 1%",
+    Check("SWE 6 h storage = recorded (A5 2.641, Cartesian 2.331 Mm³) ± 1%",
           m -> all(abs(m[j]["storage_m3"] / v - 1) <= 0.01 for (j, v) in _CARL_SWE_STORAGE);
           detail = m -> _carl_list(m, "storage_m3", ("a5_swe", "cart_swe"))),
     # Halving the Courant number changes the local-inertial 6 h storage by 0.2%
@@ -119,15 +122,16 @@ const _CARL_CHECKS = [
     Check("extent vs SWE at 0.1 m: CSI ≥ 0.55; rms Δh ≤ 0.35 m",
           m -> all(m[j]["csi"] >= 0.55 && m[j]["rms_dh"] <= 0.35 for j in ("a5_li", "cart_li"));
           detail = m -> _carl_list(m, "csi", ("a5_li", "cart_li")) * "; rms " * _carl_list(m, "rms_dh", ("a5_li", "cart_li"))),
-    # Recorded SWE arrival (50 000 m³ out): 6 688 s (A5), 5 736 s (Cartesian).
-    Check("SWE arrival (50 000 m³ out) = recorded (A5 6 688, Cartesian 5 736 s) ± 2%",
-          m -> abs(m["a5_swe"]["arrival_s"] / 6688 - 1) <= 0.02 && abs(m["cart_swe"]["arrival_s"] / 5736 - 1) <= 0.02;
+    # Recorded SWE arrival (50 000 m³ out): 6 676 s (A5, 0.8.0), 5 736 s (Cartesian).
+    Check("SWE arrival (50 000 m³ out) = recorded (A5 6 676, Cartesian 5 736 s) ± 2%",
+          m -> abs(m["a5_swe"]["arrival_s"] / 6676 - 1) <= 0.02 && abs(m["cart_swe"]["arrival_s"] / 5736 - 1) <= 0.02;
           detail = m -> _carl_list(m, "arrival_s", ("a5_swe", "cart_swe"))),
-    # SGS has no reference here: a regression pin on the recorded 0.7.0 run,
-    # ±2% as the local-inertial time-step sensitivity. (Until 0.6.0: 4.30 Mm³,
-    # 1.6× the SWE reference — conveyance held back; cases/expected/v0.6.0/.)
-    Check("SGS 6 h storage = recorded 1.755 Mm³ ± 2%",
-          m -> abs(m["a5_sgs"]["storage_m3"] / 1.755e6 - 1) <= 0.02;
+    # SGS has no reference here: a regression pin on the recorded 0.8.0 run,
+    # ±2% as the local-inertial time-step sensitivity. (0.7.x: 1.755 Mm³; until
+    # 0.6.0: 4.30 Mm³, 1.6× the SWE reference — conveyance held back;
+    # cases/expected/v0.6.0/.)
+    Check("SGS 6 h storage = recorded 1.775 Mm³ ± 2%",
+          m -> abs(m["a5_sgs"]["storage_m3"] / 1.775e6 - 1) <= 0.02;
           detail = m -> _carl_list(m, "storage_m3", ("a5_sgs",))),
     # The 10 mm/h rain is a test forcing: early in the event (inflow 100–230 m³/s)
     # the river alone wets little more than its channels, so most of the 6 h
@@ -161,9 +165,9 @@ let
         (50 000 m³ out); each local-inertial run against the SWE run on its
         mesh (storage ratio, rms Δh over wet cells, CSI and bias of the extent
         at 0.1 m, mean speed ratio where the reference is ≥ 3 m deep). The
-        checks are the §15.10–15.11 record: SWE 2.690 / 2.331 Mm³ and arrival
-        6 688 / 5 736 s; local-inertial 1.25× SWE on A5, 0.99× on Cartesian;
-        SGS 4.30 Mm³. CPU, one 4-thread run at a time: about 50 min (SWE 21
+        checks are the §15.10–15.11 record (A5 re-recorded in 0.8.0, §15.14):
+        SWE 2.641 / 2.331 Mm³ and arrival 6 676 / 5 736 s; local-inertial
+        1.25× SWE on A5, 0.99× on Cartesian; SGS 1.775 Mm³. CPU, one 4-thread run at a time: about 50 min (SWE 21
         and 17 min, the others 1.5–2.5 min), plus 7 min of mesh generation.
         A5 results are sensitive to round-off in the bed: a regenerated A5 mesh
         that differed from the recorded one by ≤ 3e-9 m in elevation moved the
@@ -292,10 +296,11 @@ let
         boundaries and the river initially dry. Compared over the 6 h before the
         peak (49.5, 52.5 and 55.5 h): each local-inertial run against the SWE
         reference on its mesh (storage ratio, rms Δh, CSI and bias of the extent
-        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 against the A5 SWE
-        run (storage, water level where both are wet, extent by mean depth
-        V/A), with the agreed bar as an expected failure (see
-        `carlisle_peak_fine` for the 5 m references).
+        at 0.1 m), on A5 res 18 and Cartesian 20 m; SGS on A5 (with and without
+        the critical-flow limit of 0.8.0) against the A5 SWE run (storage, water
+        level where both are wet, extent by mean depth V/A), for information:
+        the 22 m SWE run is not a reference. The benchmark is the 5 m SWE run
+        of `carlisle_peak_fine`, whose checks hold the agreed SGS bar.
         Uses the `carlisle` case's meshes (run `cases/run.jl prep carlisle`
         first).""",
         prep = Prep[],
@@ -308,6 +313,10 @@ let
                 Job("cart_li", vcat(["--meshload", cart, "--flow-model", "standard"], _CARL_PEAK_RUN);
                     mesh = "cartesian", solver = "li", reference = "cart_swe"),
                 Job("a5_sgs", vcat(["--meshload", sgsmesh, "--flow-model", "sgs"], _CARL_PEAK_RUN);
+                    mesh = "a5", solver = "sgs", reference = "a5_swe"),
+                # the 0.7.x SGS hydraulics (no critical-flow limit) on the same tables
+                Job("a5_sgs_nocrit", vcat(["--meshload", sgsmesh, "--flow-model", "sgs", "--sgs-critical", "off"],
+                                          _CARL_PEAK_RUN);
                     mesh = "a5", solver = "sgs", reference = "a5_swe")],
         analyse = _carl_peak_metrics,
         checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
@@ -333,28 +342,11 @@ let
                   # the two LI runs nearly coincide (1%); the references differ by 12%
                   Check("the A5 and Cartesian local-inertial runs store within 5% of each other at 55.5 h",
                         m -> abs(m["a5_li"]["storage_w1_m3"] / m["cart_li"]["storage_w1_m3"] - 1) < 0.05;
-                        detail = m -> _carl_list(m, "storage_w1_m3", ("a5_li", "cart_li"))),
-                  # The bar for SGS (plan of 2026-11, agreed): if a sub-grid model is no
-                  # closer to the full shallow-water reference than the cell-mean
-                  # local-inertial model on the same mesh, there is little evidence of
-                  # its benefit.
-                  Check("SGS on A5 is no further from the SWE reference than local-inertial on the same mesh, at 49.5, " *
-                        "52.5 and 55.5 h: storage, rms water-level difference and extent (CSI at 0.1 m mean depth)",
-                        m -> all(abs(m["a5_sgs"]["storage_ratio_$w"] - 1) <= abs(m["a5_li"]["storage_ratio_$w"] - 1) &&
-                                 m["a5_sgs"]["rms_dh_$w"] <= m["a5_li"]["rms_dh_$w"] &&
-                                 m["a5_sgs"]["csi_$w"] >= m["a5_li"]["csi_$w"] for w in ("w0", "wmid", "w1"));
-                        detail = m -> join(("$w: storage ÷ SWE $(round(m["a5_sgs"]["storage_ratio_$w"]; digits = 3)) " *
-                                            "(LI $(round(m["a5_li"]["storage_ratio_$w"]; digits = 3))), rms Δη " *
-                                            "$(round(m["a5_sgs"]["rms_dh_$w"]; digits = 3)) m (LI $(round(m["a5_li"]["rms_dh_$w"]; digits = 3))), " *
-                                            "CSI $(round(m["a5_sgs"]["csi_$w"]; digits = 3)) (LI $(round(m["a5_li"]["csi_$w"]; digits = 3)))"
-                                            for w in ("w0", "wmid", "w1")), "; "),
-                        xfail = "0.7.0: SGS stores 0.52–0.57 of the 22 m SWE run (local-inertial 0.74–0.76). " *
-                                "The 22 m SWE run is not a reference: against the 5 m references (case " *
-                                "carlisle_peak_fine; plan §9.3a) it stores 24% more than 5 m SWE, SGS is closest of " *
-                                "the 22 m models to 5 m local-inertial (level −0.14 m median), and local-inertial " *
-                                "itself conveys more than SWE at 5 m. The bar is to be restated against the 5 m runs")],
-        # (the SGS bar, agreed 2026-11-16, is the last check below. Until 0.7.0
-        # SGS stored 2.5× SWE here, the Eden ~3 m high: cases/expected/v0.6.0/)
+                        detail = m -> _carl_list(m, "storage_w1_m3", ("a5_li", "cart_li")))],
+        # The SGS bar (agreed 2026-11-16) was checked here against the 22 m SWE run
+        # until 0.7.1 (an expected failure); since 0.8.0 it is checked against the
+        # 5 m SWE benchmark in `carlisle_peak_fine`. Until 0.7.0 SGS stored 2.5×
+        # SWE here, the Eden ~3 m high: cases/expected/v0.6.0/.
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end
@@ -370,6 +362,61 @@ end
 # about a day for SWE; they are not part of `carlisle_peak`, which must stay
 # runnable on a CPU in under an hour. The mesh is the benchmark suite's
 # (`julia --project=. benchmarks/run.jl`, test/case_runs/perf/).
+"The 22 m runs of `carlisle_peak` compared with the 5 m runs (`_carl_fine_metrics`)."
+const _CARL_FINE_VS = ("a5_swe", "a5_li", "a5_sgs", "a5_sgs_nocrit", "cart_swe", "cart_li")
+
+"""
+Metrics of `carlisle_peak_fine`: each 5 m run's storage, and for each 22 m run
+of `carlisle_peak` (entries `vs5:<job>`) its comparison with each 5 m run
+aggregated onto its cells (`FA.compare_to_fine`; prefixes `swe5_`, `li5_`) at
+49.5, 52.5 and 55.5 h (`_w0`, `_wmid`, `_w1`): storage ratio, the median and
+rms of the water-level difference where both are at least half wet, and the
+CSI of the wetted area at 0.1 m local depth (SGS: from its tables).
+"""
+function _carl_fine_metrics(ctx)
+    out = Dict{String,Dict{String,Float64}}()
+    for (name, r) in ctx.runs
+        out[name] = Dict("t_end" => r.t[end], "storage_w1_m3" => FA.stored_volume(r, FA.nframes(r)))
+    end
+    peak = case("carlisle_peak")
+    t0, t1 = _CARL_PEAK_WINDOW
+    owners = Dict{String,Any}()                    # coarse mesh → fine-cell owners
+    for j in peak.jobs
+        j.name in _CARL_FINE_VS || continue
+        job_status(peak, j) === :done || (@warn "carlisle_peak_fine: carlisle_peak/$(j.name) is not complete"; continue)
+        r = FA.load_run(job_output(peak, j))
+        mesh = j.args[findfirst(==("--meshload"), j.args) + 1]
+        tables = get(j.tags, :solver, "") == "sgs" ? FA.sgs_tables(r) : nothing
+        d = Dict{String,Float64}()
+        for (fname, fjob) in (("swe5", "cart5_swe"), ("li5", "cart5_li"))
+            for (tag, t) in (("w0", t0), ("wmid", (t0 + t1) / 2), ("w1", t1))
+                c = FA.compare_to_fine(ctx.runs[fjob], r, t; tol = _CARL_PEAK_TOL,
+                                       owner = get(owners, mesh, nothing), tables)
+                owners[mesh] = c.owner
+                d["$(fname)_storage_ratio_$tag"] = c.storage_ratio
+                d["$(fname)_level_median_$tag"] = c.level_median
+                d["$(fname)_level_rms_$tag"] = c.level_rms
+                d["$(fname)_csi_$tag"] = c.csi
+            end
+        end
+        out["vs5:" * j.name] = d
+    end
+    return out
+end
+
+"SGS (`s`) no further from the 5 m run `ref` (SWE) than local-inertial (`l`) at the three times."
+_carl_bar(m, s, l; ref = "swe5") =
+    all(abs(m[s]["$(ref)_storage_ratio_$w"] - 1) <= abs(m[l]["$(ref)_storage_ratio_$w"] - 1) &&
+        m[s]["$(ref)_level_rms_$w"] <= m[l]["$(ref)_level_rms_$w"] &&
+        m[s]["$(ref)_csi_$w"] >= m[l]["$(ref)_csi_$w"] for w in ("w0", "wmid", "w1"))
+function _carl_bar_detail(m, s, l; ref = "swe5")
+    r(k, w) = round(m[s]["$(ref)_$(k)_$w"]; digits = 3)
+    rl(k, w) = round(m[l]["$(ref)_$(k)_$w"]; digits = 3)
+    join(("$w: storage ÷ 5 m $(ref == "swe5" ? "SWE" : "LI") $(r("storage_ratio", w)) " *
+          "(LI $(rl("storage_ratio", w))), rms Δη $(r("level_rms", w)) m (LI $(rl("level_rms", w))), " *
+          "CSI $(r("csi", w)) (LI $(rl("csi", w)))" for w in ("w0", "wmid", "w1")), "; ")
+end
+
 let
     cart5 = "{case}/../perf/carlisle_cart5.parquet"
     gpu(prec) = ["--backend", "gpu", "--precision", prec]
@@ -380,8 +427,12 @@ let
         description = """
         The `carlisle_peak` event (55.5 h, river inflow only) on the 5 m Cartesian
         mesh of the same domain (582 012 cells), local-inertial (GPU, Float64) and
-        SWE (GPU, Float32), output every 30 min. The reference against which the
-        22 m runs of `carlisle_peak` — standard, SWE and SGS — are compared.
+        SWE (GPU, Float32), output every 30 min. The 5 m SWE run is the
+        benchmark for the 22 m runs of `carlisle_peak` — standard, SWE and SGS
+        (decided 2026-11-23) — which this case's analysis compares with both
+        5 m runs on their own cells (run `carlisle_peak` first); it holds the
+        agreed SGS bar. The 5 m mesh takes its elevations from the raster's
+        pixels, so the DEM registration fix of 0.8.0 does not change it.
         Needs a CUDA GPU and the 5 m mesh of the benchmark suite; hours
         (local-inertial) to about a day (SWE).""",
         prep = Prep[],
@@ -389,9 +440,27 @@ let
                     threads = 2, mesh = "cartesian5", solver = "li"),
                 Job("cart5_swe", vcat(["--meshload", cart5, "--flow-model", "swe"], _CARL_PEAK_RUN, gpu("float32"));
                     threads = 2, mesh = "cartesian5", solver = "swe")],
-        analyse = ctx -> Dict(name => Dict("t_end" => r.t[end], "storage_w1_m3" => FA.stored_volume(r, FA.nframes(r)))
-                              for (name, r) in ctx.runs),
+        analyse = _carl_fine_metrics,
         checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
-                        m -> all(d["mass_balance_rel"] < 1e-6 for (_, d) in m))],
+                        m -> all(d["mass_balance_rel"] < 1e-6 for (k, d) in m if haskey(d, "mass_balance_rel"))),
+                  Check("the 22 m runs of carlisle_peak are all compared (run that case first)",
+                        m -> all(haskey(m, "vs5:" * j) for j in _CARL_FINE_VS)),
+                  # The bar for SGS (plan of 2026-11, agreed 2026-11-16; benchmark the
+                  # 5 m SWE run since 2026-11-23): if a sub-grid model is no closer to
+                  # the full shallow-water equations resolved at 5 m than the cell-mean
+                  # local-inertial model on the same mesh, there is little evidence of
+                  # its benefit.
+                  Check("SGS on A5 is no further from the 5 m SWE benchmark than local-inertial on the same mesh, " *
+                        "at 49.5, 52.5 and 55.5 h: storage, rms water-level difference and extent (CSI at 0.1 m)",
+                        m -> _carl_bar(m, "vs5:a5_sgs", "vs5:a5_li");
+                        detail = m -> _carl_bar_detail(m, "vs5:a5_sgs", "vs5:a5_li") *
+                                      " | against the 5 m local-inertial run: " *
+                                      _carl_bar_detail(m, "vs5:a5_sgs", "vs5:a5_li"; ref = "li5"),
+                        xfail = "the hydraulics, not the SGS geometry (HYDRAULICS §15.14): at 5 m the " *
+                                "local-inertial equations store 0.84 of SWE's volume, and SGS — local-inertial " *
+                                "on its tables — stores 0.87 of the 5 m local-inertial run, closer to it in " *
+                                "level and extent than the cell-mean run; the cell-mean run matches SWE's " *
+                                "storage by compensating errors (its beds store ~1.15× the 5 m local-inertial " *
+                                "run). Needs a hydraulic formulation with momentum on the SGS geometry")],
     ))
 end

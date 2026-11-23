@@ -451,6 +451,7 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
         A_edge, P_edge, K_edge = A5Grid.face_apk(state.sgs_tables[ci], slot_ia[e], wse_flow)
         R_edge = _sgs_radius(A_edge, P_edge, K_edge, SGS_CONVEYANCE[] === :twod)
         L_e = edges.L[e]; ct_e = edges.cos_theta[e]
+        a_p = 1.0
         if SGS_PATH[]                          # flow path of partly wet cells (0.7.0)
             a_p, L_g = _sgs_path(ws.e_dx[e], ws.e_dy[e], edges.nf_x[e], edges.nf_y[e], L_e, ct_e,
                                  ws.wcx[ci], ws.wcy[ci], ws.wcx[cj], ws.wcy[cj], ws.wfrac[ci], ws.wfrac[cj])
@@ -527,6 +528,14 @@ function step_sgs_reference!(state::FlowState, dt::Float64; velocity::Bool = tru
                               L_e, ct_e,
                               0.5 * (state.manning_n[ci] + state.manning_n[cj]),
                               dt; Q_t = Q_t, vector_friction = vector_friction)
+        end
+
+        # Critical-flow limit (0.8.0; a deliberate change of this frozen loop,
+        # as the kernel's — `_sgs_critical_q`).
+        if SGS_CRITICAL[] && Q_new != 0.0
+            E_up = Q_new > 0.0 ? wse_cj_eff : wse_ci_eff
+            Q_c = _sgs_critical_q(A5Grid.face_crit(state.sgs_tables[ci], slot_ia[e], E_up)) * a_p
+            abs(Q_new) > Q_c && (Q_new = copysign(Q_c, Q_new))
         end
 
         # Fix C: store Q (m³/s) as momentum state for next step.

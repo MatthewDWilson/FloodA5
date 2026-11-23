@@ -476,6 +476,7 @@ struct SGSTable
     face_P           :: Matrix{Float64}   # (NF × n_slots) wetted width (m)
     face_K           :: Matrix{Float64}   # (NF × n_slots) Σ dx·h^(5/3) (m^(8/3))
     wet_cx, wet_cy   :: Vector{Float64}   # (n_bins) wetted-area centroid (m from the cell centre)
+    face_C           :: Matrix{Float64}   # (NF × n_slots) Σ dx·h^(3/2) (m^(5/2)), layout 4 (0.8.0)
 end
 ```
 
