@@ -217,6 +217,8 @@ end
 # box would reach past the DEM, and cells without elevation are walls.
 const _MF_CARL_FAMS = ["rotcart", "hex", "voronoi", "voronoi_jit", "h3", "igeo7", "isea3h", "healpix", "rhealpix"]
 const _MF_CARL_PEAK = ("a5_li", "a5_sgs", "cart_li")     # from carlisle_peak
+const _MF_CARL_RISE = 40 * 3600.0                          # rising limb from here to the peak
+const _MF_CARL_EXTREMA = 0.05    # checkerboard: fraction of wet cells that are local level extrema
 
 """
 Metrics of `mesh_families_carlisle`: every run (and `carlisle_peak`'s
@@ -224,6 +226,20 @@ $(join(_MF_CARL_PEAK, ", ")) as `peak:<job>`) against the 5 m runs of
 `carlisle_peak_fine` aggregated onto its cells, at 49.5, 52.5 and 55.5 h
 (`FA.compare_to_fine`, as `carlisle_peak_fine`'s `vs5:` entries).
 """
+# A run of another case, read as a reference: it must have completed. A
+# different command line (`:changed`) is accepted with a warning — notably the
+# same run made from another checkout (`git worktree`), whose `{repo}` paths
+# differ; the reference is only read, never re-run from here.
+function _mf_ref_run(c, j)
+    st = job_status(c, j)
+    st === :done && return job_output(c, j)
+    if st === :changed && get(get(FO.run_info(job_output(c, j)), "summary", Dict()), "completed", false) == true
+        @warn "mesh_families_carlisle: $(c.name)/$(j.name) was made with another command line (another checkout?); using it as the reference"
+        return job_output(c, j)
+    end
+    error("mesh_families_carlisle: $(c.name)/$(j.name) is not complete ($st) — run that case first")
+end
+
 function _mf_carl_metrics(ctx)
     runs = Dict{String,Any}(ctx.runs)
     tables = Dict{String,Any}(n => (get(j.tags, :solver, "") == "sgs" ? FA.sgs_tables(ctx.runs[n]) : nothing)
@@ -231,8 +247,7 @@ function _mf_carl_metrics(ctx)
     peak = case("carlisle_peak")
     for j in peak.jobs
         j.name in _MF_CARL_PEAK || continue
-        job_status(peak, j) === :done || error("mesh_families_carlisle: carlisle_peak/$(j.name) is not complete — run that case first")
-        r = FA.load_run(job_output(peak, j))
+        r = FA.load_run(_mf_ref_run(peak, j))
         runs["peak:" * j.name] = r
         tables["peak:" * j.name] = get(j.tags, :solver, "") == "sgs" ? FA.sgs_tables(r) : nothing
     end
@@ -240,8 +255,7 @@ function _mf_carl_metrics(ctx)
     ref = Dict{String,Any}()
     for (tag, job) in (("swe5", "cart5_swe"), ("li5", "cart5_li"))
         j = only(filter(x -> x.name == job, fine.jobs))
-        job_status(fine, j) === :done || error("mesh_families_carlisle: carlisle_peak_fine/$job is not complete")
-        ref[tag] = FA.load_run(job_output(fine, j))
+        ref[tag] = FA.load_run(_mf_ref_run(fine, j))
     end
     t0, t1 = _CARL_PEAK_WINDOW
     out = Dict{String,Dict{String,Float64}}()
@@ -258,6 +272,18 @@ function _mf_carl_metrics(ctx)
             d["$(fname)_level_rms_$tag"] = c.level_rms
             d["$(fname)_csi_$tag"] = c.csi
         end
+        # Smoothness through the rising limb: storage drops between frames
+        # from 40 h (the inflow rises throughout), the peak window's maximum
+        # depth, and the checkerboard metrics at 55.5 h (FA.noise_metrics).
+        ks = [k for k in 1:FA.nframes(r) if r.t[k] >= _MF_CARL_RISE - _CARL_PEAK_TOL]
+        S = [FA.stored_volume(r, k) for k in ks]
+        d["storage_drop_rel"] = sum(max(0.0, S[i-1] - S[i]) for i in 2:length(S)) / S[end]
+        d["max_depth_peak_m"] = maximum(maximum(x for x in FA.depth(r, k) if isfinite(x))
+                                        for k in ks if r.t[k] >= t0 - _CARL_PEAK_TOL)
+        nm = FA.noise_metrics(r, FA.frame_at(r, t1; tol = _CARL_PEAK_TOL))
+        d["noise_r_rms_w1_mm"] = nm.r_rms
+        d["noise_extrema_w1"] = nm.extrema
+        d["noise_dv_rms_w1"] = nm.dv_rms
         out[name] = d
     end
     return out
@@ -298,12 +324,34 @@ let
         checks = [Check("mass conserved (|conservation error| < 1e-6 of the volume applied)",
                         m -> all(d["mass_balance_rel"] < 1e-6 for (k, d) in m if haskey(d, "mass_balance_rel"));
                         detail = m -> _mf_list(Dict(k => d for (k, d) in m if haskey(d, "mass_balance_rel")), "mass_balance_rel"; digits = 9)),
-                  Check("volume added = the hydrographs' integral (|input error| < 1e-5)",
-                        m -> all(abs(d["input_error_rel"]) < 1e-5 for (k, d) in m if haskey(d, "input_error_rel"))),
+                  # The input error is the hydrographs' first-order time
+                  # integration, ∝ Δt: carlisle_peak's 1e-5 bound (its A5
+                  # local-inertial run: −8.7e-6) is just exceeded by the
+                  # longer steps of some ~23 m meshes (ISEA3H −1.01e-5).
+                  Check("volume added = the hydrographs' integral (|input error| < 2e-5)",
+                        m -> all(abs(d["input_error_rel"]) < 2e-5 for (k, d) in m if haskey(d, "input_error_rel"));
+                        detail = m -> _mf_list(Dict(k => d for (k, d) in m if haskey(d, "input_error_rel")), "input_error_rel"; digits = 8)),
                   Check("every family compared with the 5 m runs at the three times",
                         m -> all(isfinite(get(get(m, k, Dict()), "swe5_csi_w1", NaN))
                                  for k in vcat(["$(f)_$s" for f in _MF_CARL_FAMS for s in ("li", "sgs")],
-                                               ["peak:" * j for j in _MF_CARL_PEAK])))],
+                                               ["peak:" * j for j in _MF_CARL_PEAK]))),
+                  Check("local-inertial smooth on every mesh: storage never falls on the rising limb (40–55.5 h), " *
+                        "< $(_MF_CARL_EXTREMA) of the wet cells local level extrema at 55.5 h",
+                        m -> all(d["storage_drop_rel"] == 0 && d["noise_extrema_w1"] < _MF_CARL_EXTREMA
+                                 for (k, d) in m if endswith(k, "_li"));
+                        detail = m -> _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_li")), "noise_extrema_w1"; digits = 3)),
+                  Check("SGS smooth on every mesh: storage never falls on the rising limb (40–55.5 h), " *
+                        "< $(_MF_CARL_EXTREMA) of the wet cells local level extrema at 55.5 h",
+                        m -> all(d["storage_drop_rel"] == 0 && d["noise_extrema_w1"] < _MF_CARL_EXTREMA
+                                 for (k, d) in m if endswith(k, "_sgs"));
+                        detail = m -> _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "noise_extrema_w1"; digits = 3) *
+                                      " | storage drops: " *
+                                      _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "storage_drop_rel"; digits = 3),
+                        xfail = "SGS checkerboards on most non-A5 meshes (docs/TEST_CASES.md §8): smooth on A5, " *
+                                "ISEA3H and jittered Voronoi, checkerboarded on hex and centroidal Voronoi (0.08–0.14), " *
+                                "H3, IGEO7, HEALPix (0.17–0.23), rHEALPix and rotated Cartesian (0.36–0.42, with " *
+                                "storage oscillating on the rising limb); local-inertial is smooth on all. An open " *
+                                "SGS finding (PROJECT_STATE), not a Phase B change")],
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end

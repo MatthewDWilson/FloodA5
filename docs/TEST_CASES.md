@@ -1031,7 +1031,7 @@ Each case generates its own meshes in `test/case_runs/<case>/`.
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_point_spread -P 3 -T 4   # ~5 min
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_planar_slope -P 3 -T 4   # ~10 min
 FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_channel -P 3 -T 4        # ~45 min
-FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_carlisle -P 3 -T 4       # hours (full tier)
+FLOODA5_NO_VIS=1 julia --project=. cases/run.jl run mesh_families_carlisle -P 3 -T 4       # ~10 h (full tier)
 ```
 
 The numbers below were recorded with the branch of 0.8.1 (the expected values
@@ -1129,6 +1129,54 @@ agree on all of this (both columns), so it is the meshes, not the
 local-inertial scheme. Water leaves the channel in few runs: local-inertial
 on Cartesian at 45° (32 m of wet floodplain per metre of reach) and on HEALPix
 at 15–45° (10–12 m; SWE 3.5 m at 30–45°).
+
+### `mesh_families_carlisle`: a real event on every mesh
+
+`carlisle_peak` (the Eden peak, 55.5 h, inflows only) on the families that
+case does not run, local-inertial and SGS (tables from the 5 m DEM); the
+planar meshes keep the cells meeting the domain polygon (`--clip`). Every
+run, with `carlisle_peak`'s A5 and 20 m Cartesian runs, is compared on its
+own cells with `carlisle_peak_fine`'s 5 m runs (HYDRAULICS §15.14). Needs
+those two cases run first; 18 runs, about 10 h on 3 × 4 threads. At 55.5 h,
+against the 5 m SWE benchmark (storage ratio, rms water-level difference,
+CSI at 0.1 m); "rms vs 5 m LI" is SGS against the 5 m local-inertial run,
+which SGS approximates; "extrema" is the fraction of fully wet cells that are
+local water-level extrema (`FA.noise_metrics`; a checkerboard).
+
+| Mesh (√ mean area) | LI storage | LI rms (m) | LI CSI | SGS storage | SGS rms (m) | SGS CSI | SGS rms vs 5 m LI | SGS extrema |
+|---|---|---|---|---|---|---|---|---|
+| cart (20.0 m) | 0.946 | 0.289 | 0.853 | – | – | – | – | – |
+| rotcart (22.2 m) | 0.953 | 0.291 | 0.845 | 0.959 | 0.417 | 0.882 | 0.526 | **0.42** |
+| hex (22.2 m) | 0.920 | 0.265 | 0.841 | 0.774 | 0.492 | 0.872 | 0.159 | 0.08 |
+| voronoi (22.2 m) | 0.929 | 0.275 | 0.840 | 0.749 | 0.544 | 0.842 | 0.209 | 0.14 |
+| voronoi_jit (22.2 m) | 0.970 | 0.268 | 0.831 | 0.756 | 0.530 | 0.843 | 0.204 | 0.008 |
+| a5 (22.2 m) | 0.943 | 0.254 | 0.848 | 0.735 | 0.515 | 0.813 | 0.159 | 0.009 |
+| h3 (16.4 m) | 0.868 | 0.283 | 0.877 | 0.714 | 0.564 | 0.815 | 0.325 | 0.18 |
+| igeo7 (22.9 m) | 0.943 | 0.269 | 0.832 | 0.823 | 0.598 | 0.829 | 0.564 | 0.17 |
+| isea3h (23.2 m) | 0.915 | 0.277 | 0.833 | 0.703 | 0.547 | 0.799 | 0.234 | 0.006 |
+| healpix (24.8 m) | 0.995 | 0.300 | 0.823 | 0.761 | 0.446 | 0.825 | 0.217 | 0.23 |
+| rhealpix (17.3 m) | 0.939 | 0.261 | 0.874 | 0.763 | 0.549 | 0.850 | 0.267 | **0.36** |
+
+Local-inertial: on a real event the mesh family matters little at matched
+cell size — storage 0.92–0.97 of the benchmark's, level rms 0.25–0.30 m, CSI
+0.82–0.85 on every ~22 m mesh. The finer H3 and rHEALPix meshes have the
+best extents (CSI 0.88); A5 the lowest level rms, by a few centimetres. All
+of them are smooth (extrema ≤ 0.008, storage rising throughout).
+
+SGS stores 0.70–0.82 of the benchmark's volume, as on A5 (§15.14: it is
+local-inertial on the 5 m geometry, and close to the 5 m local-inertial
+run). **But SGS checkerboards on most of the other meshes** — a finding of
+this case, recorded as an expected failure (`xfail`) until it is fixed:
+smooth on A5, ISEA3H and the jittered Voronoi mesh; a checkerboard over
+8–23% of the wet cells on hexagons, centroidal Voronoi, H3, IGEO7 and
+HEALPix; and over 36–42% on rHEALPix and the rotated grid, where the stored
+volume also oscillates on the rising limb (by 36% of the peak storage on
+rHEALPix, frame to frame) and Δt and the maximum depth jump (to 11 m, against
+7 m for local-inertial). The rotated grid's SGS storage (0.96) is that
+noise, not accuracy. On the smooth meshes SGS stays within 0.16–0.23 m rms
+of the 5 m local-inertial run; on the noisy ones up to 0.56 m. The pattern
+follows neither regularity nor orthogonality (ISEA3H's hexagons are smooth,
+the planar ones are not); it is open (PROJECT_STATE), for the SGS work.
 
 ---
 

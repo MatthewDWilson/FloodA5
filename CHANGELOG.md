@@ -33,6 +33,8 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-11-24
+
 DGGS mesh families, Phase B (WP3 part 3, branch `wp3d-dggs-phaseb`; PATCH:
 default results unchanged, no solver change).
 
@@ -65,6 +67,10 @@ default results unchanged, no solver change).
   (against the 5 m references) on eleven meshes at ~22 m — Cartesian, rotated
   Cartesian, hexagons, centroidal and jittered Voronoi, A5, H3, IGEO7,
   ISEA3H, HEALPix, rHEALPix.
+- Finding (open): SGS checkerboards at Carlisle on most non-A5 meshes —
+  rHEALPix and the rotated grid worst, with the storage oscillating;
+  smooth on A5, ISEA3H and jittered Voronoi; local-inertial is smooth on
+  every mesh (`mesh_families_carlisle`, an `xfail` check; TEST_CASES §8).
 - Tests: `test/test_dggs_meshes.jl` C (command line, metadata, `--rerun`),
   `test/test_sgs_general.jl` S8 (SGS on H3, IGEO7, HEALPix), S9 (SGS tables
   for a loaded mesh from the command line).
