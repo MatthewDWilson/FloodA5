@@ -209,20 +209,21 @@ function _face_flux_std_list!(opts::StdOpts, M, act::Vector{Int}, n_act::Int, dt
 end
 
 """
-    SGSOpts{GC, QCC, VF, POS, K2D, PG}
+    SGSOpts{GC, QCC, VF, POS, K2D, PG, CR}
 
 SGS (R–A kernel) options as type parameters: gradient correction (Bool),
 consistent Q-centring (Bool; otherwise `_q_centred` with whatever partner
 signs the edge list holds), vector friction (Bool), positivity limiting (Bool),
 2-D conveyance (Bool; `SGS_CONVEYANCE[]`, see `_sgs_radius`), flow-path geometry
-(Bool; `SGS_PATH[]`, see `_sgs_path`).
+(Bool; `SGS_PATH[]`, see `_sgs_path`), critical-flow limit (Bool;
+`SGS_CRITICAL[]`, see `_sgs_critical_q`; 0.8.0).
 """
-struct SGSOpts{GC, QCC, VF, POS, K2D, PG} end
+struct SGSOpts{GC, QCC, VF, POS, K2D, PG, CR} end
 
 SGSOpts(state::FlowState) =
     SGSOpts{state.gradient_correction, state.q_centre_mode === :consistent,
             state.friction_model === :vector, state.limiter !== :legacy,
-            SGS_CONVEYANCE[] === :twod, SGS_PATH[]}()
+            SGS_CONVEYANCE[] === :twod, SGS_PATH[], SGS_CRITICAL[]}()
 
 function _sgs_arrays(state::FlowState, ws::StepWorkspace)
     E = state.edges
@@ -247,8 +248,8 @@ Phase A of `step_sgs!` for edge `e` (R–A kernel; Q in M.flux_Q[e], edge volume
 after the donor cap with Fix C back-propagation in M.edge_vol[e]). Transcribed
 from the stage-1 loop body; bit-identical to it.
 """
-@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS, K2D, PG}, M,
-                                 dt::Float64) where {GC, QCC, VF, POS, K2D, PG}
+@inline function _face_flux_sgs!(e::Int, ::SGSOpts{GC, QCC, VF, POS, K2D, PG, CR}, M,
+                                 dt::Float64) where {GC, QCC, VF, POS, K2D, PG, CR}
     @inbounds begin
         ci = M.ci[e]; cj = M.cj[e]
         M.face_A[e] = 0.0                      # set below if the face is wet
@@ -279,6 +280,7 @@ from the stage-1 loop body; bit-identical to it.
         A_edge, P_edge, K_edge = A5Grid.face_apk(ti, M.slot_i[e], wse_flow)
         R_edge = _sgs_radius(A_edge, P_edge, K_edge, K2D)
         L_e = M.L[e]; ct_e = M.cos_theta[e]
+        a_p = 1.0
         if PG                                  # flow path of partly wet cells
             a_p, L_g = _sgs_path(M.e_dx[e], M.e_dy[e], M.nf_x[e], M.nf_y[e], L_e, ct_e,
                                  M.wcx[ci], M.wcy[ci], M.wcx[cj], M.wcy[cj], M.wfrac[ci], M.wfrac[cj])
@@ -310,6 +312,15 @@ from the stage-1 loop body; bit-identical to it.
                              0.5 * (M.manning_n[ci] + M.manning_n[cj]),
                              dt; Q_t = Q_t, vector_friction = VF)
         end
+        crit = false
+        if CR && Q_new != 0.0                  # critical-flow limit (0.8.0)
+            # Q > 0 runs from j to i: the energy level is the upstream cell's
+            E_up = Q_new > 0.0 ? wse_cj_eff : wse_ci_eff
+            Q_c = _sgs_critical_q(A5Grid.face_crit(ti, M.slot_i[e], E_up)) * a_p
+            if abs(Q_new) > Q_c
+                Q_new = copysign(Q_c, Q_new); crit = true
+            end
+        end
         M.flux_Q[e] = Q_new
         ev = Q_new * dt
         ev_raw = ev
@@ -327,7 +338,7 @@ from the stage-1 loop body; bit-identical to it.
         if M.stats                             # D1b (no effect on results)
             hs = wse_flow - z_sill
             M.lflag[e] = (hs > HFLOW_THRESHOLD && A_edge > 1e-6 ? LF_WET : 0x00) |
-                         (ev != ev_raw ? LF_DONOR : 0x00)
+                         (ev != ev_raw ? LF_DONOR : 0x00) | (crit ? LF_FROUDE : 0x00)
             M.lhf[e] = hs
         end
     end

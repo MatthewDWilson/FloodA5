@@ -14,7 +14,8 @@
 #
 # A res-18 A5 cell (~490 m², ~22 m) is 5× wider than the notch. Standard flow
 # uses cell-mean elevations: the notch only lowers the mean of the cells it
-# crosses by ≈ 2 m · 4 m/22 m ≈ 0.4 m, so water is held back until the upstream
+# crosses by ≈ 2 m · 4 m/22 m ≈ 0.4 m (measured: the lowest cell-mean route is
+# 0.26 m below the crest), so water is held back until the upstream
 # water surface nears the crest. SGS keeps each cell's sub-grid elevation
 # distribution and the minimum along every shared edge, so it sees the notch
 # and passes water at the sill level, ~2 m below the crest.
@@ -203,6 +204,10 @@ function _planar_embankment_metrics(ctx)
             d["v_down_$(th)h"] = v_down[k]
         end
         merge!(d, _pe_crossing(r, p, xmin, xmax, up, down, cell, kf))
+        # the discharge downstream over the last hour (closed domain: what
+        # passes the embankment) and the head above the sill then (0.8.0)
+        d["q_down_5to6h"] = (d["v_down_6h"] - d["v_down_5h"]) / 3600.0
+        d["head_5to6h"] = (d["wse_up_5h"] + d["wse_up_6h"]) / 2 - sill
         out[name] = d
         series[name] = (; t = r.t, wse_up, v_down)
     end
@@ -277,7 +282,7 @@ let
                   m -> all(abs(_pe(m, j, "stored_m3") / (_PE_Q * (_pe(m, j, "t_end") - 300)) - 1) < 1e-3 for j in ("sgs", "standard"));
                   detail = m -> "sgs $(round(_pe(m, "sgs", "stored_m3"); digits = 1)), standard $(round(_pe(m, "standard", "stored_m3"); digits = 1)) m³"),
             Check("standard: the 2 m embankment is a cell-mean crest within 0.5 m of the true crest " *
-                  "(the 4 m notch lowers the cells it crosses by ≈ 0.4 m)",
+                  "(the 4 m notch lowers the cell-mean route across it by ≈ 0.3 m)",
                   m -> _pe(m, "standard", "z_bneck_mean") >= _pe(m, "standard", "crest_z") - 0.5;
                   detail = m -> "cell-mean crest $(_pe_r(_pe(m, "standard", "z_bneck_mean"))) m, crest $(_pe(m, "standard", "crest_z")) m"),
             Check("standard: no water downstream until the upstream WSE reaches the cell-mean crest " *
@@ -300,6 +305,16 @@ let
                   m -> _pe(m, "sgs", "z_bneck_zmin") <= _pe(m, "sgs", "z_foot") + 0.05;
                   detail = m -> "z_bneck_zmin $(_pe_r(_pe(m, "sgs", "z_bneck_zmin"))) m, foot " *
                                 "$(_pe_r(_pe(m, "sgs", "z_foot"))) m, sill $(_pe(m, "sgs", "sill_z")) m"),
+            # The local-inertial flux has no critical-flow limit: until 0.7.x SGS
+            # passed ≈ 9.8 m³/s at 1.07 m of head (critical ≈ 7.5 m³/s for the
+            # 4 m rectangle, less for the trapezoid the DEM makes). 0.8.0 caps
+            # each face at its critical discharge (--sgs-critical, default on).
+            Check("SGS: through the notch (5–6 h) no more than critical flow — the broad-crested-weir " *
+                  "discharge 1.705·W·H^1.5 of the 4 m notch at the upstream head (+2%)",
+                  m -> _pe(m, "sgs", "q_down_5to6h") <= 1.02 * 1.705 * _PE_NOTCH * _pe(m, "sgs", "head_5to6h")^1.5;
+                  detail = m -> "Q $(_pe_r(_pe(m, "sgs", "q_down_5to6h"))) m³/s at head " *
+                                "$(_pe_r(_pe(m, "sgs", "head_5to6h"))) m (weir " *
+                                "$(_pe_r(1.705 * _PE_NOTCH * _pe(m, "sgs", "head_5to6h")^1.5)) m³/s)"),
             Check("SGS routes more water downstream than standard at every matched time before standard overtops",
                   m -> _pe(m, "sgs_vs_standard", "n_frames_compared") >= 10 &&
                        _pe(m, "sgs_vs_standard", "frac_sgs_more_down") == 1.0;

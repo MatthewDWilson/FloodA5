@@ -17,8 +17,9 @@
 #       channel |y − Y| < W/2:  z_f − D
 #       walls  |y| > B/2 (sides) and x < 0 (upstream): z_f + H
 #
-# The raster stores the bed at its pixel *corners* (A5Grid._bilinear treats a
-# pixel's value as sitting at its integer pixel coordinate), on nodes at
+# The raster stores the bed at its pixel *centres* (GDAL's pixel-is-area
+# convention, which A5Grid._bilinear follows since 0.8.0; until 0.7.1 the
+# nodes sat on the pixel corners to match its half-pixel offset), on nodes at
 # (k + ½)·P in x and y, so the DEM the model samples is exactly the analytic
 # surface: planes, with each vertical wall replaced by a ramp of width P
 # centred on it (channel walls at |y − Y| = W/2 ± P/2; side walls between
@@ -69,8 +70,9 @@ dlon = rad2deg(P / (R * cosd(LAT0))); dlat = rad2deg(P / R)
 dem = joinpath(OUT, "sgs_strip_dem.tif")
 ArchGDAL.create(dem; driver = ArchGDAL.getdriver("GTiff"), width = nx, height = ny,
                 nbands = 1, dtype = Float32) do ds
-    # node (c, r) at integer pixel coordinates (c, r): ulx/uly = the first node
-    ArchGDAL.setgeotransform!(ds, [lon(xs[1]), dlon, 0.0, lat(ys[1]), 0.0, -dlat])
+    # node (c, r) at the centre of pixel (c, r): ulx/uly half a pixel west and
+    # north of the first node
+    ArchGDAL.setgeotransform!(ds, [lon(xs[1] - P / 2), dlon, 0.0, lat(ys[1] + P / 2), 0.0, -dlat])
     ArchGDAL.setproj!(ds, ArchGDAL.toWKT(ArchGDAL.importEPSG(4326)))
     ArchGDAL.write!(ds, z, 1)
 end

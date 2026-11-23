@@ -677,6 +677,52 @@ Whether the SGS kernel applies the flow-path geometry of `_sgs_path`
 const SGS_PATH = Ref(true)
 
 """
+    SGS_CRITICAL[]
+
+Whether SGS faces are limited to critical flow (`--sgs-critical on|off`,
+default on since 0.8.0): `_sgs_critical_q`.
+"""
+const SGS_CRITICAL = Ref(true)
+
+"""
+    _sgs_critical_q(C) → Float64
+
+Discharge (m³/s) of a face at critical flow, √g·(2/3)^(3/2)·C, from its
+critical integral C = Σ dx·(E − a_p)^(3/2) at the energy level E
+(`A5Grid.face_crit`): each strip of the face at its own critical depth
+(2/3 of its head), the critical-flow counterpart of the 2-D conveyance
+K = Σ h^(5/3). For a rectangle of width W and head H it is the
+broad-crested-weir discharge 1.705·W·H^(3/2).
+
+The local-inertial equations have no advection, so nothing in them stops a
+face passing more than critical flow where the water falls away from it (a
+notch, a weir, a free overfall, the outflow edge): `planar_embankment`
+passed ≈ 9.8 m³/s through a notch that carries ≈ 7.5 at critical flow
+(0.7.0). With `SGS_CRITICAL[]` the kernel caps |Q| at this value with E the
+upstream cell's level (the still-water level: the approach velocity head is
+neglected) — an option of the hydraulics, independent of the SGS geometry.
+On a slope the head includes the drop from the upstream level to each
+point of the face, so flow down a moderate slope is not held back; without
+the velocity head the cap can bind on supercritical flow down a steep reach
+(the 2.1% outlet of `sgs_strip`, HYDRAULICS §15.14).
+"""
+@inline _sgs_critical_q(C::Float64)::Float64 = sqrt(_G) * (2.0 / 3.0)^1.5 * C
+
+"""
+    _sgs_ghost_crit_q(t, slot, wse, sill, width) → Float64
+
+Critical discharge (`_sgs_critical_q`) of an SGS boundary side at the cell's
+level `wse`: from the side's face table, or for a side without one the
+rectangle of its full width above `sill`.
+"""
+@inline function _sgs_ghost_crit_q(t, slot::Int, wse::Float64, sill::Float64, width::Float64)::Float64
+    slot > 0 && return _sgs_critical_q(A5Grid.face_crit(t, slot, wse))
+    h = wse - sill
+    h > 0.0 || return 0.0
+    return _sgs_critical_q(width * h * sqrt(h))
+end
+
+"""
     _sgs_path(dx, dy, nx, ny, L, ct, cxi, cyi, cxj, cyj, wfi, wfj) → (a, Lg)
 
 Flow-path geometry of a face between SGS cells i and j: the factor `a` on the

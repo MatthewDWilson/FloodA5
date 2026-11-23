@@ -33,6 +33,83 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-23
+
+DEM registration and the SGS critical-flow limit (MINOR, result-changing;
+branch `wps3-dem-critical`; HYDRAULICS §15.14). **Breaking for SGS meshes**:
+tables are layout 4; SGS meshes must be rebuilt. Meshes sampled from a DEM
+before 0.8.0 load with a warning and should be regenerated. Every case whose
+results moved is re-recorded (deliberately); the 0.7.1 values are kept in
+`cases/expected/v0.7.1/` (and tag `v0.7.1`).
+
+### Fixed
+- ⚠ **DEM sampled at pixel centres.** GDAL rasters are pixel-is-area (the
+  geotransform is the top-left pixel's corner; a value belongs at the pixel's
+  centre). `_bilinear` used `_affine_to_pixel`'s corner-based coordinates as
+  centre-based ones, so every DEM sample — cell means and centroids, SGS
+  tables and face profiles, in every engine — was taken half a pixel east and
+  south of its point. It now interpolates between pixel centres, holds the
+  edge value within half a pixel of the raster's edge, and next to nodata
+  takes the pixel containing the point. Meshes record `dem_registration`
+  (`docs/DATA_FORMATS.md`); `--meshload` warns when it is missing.
+  Raster-aligned Cartesian meshes (`--meshgen-cartesian dem.tif`) read the
+  pixels directly and are unchanged. Test: `test/test_dem_registration.jl`.
+- `cases/scripts/sgs_strip_dem.jl` writes the analytic terrain at pixel
+  centres (it wrote it at the corners, matching the old sampling).
+
+### Added
+- ⚠ **SGS critical-flow limit** (`--sgs-critical on|off`, default on). A face
+  passes at most √g·(2/3)^(3/2)·C(E) with C = Σ dx·(E − a_p)^(3/2), its
+  critical integral at the upstream cell's level (each strip of the face at
+  its own critical depth; for a rectangle the broad-crested-weir discharge
+  1.705·W·H^1.5), times the flow-path factor; SGS open-boundary outflow is
+  capped the same way. The local-inertial equations have no advection, so
+  nothing limited the discharge where water falls away from a face: 0.7.x
+  passed ≈ 9.8 m³/s through the 4 m notch of `planar_embankment` at 1.07 m of
+  head (critical ≈ 7.5). C is tabulated per face (`sgs_face_C`, SGS layout 4,
+  `A5Grid.face_crit`). The limit is an option of the hydraulics, not of the
+  SGS geometry; `off` gives the 0.7.x flux. CPU, device and the frozen
+  `reference_steps.jl` loop (a deliberate change). Tests: `test/test_sgs_general.jl`
+  S7, `test/test_sgs_edge_ra_tables.jl` F9.
+- Case `carlisle_peak`: job `a5_sgs_nocrit` (SGS with `--sgs-critical off`).
+- Case `planar_embankment`: check that SGS passes no more than critical flow
+  through the notch (metrics `q_down_5to6h`, `head_5to6h`).
+
+### Changed
+- **The 5 m SWE run is the Carlisle benchmark** (decided 2026-11-23).
+  `carlisle_peak_fine` compares every 22 m run of `carlisle_peak` with both
+  5 m runs (`vs5:<job>`) and holds the agreed SGS bar; `carlisle_peak` no
+  longer checks SGS against the 22 m SWE run.
+- `carlisle` 6 h: the A5 records are re-recorded (SWE 2.641 Mm³, arrival
+  6 676 s; SGS 1.775 Mm³).
+
+### Results
+- Cartesian runs on raster-aligned meshes (Carlisle 20 m and 5 m) are
+  bit-identical. A5 Carlisle: SWE 6 h storage −1.8%, at the peak +1.7%;
+  local-inertial −0.1%. Synthetic cases move by the half-pixel shift
+  (`planar_wall` thin ridge 5.36 → 5.39 m on A5); `sgs_strip` levels are
+  unchanged to the millimetre, but SGS holds 1–2% more water over the whole
+  strip: the critical-flow cap binds on its steep (2.1%, supercritical)
+  outlet reach, since it neglects the velocity head.
+- `planar_embankment`: SGS passes 8.24 m³/s at 1.38 m of head through the
+  notch (weir 11.07); the pond stands 0.33 m higher and 26% less water is
+  downstream at 6 h.
+- Carlisle at the peak, against 5 m SWE: SGS stores 0.74 (0.71 without the
+  limit; 22 m local-inertial 0.94, 22 m SWE 1.26); against 5 m local-inertial
+  SGS is 0.87 with the lowest rms level error of any 22 m model (0.16 m;
+  local-inertial 0.34 m). **The SGS bar fails** and is an expected failure:
+  at 5 m the local-inertial equations themselves store 0.84 of SWE, so the
+  gap is the hydraulics, not the SGS geometry.
+
+### Known issues (found, not changed)
+- The SGS gap to 5 m SWE needs a hydraulic formulation with momentum on the
+  SGS geometry (PROJECT_STATE, "Next").
+- A local-inertial run can overrun its end time by up to 0.1 s: the 0.1 s
+  floor on Δt (`FloodModel.jl`, run loop) is applied after the clamp to the
+  remaining time (`planar_wall` `a5_sgs_wide` ends at 21 600.086 s).
+- Output files and expected values written by these reruns record version
+  0.7.1 (dirty tree): `FLOODA5_VERSION` was bumped after them.
+
 ## [0.7.1] — 2026-11-23
 
 DGGS mesh families (WP3 part 3, branch `wp3c-dggs-meshes`; PATCH: default

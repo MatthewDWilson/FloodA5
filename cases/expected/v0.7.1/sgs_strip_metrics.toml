@@ -1,0 +1,329 @@
+# Expected metrics for case "sgs_strip" — written by `julia --project=. cases/run.jl baseline sgs_strip`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5r18_sgs_q20]
+dSdt_rel_end = 2.7504020500153978e-6
+delta_channel = 0.340344787283616
+delta_floodplain = 0.34001773255727025
+delta_slope_per_km = 0.006651355114639428
+delta_spread = 0.043789367943267266
+input_error_rel = -3.728850022644589e-5
+mass_balance_rel = 1.0110128623872557e-14
+n_wet_reach = 193.0
+store_above_mean_per_m = 37.33527918685472
+store_per_m = 37.348476091345994
+stored_m3 = 139932.62051766546
+t_arrive_x1000 = 2414.650323822122
+t_arrive_x2000 = 4517.874868351225
+t_end = 28800.0
+
+[a5r18_sgs_q3]
+dSdt_rel_end = 8.751827858501398e-8
+delta_channel = -0.2771830206258285
+delta_floodplain = -0.2763673587906199
+delta_slope_per_km = -0.0020404615238202623
+delta_spread = 0.01057013594557965
+input_error_rel = -6.0545237452385415e-5
+mass_balance_rel = 7.829574634155671e-15
+n_wet_reach = 79.0
+store_above_mean_per_m = 0.0
+store_per_m = 3.5000476223127093
+stored_m3 = 13201.095375439745
+t_arrive_x1000 = 1511.4230410887044
+t_arrive_x2000 = 2713.381485788511
+t_end = 28800.0
+
+[a5r18_std_q20]
+dSdt_rel_end = 9.976846411877685e-6
+delta_channel = 0.38951615016199054
+delta_floodplain = 0.38984114203176423
+delta_slope_per_km = 0.008300612460158141
+delta_spread = 0.04238074290328697
+input_error_rel = -0.00015247227311616338
+mass_balance_rel = 1.0826233256231661e-14
+n_wet_reach = 193.0
+store_above_mean_per_m = 42.05154092431526
+store_per_m = 42.05154092431527
+stored_m3 = 161598.43247401758
+t_arrive_x1000 = 2434.3628444261076
+t_arrive_x2000 = 4548.38327406171
+t_end = 28800.0
+
+[a5r18_std_q3]
+dSdt_rel_end = 8.543743188457254e-5
+delta_channel = 0.09458706693014765
+delta_floodplain = 0.09676352710271804
+delta_slope_per_km = 0.003169367433070804
+delta_spread = 0.048546355488062076
+input_error_rel = -0.00017542208894326118
+mass_balance_rel = 7.234677276652059e-16
+n_wet_reach = 193.0
+store_above_mean_per_m = 14.093043315227037
+store_per_m = 14.093043315227032
+stored_m3 = 54191.862485180725
+t_arrive_x1000 = 4569.607062173115
+t_arrive_x2000 = 9372.995345725734
+t_end = 28800.0
+
+[analytic]
+delta_2d_q20 = 0.3723315654371514
+delta_2d_q3 = -0.26689421504201183
+delta_a5w_q20 = 0.289705332311179
+delta_a5w_q3 = -0.2668955145674211
+delta_cells20_q20 = 0.4086514202455084
+delta_cells20_q3 = 0.04516170536993661
+delta_lumped20_q20 = 0.40865142024551915
+delta_lumped20_q3 = -0.2538805009377577
+depth_channel_2d_q20 = 1.3723315654371513
+depth_channel_2d_q3 = 0.7331057849579882
+store_2d_q20 = 27.339893926224764
+store_2d_q3 = 3.56769325533028
+store_a5w_q20 = 32.56691089607681
+store_a5w_q3 = 3.567695019956352
+store_cells20_q20 = 29.519085214730502
+store_cells20_q3 = 7.709702322196197
+store_lumped20_q20 = 29.51908521472589
+store_lumped20_q3 = 3.635877370076774
+t_arrive_2d_q20_x1000 = 1624.276112051512
+t_arrive_2d_q20_x2000 = 2991.2708083627504
+t_arrive_2d_q3_x1000 = 1452.0676137004027
+t_arrive_2d_q3_x2000 = 2641.2986988104963
+t_arrive_a5w_q20_x1000 = 1877.4597465287206
+t_arrive_a5w_q20_x2000 = 3505.8052913325614
+t_arrive_a5w_q3_x1000 = 1452.068183527572
+t_arrive_a5w_q3_x2000 = 2641.299856846356
+t_arrive_cells20_q20_x1000 = 1729.8306900885086
+t_arrive_cells20_q20_x2000 = 3205.784950825034
+t_arrive_cells20_q3_x1000 = 2789.5913748758553
+t_arrive_cells20_q3_x2000 = 5359.4921489412545
+t_arrive_lumped20_q20_x1000 = 1729.8306900882853
+t_arrive_lumped20_q20_x2000 = 3205.78495082458
+t_arrive_lumped20_q3_x1000 = 1474.0854007539583
+t_arrive_lumped20_q3_x2000 = 2686.0445241128828
+width_a5 = 95.15639225664886
+
+[cart20_sgs_q20]
+dSdt_rel_end = 3.4607235171010015e-5
+delta_channel = 0.36186916867099256
+delta_floodplain = 0.36186917489533516
+delta_slope_per_km = -3.6292809875823994e-6
+delta_spread = 4.9709772795836216e-6
+input_error_rel = -7.582372021840951e-5
+mass_balance_rel = 6.658644342059442e-14
+n_wet_reach = 150.0
+store_above_mean_per_m = 26.720452794629985
+store_per_m = 26.709186251430598
+stored_m3 = 99566.11795651565
+t_arrive_x1000 = 1820.1399182252364
+t_arrive_x2000 = 3335.238630803168
+t_end = 28800.0
+
+[cart20_sgs_q3]
+dSdt_rel_end = 2.4985275484954273e-6
+delta_channel = -0.27920690590807146
+delta_floodplain = "NaN"
+delta_slope_per_km = -3.495834765818619e-5
+delta_spread = 4.365113662085918e-5
+input_error_rel = -0.00011397848911028579
+mass_balance_rel = 6.91081994530353e-14
+n_wet_reach = 50.0
+store_above_mean_per_m = 0.0
+store_per_m = 3.4988435316755906
+stored_m3 = 13103.295332096122
+t_arrive_x1000 = 1519.7491895978
+t_arrive_x2000 = 2724.5964007797083
+t_end = 28800.0
+
+[cart20_sgslumped_q20]
+dSdt_rel_end = 4.485658114901882e-6
+delta_channel = 0.39860448534690845
+delta_floodplain = 0.3986044865516061
+delta_slope_per_km = -1.505991789748785e-6
+delta_spread = 2.123657944608226e-6
+input_error_rel = -7.631214834921258e-5
+mass_balance_rel = 8.088418550467595e-14
+n_wet_reach = 150.0
+store_above_mean_per_m = 28.924572444572544
+store_per_m = 28.913305901373153
+stored_m3 = 108340.5426045068
+t_arrive_x1000 = 2122.6628452756463
+t_arrive_x2000 = 3632.4244349991654
+t_end = 28800.0
+
+[cart20_sgslumped_q3]
+dSdt_rel_end = 3.082405207066296e-5
+delta_channel = -0.2705402701856859
+delta_floodplain = "NaN"
+delta_slope_per_km = -3.388742698902905e-5
+delta_spread = 4.223149114590541e-5
+input_error_rel = -0.00011392694643963461
+mass_balance_rel = 7.932122976606763e-14
+n_wet_reach = 50.0
+store_above_mean_per_m = 0.0
+store_per_m = 3.545347448611408
+stored_m3 = 13281.450808028807
+t_arrive_x1000 = 1517.055749967961
+t_arrive_x2000 = 2729.5790269178237
+t_end = 28800.0
+
+[cart20_std_q20]
+dSdt_rel_end = 0.00016340796324112186
+delta_channel = 0.40847353468132674
+delta_floodplain = 0.4084735356037107
+delta_slope_per_km = -1.268932045900424e-6
+delta_spread = 1.802909018522314e-6
+input_error_rel = -0.0001358485648529032
+mass_balance_rel = 1.3634699152466272e-13
+n_wet_reach = 150.0
+store_above_mean_per_m = 29.516715621746656
+store_per_m = 29.51671562174665
+stored_m3 = 113276.16976203932
+t_arrive_x1000 = 1828.5039083803938
+t_arrive_x2000 = 3343.0040128942505
+t_end = 28800.0
+
+[cart20_std_q3]
+dSdt_rel_end = 0.00012281646865034454
+delta_channel = 0.044866020936262886
+delta_floodplain = 0.044853279770824664
+delta_slope_per_km = -1.4473904822851473e-5
+delta_spread = 6.777066983509883e-5
+input_error_rel = -0.0001735081338987084
+mass_balance_rel = 2.9449335833895337e-14
+n_wet_reach = 150.0
+store_above_mean_per_m = 7.6997466982857965
+store_per_m = 7.699746698285795
+stored_m3 = 29568.631462739886
+t_arrive_x1000 = 2432.1153473262257
+t_arrive_x2000 = 4548.38974701952
+t_end = 28800.0
+
+[cart20_swe_q20]
+dSdt_rel_end = 8.762502372319587e-15
+delta_channel = 0.40847390000743816
+delta_floodplain = 0.4084739001550593
+delta_slope_per_km = -5.230503261776382e-8
+delta_spread = 8.74004886242119e-8
+input_error_rel = -3.737131573848034e-5
+mass_balance_rel = 5.647375345487038e-14
+n_wet_reach = 150.0
+store_above_mean_per_m = 29.516737510331264
+store_per_m = 29.516737510331264
+stored_m3 = 113696.38875117777
+t_arrive_x1000 = 1811.7809518514355
+t_arrive_x2000 = 3312.2188618438854
+t_end = 28800.0
+
+[cart20_swe_q3]
+dSdt_rel_end = -0.000463107631166559
+delta_channel = 0.04486234175917922
+delta_floodplain = 0.0448623416826044
+delta_slope_per_km = -4.065154830870689e-9
+delta_spread = 1.607685362614575e-8
+input_error_rel = -6.806473760700197e-5
+mass_balance_rel = 1.2765706814104715e-14
+n_wet_reach = 150.0
+store_above_mean_per_m = 7.700035591326021
+store_per_m = 7.700035591326022
+stored_m3 = 29784.70392839863
+t_arrive_x1000 = 2415.4698334458994
+t_arrive_x2000 = 4516.092382501803
+t_end = 28800.0
+
+[fine_std_q20]
+dSdt_rel_end = 2.3952312907027417e-5
+delta_channel = 0.3730790303911215
+delta_floodplain = 0.37307904883909104
+delta_slope_per_km = -1.903972943337114e-6
+delta_spread = 2.8138650414177846e-6
+input_error_rel = -3.368145958743395e-5
+mass_balance_rel = 7.255560977558954e-14
+n_wet_reach = 9600.0
+store_above_mean_per_m = 27.38445228946164
+store_per_m = 27.38445228946164
+stored_m3 = 104850.63087512011
+t_arrive_x1000 = 2111.9933667501778
+t_arrive_x2000 = 3613.0485549314594
+t_end = 14400.0
+
+[fine_std_q3]
+dSdt_rel_end = 1.3118840101943652e-5
+delta_channel = -0.2625937387079473
+delta_floodplain = "NaN"
+delta_slope_per_km = -2.4009777111017216e-5
+delta_spread = 3.138801358737453e-5
+input_error_rel = -4.9825916608936435e-5
+mass_balance_rel = 5.762570342255822e-15
+n_wet_reach = 800.0
+store_above_mean_per_m = 3.5655731476060963
+store_per_m = 3.5655731476060963
+stored_m3 = 13722.345501132779
+t_arrive_x1000 = 1512.5086102530133
+t_arrive_x2000 = 2713.758910364641
+t_end = 14400.0
+
+[fine_swe_q20]
+dSdt_rel_end = 1.9899534469867812e-5
+delta_channel = 0.37307959696723975
+delta_floodplain = 0.3730796044728634
+delta_slope_per_km = -4.627744784530883e-7
+delta_spread = 1.0570895803141411e-6
+input_error_rel = -1.55487973098511e-5
+mass_balance_rel = 8.15332750522388e-15
+n_wet_reach = 9600.0
+store_above_mean_per_m = 27.384485682201355
+store_per_m = 27.384485682201355
+stored_m3 = 105245.3354212429
+t_arrive_x1000 = 2110.33404222436
+t_arrive_x2000 = 3610.5354967792564
+t_end = 14400.0
+
+[fine_swe_q3]
+dSdt_rel_end = 5.485185994563119e-7
+delta_channel = -0.2638229085869997
+delta_floodplain = "NaN"
+delta_slope_per_km = -7.861776278327297e-6
+delta_spread = 1.0785658684397958e-5
+input_error_rel = -1.868910018153611e-5
+mass_balance_rel = 1.3416910180387642e-14
+n_wet_reach = 800.0
+store_above_mean_per_m = 3.5594272979249317
+store_per_m = 3.5594272979249326
+stored_m3 = 13666.687640171898
+t_arrive_x1000 = 1510.314168003006
+t_arrive_x2000 = 2710.5504078050026
+t_end = 14400.0
+
+[meta]
+flooda5_version = "0.6.0"
+git_commit = "510c94f7695b9f3e846c630a9a30d3a9a3f84473"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-16T17:09:17Z"
+
+[tables_a5r18]
+edge_A_ratio_channel_1m = 0.999986927409001
+edge_A_ratio_channel_inbank = 0.9999239764030547
+edge_A_ratio_channel_overbank = 0.9999724958524834
+edge_A_ratio_floodplain_1m = 0.9999999958517478
+edge_A_ratio_floodplain_overbank = 0.9999999819259735
+edge_K_ratio_channel_1m = 1.0004475044289587
+edge_K_ratio_channel_inbank = 0.9997077651111086
+edge_K_ratio_channel_overbank = 1.0001036589107581
+edge_K_ratio_floodplain_overbank = 1.0000850093135565
+volume_err_max = 0.029720042749382433
+volume_err_median_max = 3.3810634404464145e-5
+
+[tables_cart20]
+edge_A_ratio_channel_1m = 1.0000914450842842
+edge_A_ratio_channel_inbank = 1.0044468131343343
+edge_A_ratio_channel_overbank = 1.0001758559312786
+edge_A_ratio_floodplain_1m = 0.9999999945068367
+edge_A_ratio_floodplain_overbank = 0.9999999862671288
+edge_K_ratio_channel_1m = 1.0008893162780583
+edge_K_ratio_channel_inbank = 1.0057971836823012
+edge_K_ratio_channel_overbank = 1.0011143805520908
+edge_K_ratio_floodplain_overbank = 1.0000411218674086
+uniform_Q_max = 417.6990844497843
+uniform_delta_at_Q_max = 3.0
+volume_err_max = 0.003389246926790182
+volume_err_median_max = 3.4910419207886395e-6

@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-18): 0.7.0 — the default engine is
+(`VERSIONING.md`). Status (2026-11-23): 0.8.0 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -25,13 +25,16 @@ analysis module (0.4.1, `analysis/`), a test-case registry and runner
 benchmark suite (`benchmarks/`, `notebooks/05_performance.ipynb`).
 0.7.0: SGS conveyance rework (one table per face, connectivity, positivity,
 Courant 0.5; `docs/HYDRAULICS.md` §9, §15.13); 5 m Carlisle references
-(`carlisle_peak_fine`, GPU). Known issue, high priority: DEM samples are
-half a pixel off (`_affine_to_pixel`/`_bilinear`); fixing it needs a rerun
-and re-record of every case.
+(`carlisle_peak_fine`, GPU). 0.7.1: DGGS mesh families (Phase A).
+0.8.0: DEM sampled at pixel centres (was half a pixel off; every case
+re-recorded, old values in `cases/expected/v0.7.1/`), SGS critical-flow
+limit (`--sgs-critical`), the 5 m SWE run is the Carlisle benchmark
+(HYDRAULICS §15.14). SGS = the elevation representation; hydraulic
+formulations on it are to be pluggable.
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
-(§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13 SGS). SGS meshes
-built before 0.7.0 (table layout < 3) are refused until rebuilt. Edge orientation (`cell_i < cell_j`)
+(§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.14 SGS). SGS meshes
+built before 0.8.0 (table layout < 4) are refused until rebuilt. Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
 without `_orient_collinear!`-style signs.
 

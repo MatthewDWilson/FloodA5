@@ -21,6 +21,7 @@ _tab(T::AbstractVector, i) = @inbounds T[i]
             z_min = (@inbounds T.zmin[i]), z_max = (@inbounds T.zmax[i]),
             face_z0 = view(T.fz0, :, i), face_zr = view(T.fzr, :, i),
             face_A = view(T.fA, :, :, i), face_P = view(T.fP, :, :, i), face_K = view(T.fK, :, :, i),
+            face_C = view(T.fC, :, :, i),
             wet_cx = view(T.wcx, 1:nb, i), wet_cy = view(T.wcy, 1:nb, i))
 end
 
@@ -33,7 +34,7 @@ function _sgs_flat(tables)
     elev = zeros(nb, n); vol = zeros(nb, n); area = zeros(nb, n)
     wcx = zeros(nb, n); wcy = zeros(nb, n)
     fz0 = fill(NaN, ns, n); fzr = zeros(ns, n)
-    fA = zeros(nf, ns, n); fP = zeros(nf, ns, n); fK = zeros(nf, ns, n)
+    fA = zeros(nf, ns, n); fP = zeros(nf, ns, n); fK = zeros(nf, ns, n); fC = zeros(nf, ns, n)
     nbins = zeros(Int, n); ca = zeros(n); zmin = zeros(n); zmax = zeros(n)
     for (i, t) in enumerate(tables)
         k = length(t.elev_bins); nbins[i] = k
@@ -43,10 +44,11 @@ function _sgs_flat(tables)
         size(t.face_A, 1) == nf || error("SGS face tables of different lengths cannot be packed")
         fz0[1:s, i] .= t.face_z0; fzr[1:s, i] .= t.face_zr
         fA[:, 1:s, i] .= t.face_A; fP[:, 1:s, i] .= t.face_P; fK[:, 1:s, i] .= t.face_K
+        fC[:, 1:s, i] .= t.face_C
         ca[i] = t.cell_area; zmin[i] = t.z_min; zmax[i] = t.z_max
     end
     return (elev = elev, vol = vol, area = area, wcx = wcx, wcy = wcy,
-            fz0 = fz0, fzr = fzr, fA = fA, fP = fP, fK = fK,
+            fz0 = fz0, fzr = fzr, fA = fA, fP = fP, fK = fK, fC = fC,
             nbins = nbins,
             ca = ca, zmin = zmin, zmax = zmax)
 end
@@ -108,6 +110,10 @@ end
             A_ge, R_ge = _sgs_ghost_area_radius(tbl, a.g_slot[k], wse_ci, a.g_sill[k], a.g_width[k], a.k2d)
             Q_out, q_stored = _manning_ghost_flux(a.g_fprev[k], wse_ci, wse_ghost, a.g_sill[k],
                                                   A_ge, R_ge, a.g_L[k], a.manning_n[ci], dt)
+            if a.crit                          # critical outflow (0.8.0)
+                Q_c = _sgs_ghost_crit_q(tbl, a.g_slot[k], wse_ci, a.g_sill[k], a.g_width[k])
+                Q_out > Q_c && (Q_out = Q_c; q_stored = Q_c)
+            end
         else
             Q_out, q_stored = _bates_ghost_flux(a.g_fprev[k], wse_ci, wse_ghost, a.g_sill[k],
                                                 a.g_width[k], a.g_L[k], a.manning_n[ci], dt,
@@ -170,7 +176,7 @@ function _sgs_device_args(state::FlowState)
         cfl = zeros(length(state.cell_ids)),
         g_cell = [g.cell_index for g in G], g_width = [g.width for g in G], g_L = [g.L for g in G],
         g_sill = [g.sill for g in G], g_fprev = [g.flux_prev for g in G],
-        g_slot = [g.slot for g in G], k2d = SGS_CONVEYANCE[] === :twod,
+        g_slot = [g.slot for g in G], k2d = SGS_CONVEYANCE[] === :twod, crit = SGS_CRITICAL[],
         g_slope = [g.slope for g in G],
         g_isQ = [g.is_Q_flux for g in G],
         g_nb = [g.interior_nb_idx for g in G], g_nbL = [g.interior_nb_L for g in G],

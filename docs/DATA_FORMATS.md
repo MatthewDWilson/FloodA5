@@ -40,16 +40,17 @@ downstream of load is identical. Extension: `.parquet`.
 | Column | dtype | Added by | Description |
 |---|---|---|---|
 | `elevation` | float64 | `--dem` | Mean cell bed elevation (m). `NaN` if outside DEM extent. |
+| `dem_registration` | float64 | `--dem` (0.8.0) | 1: the elevations were sampled at the DEM's pixel centres (GDAL pixel-is-area), or are the raster's own pixels (raster-aligned Cartesian meshes). Absent: sampled before 0.8.0 — half a pixel east and south of their positions (`mesh/A5Grid.jl` `_bilinear`); a warning is printed on `--meshload` |
 | `sgs_cell_area` | float64 | SGS build | Geodetic plan area of cell polygon (m²) |
 | `sgs_z_min` | float64 | SGS build | Lowest ground of the cell: over its working grid and the profiles of its sides (m) |
 | `sgs_z_max` | float64 | SGS build | Highest ground of the cell, likewise (m) |
 | `sgs_n_bins` | float64 | SGS build | Number of hypsometric levels (same for all cells) |
-| `sgs_layout` | float64 | SGS build | Table layout: **3** since 0.7.0 (one table per face). Layouts 1–2 (≤ 0.6.0) are refused: rebuild the tables |
+| `sgs_layout` | float64 | SGS build | Table layout: **4** since 0.8.0 (DEM sampled at pixel centres; `sgs_face_C`). Layouts 1–3 (≤ 0.7.1) are refused: rebuild the tables |
 | `sgs_connectivity` | float64 | SGS build | 1: face activation levels from connectivity (`--sgs-connectivity on`, the default); 0: off |
 | `sgs_n_grid` | float64 | SGS build | Working-grid points used for the cell |
 | `cell_size_m` | float64 | Cartesian generator | Nominal cell edge length (m) used to generate the mesh — present only on Cartesian meshes. Constant across all cells in a given mesh, stored per-cell for consistency with how every other per-cell scalar is stored. |
 
-### SGS array columns (layout 3, since 0.7.0)
+### SGS array columns (layout 4, since 0.8.0; 3 in 0.7.x without `sgs_face_C`)
 
 Stored as Apache Arrow list columns, one 1-D array per row (cell). `n_bins`:
 hypsometric levels (default 100). `n_slots`: the longest neighbour list of
@@ -70,11 +71,13 @@ Built by `build_sgs_tables!` (`mesh/A5Grid.jl`); formulation in
 | `sgs_face_A` | NF × n_slots | Flow area of the face (m²) at level `sill + zr·((k−1)/(NF−1))²`, k = 1…NF; flat, level fastest |
 | `sgs_face_P` | NF × n_slots | Wetted width of the face (m), same layout |
 | `sgs_face_K` | NF × n_slots | Conveyance integral Σ dx·h^(5/3) of the face (m^(8/3)), same layout |
+| `sgs_face_C` | NF × n_slots | Critical integral Σ dx·h^(3/2) of the face (m^(5/2)), same layout (0.8.0; `--sgs-critical`, HYDRAULICS §9.2) |
 | `sgs_face_raise` | n_slots | Sill minus the lowest point of the face's profile (m): what connectivity added (0 with `--sgs-connectivity off`) |
 
 The two cells of a face hold the same table. Above the top level the lookup
 (`A5Grid.face_apk`) continues A with the full width `sgs_face_P[NF]`, and K as
-`P·(d + c)^(5/3)` with `c = (K[NF]/P[NF])^(3/5)`.
+`P·(d + c)^(5/3)` with `c = (K[NF]/P[NF])^(3/5)`; C likewise as
+`P·(d + c)^(3/2)` with `c = (C[NF]/P[NF])^(2/3)` (`A5Grid.face_crit`).
 
 Until 0.6.0 (layout 2) the face geometry was two per-cell columns,
 `sgs_edge_area_curve` and `sgs_edge_perim_curve`, on the cell's own levels;

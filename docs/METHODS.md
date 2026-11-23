@@ -114,7 +114,12 @@ cell centre. Fast, but sensitive to the location of the centre point within the
 terrain. Use only for quick exploratory runs.
 
 In both cases, DEM values are sampled using bilinear interpolation after reprojecting
-the query coordinates from WGS 84 into the DEM's native CRS. Out-of-bounds cells
+the query coordinates from WGS 84 into the DEM's native CRS. A pixel's value is
+taken to be its value at the pixel's centre (GDAL's pixel-is-area convention), so
+the interpolation runs between pixel centres; within half a pixel of the raster's
+edge the value is the nearest centre's. (Until 0.7.1 every sample was taken half a
+pixel east and south of its point; meshes sampled since 0.8.0 carry a
+`dem_registration` column.) Out-of-bounds cells
 receive `NaN` elevation (a warning is logged); they are hydraulically inert.
 
 Sampled elevations are stored as a static column in the GeoParquet mesh file so that

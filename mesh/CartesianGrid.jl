@@ -284,7 +284,7 @@ function generate_cartesian_mesh_raster(raster_path::String; elevation::Bool = t
         adjacency[id] = nbrs
     end
     sv = Dict{String,Vector{Float64}}("cell_size_m" => fill(abs(px), n))
-    elevation && (sv["elevation"] = elev)
+    elevation && (sv["elevation"] = elev; sv["dem_registration"] = fill(1.0, n))   # the pixels themselves
     @info "Raster-aligned Cartesian grid: $nrows rows × $ncols cols = $n cells " *
           "(pixel $(abs(px)) × $(abs(py)) in the raster CRS" *
           (elevation ? "; elevation from the raster" : "") * ")"

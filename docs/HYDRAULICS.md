@@ -451,6 +451,30 @@ s = clamp(2w − 1, 0, 1), so cells less than half wet are treated as channels.
 On the A5 strip in bank this takes the level from 0.054 m above the analytic
 one to 0.009 m below it (§15.13).
 
+**Critical-flow limit** (`--sgs-critical`, default on since 0.8.0;
+`_sgs_critical_q`). The local-inertial equations have no advection term, so
+nothing in them stops a face passing more than critical flow where the water
+falls away from it — a notch, a weir, a free overfall, an outflow edge. Until
+0.7.x SGS passed ≈ 9.8 m³/s through the 4 m notch of `planar_embankment` at
+1.07 m of head, against ≈ 7.5 m³/s at critical flow. The kernel now caps
+
+    |Q| ≤ √g·(2/3)^(3/2)·C(E)·a,     C(E) = Σ dx·(E − a_p)^(3/2)
+
+with E the upstream cell's level (still water: the approach velocity head is
+neglected), a_p the points' activation levels and a the flow-path factor
+above: each strip of the face passes at most its own critical discharge with
+the head E − a_p over it (the counterpart for critical flow of K = Σ h^(5/3)
+for friction). For a rectangle of width W it is the broad-crested-weir
+discharge 1.705·W·H^(3/2). C is tabulated per face like K (`sgs_face_C`,
+layout 4). The open-boundary outflow of a side is capped the same way. On a
+slope the head includes the drop from the upstream level to each point of
+the face, so flow down a moderate slope is not held back; but the head is
+the still-water level (no velocity head), so on a steep reach the cap can
+bind on supercritical flow: on the 2.1% outlet reach of `sgs_strip` it holds
+1–2% more of the strip's water (§15.14). The limit is
+a choice of the hydraulics, not of the SGS geometry: `off` gives the 0.7.x
+flux on the same tables.
+
 **Dry cells.** A dry cell's level for the flux is max(sill, its lowest
 ground): water must clear the face and reach the cell's floor.
 
@@ -1692,3 +1716,68 @@ SWE at 5 m (0.84 of its storage, levels 0.3–0.4 m lower) — the momentum loss
 they omit — and 22 m local-inertial lands close to 5 m SWE only because its
 smoothed bed under-conveys. Open: how to judge the 22 m models against the
 5 m runs, and whether SGS needs those momentum losses.
+
+### 15.14 DEM registration and the SGS critical-flow limit (0.8.0, 2026-11)
+
+*DEM registration.* GDAL rasters are pixel-is-area: the geotransform gives
+the corner of the top-left pixel, and a pixel's value belongs at its centre.
+`_affine_to_pixel` returns corner-based pixel coordinates, which `_bilinear`
+used as centre-based ones, so every sample until 0.7.1 was taken half a pixel
+east and south of its point (on a 5 m DEM 2.5 m each way; on a slope of
+1:100 that is 3.5 cm of bed). Now `_bilinear` interpolates between pixel
+centres, holds the edge value within half a pixel of the raster's edge, and
+falls back to the containing pixel next to nodata (`test/test_dem_registration.jl`).
+Meshes record `dem_registration` (absent: sampled before 0.8.0; a warning on
+`--meshload`) and SGS tables are layout 4. Raster-aligned Cartesian meshes
+(`generate_cartesian_mesh_raster`, the Carlisle 20 m and 5 m grids) take the
+raster's pixels and are unchanged: their runs are bit-identical. The A5 runs
+move by round-off-sized amounts on real terrain: Carlisle 6 h SWE storage
+2.690 → 2.641 Mm³ (−1.8%), at the peak +1.7%; local-inertial −0.1%; the
+thin `planar_wall` ridge seen by the cell-mean beds 5.361 → 5.387 m.
+
+*Critical-flow limit* (§9.2). The local-inertial equations have no advection,
+so nothing stops a face passing more than critical flow where the water falls
+away from it. SGS faces are now capped at √g·(2/3)^(3/2)·C(E), with
+C = Σ dx·(E − a_p)^(3/2) the face's critical integral at the upstream level
+(`--sgs-critical on`, default). On `planar_embankment` the notch (4 m wide,
+sill 5.0 m) passed ≈ 9.8 m³/s at 1.07 m of head in 0.7.x, 30% above
+critical; now 8.24 m³/s at 1.38 m between 5 and 6 h (weir 11.07): the pond
+stands 0.33 m higher (6.41 m) and 26% less water is downstream at 6 h
+(115 000 m³, was 155 000). On `sgs_strip` the levels in the measuring reach
+are unchanged to the millimetre, but the cap binds on the 2.1% outlet reach
+(supercritical; the cap neglects the velocity head): SGS holds 1.2–2.0% more
+water over the whole strip, all of it below x = 3000 m (Cartesian in bank
+13 361 against 13 103 m³; with `--sgs-critical off` 13 103 exactly, so the
+DEM fix changes nothing there). Including the velocity head in E would
+remove this; whether to do so belongs with the hydraulic formulations.
+
+*Carlisle against the 5 m SWE benchmark* (decided 2026-11-23; case
+`carlisle_peak_fine` now compares every 22 m run of `carlisle_peak` with both
+5 m runs, aggregated onto the 22 m cells). At 55.5 h, A5 res 18 unless noted:
+
+| 22 m model | vs 5 m SWE: storage | level median (rms) | CSI | vs 5 m LI: storage | level median (rms) | CSI |
+|---|---|---|---|---|---|---|
+| SWE | 1.26 | +0.39 (0.56) m | 0.81 | 1.49 | +0.82 (0.84) m | 0.78 |
+| SWE, Cartesian 20 m | 1.12 | +0.15 (0.29) m | 0.85 | 1.33 | +0.55 (0.58) m | 0.82 |
+| local-inertial | 0.94 | −0.18 (0.25) m | 0.85 | 1.12 | +0.24 (0.34) m | 0.84 |
+| local-inertial, Cartesian 20 m | 0.95 | −0.22 (0.29) m | 0.85 | 1.12 | +0.20 (0.32) m | 0.85 |
+| SGS, critical limit off (0.7.x hydraulics) | 0.71 | −0.49 (0.53) m | 0.77 | 0.84 | −0.14 (0.23) m | 0.81 |
+| **SGS (0.8.0)** | **0.74** | **−0.47 (0.52) m** | **0.81** | **0.87** | **−0.12 (0.16) m** | **0.85** |
+
+(5 m local-inertial stores 0.84 of 5 m SWE: 7.07 against 8.38 Mm³.) The limit
+improves SGS against both 5 m runs — storage +3–4%, CSI +0.04, rms against
+5 m local-inertial 0.23 → 0.16 m (against 5 m SWE within ±0.02 m either
+way) — and stays on. SGS is the 22 m model
+closest to the 5 m local-inertial solution in level and extent at all three
+times (storage: 0.87 against 1.12–1.16 for cell-mean local-inertial; at 55.5 h
+marginally the further of the two). Against 5 m SWE it fails the agreed bar
+(`carlisle_peak_fine`, an expected failure): the gap is the hydraulics, not
+the geometry — at 5 m the local-inertial equations themselves store 16% less
+than SWE, and the cell-mean 22 m run matches SWE's storage only because its
+smoothed beds store ~15% more than the 5 m local-inertial run. A sub-grid
+geometry with local-inertial hydraulics cannot close that gap; a formulation
+that keeps the momentum losses the local-inertial equations omit can (plan:
+pluggable hydraulic formulations on the SGS geometry,
+`projectinstructions/PROJECT_STATE.md`). Open: where at 5 m SWE holds the
+extra 1.3 Mm³ (bends, constrictions, the bridges' reaches), which says which
+momentum terms matter.

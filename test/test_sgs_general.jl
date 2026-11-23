@@ -11,8 +11,12 @@
 #       fully wet edge's perimeter never exceeds that edge's length
 #   S3  SGS initialises on the 6-neighbour mesh, keeps a lake at rest and
 #       conserves mass in a point-source run
-#   S4  tables without sgs_layout (pre-fix) are refused unless
-#       FLOODA5_ALLOW_OLD_SGS_LAYOUT=1
+#   S4  tables older than layout 4 (0.8.0) are refused
+#   S5  boundary sides have face tables (0.7.0)
+#   S6  the open-boundary slope is the valley floor's (0.7.0)
+#   S7  critical-flow limit (0.8.0): water released through the notch in the
+#       ridge; no face passes more than its critical discharge at the
+#       upstream level, which the local-inertial flux alone exceeds
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_sgs_general.jl
 
@@ -53,10 +57,10 @@ const MESH = _quiet() do
 end
 
 @testset "S1 — layout" begin
-    @test MESH.static_vars["sgs_layout"][1] == 3.0          # face tables (0.7.0)
+    @test MESH.static_vars["sgs_layout"][1] == 4.0          # face tables (0.7.0) + critical integral (0.8.0)
     @test size(MESH.array_vars["sgs_edge_sills"], 1) == 6
     @test size(MESH.array_vars["sgs_face_zr"], 1) == 6
-    for k in ("sgs_face_A", "sgs_face_P", "sgs_face_K")
+    for k in ("sgs_face_A", "sgs_face_P", "sgs_face_K", "sgs_face_C")
         @test size(MESH.array_vars[k], 1) == A5Grid.SGS_FACE_LEVELS * 6
     end
     @test !haskey(MESH.array_vars, "sgs_edge_area_curve")   # the per-cell edge curves are gone
@@ -126,7 +130,7 @@ end
     @test minimum(st2.volume) >= 0.0
 end
 
-@testset "S4 — SGS tables older than layout 3 are refused" begin
+@testset "S4 — SGS tables older than layout 4 are refused" begin
     old = deepcopy(MESH)
     delete!(old.static_vars, "sgs_layout")                   # pre-2026-10: wrong slot order
     @test_throws ErrorException _quiet(() -> initialise_flow_model(old, SGSFlow()))
@@ -136,6 +140,9 @@ end
     old3 = deepcopy(MESH)
     delete!(old3.array_vars, "sgs_face_A")
     @test_throws ErrorException _quiet(() -> initialise_flow_model(old3, SGSFlow()))
+    old4 = deepcopy(MESH)                                    # 0.7.x: half a pixel off, no face_C
+    old4.static_vars["sgs_layout"] .= 3.0; delete!(old4.array_vars, "sgs_face_C")
+    @test_throws ErrorException _quiet(() -> initialise_flow_model(old4, SGSFlow()))
     @test length(_quiet(() -> initialise_flow_model(MESH, SGSFlow())).sgs_tables) == length(MESH.cells)
 end
 
@@ -207,6 +214,57 @@ end
     for _ in 1:100; step_sgs!(st, 0.5); end
     @test st.vol_removed > 0.0
     @test isapprox(sum(st.volume) + st.vol_removed, v0; rtol = 1e-10)
+end
+
+@testset "S7 — critical-flow limit (0.8.0)" begin
+    "Volume of a cell at level η (its tables; the full cell area above them)."
+    function _vol_at(t, η)
+        b = t.elev_bins; v = t.vol_curve
+        η <= b[1] && return 0.0
+        η >= b[end] && return v[end] + t.cell_area * (η - b[end])
+        k = searchsortedlast(b, η)
+        return v[k] + (η - b[k]) / (b[k+1] - b[k]) * (v[k+1] - v[k])
+    end
+    # A pond west of the ridge (x ≈ 180 m, 1 m high, a 40 m gap at y ≈ 200 m)
+    # at 1.2 m, the rest dry: the water falls through the gap. Returns the
+    # largest |Q| ÷ critical discharge over the faces, each step, with the
+    # upstream level of that step (an upper bound of the kernel's cap, which
+    # also scales it by the flow-path factor ≤ 1).
+    function run_pond(crit::Bool)
+        old = SGS_CRITICAL[]; SGS_CRITICAL[] = crit
+        try
+            st = _sgs_state()
+            for i in eachindex(st.volume)
+                t = st.sgs_tables[i]
+                st.volume[i] = isnan(t.z_min) || st.cell_lons[i] > rad2deg(170.0 / A5Grid._EARTH_R) ? 0.0 :
+                               _vol_at(t, 1.2)
+            end
+            E = st.edges; worst = 0.0; nbind = 0
+            for _ in 1:40
+                η = [st.volume[i] > 0 ? wse_from_volume(st.sgs_tables[i], st.volume[i]) : NaN for i in eachindex(st.volume)]
+                _quiet(() -> step_sgs!(st, 0.5))
+                for e in 1:E.n_edges
+                    Q = E.flux_Q[e]; Q == 0.0 && continue
+                    ci, cj = E.cell_i[e], E.cell_j[e]
+                    up, dn = Q > 0 ? (cj, ci) : (ci, cj)
+                    isnan(η[up]) && continue
+                    slot = findfirst(==(cj), view(st.adj_matrix, :, ci))
+                    Qc = _sgs_critical_q(A5Grid.face_crit(st.sgs_tables[ci], slot, η[up]))
+                    Qc > 0 || continue
+                    r = abs(Q) / Qc
+                    worst = max(worst, r); r > 0.999 && (nbind += 1)
+                end
+            end
+            return worst, nbind, sum(st.volume) + st.vol_removed
+        finally
+            SGS_CRITICAL[] = old
+        end
+    end
+    w_on, nb_on, _ = run_pond(true)
+    w_off, _, _ = run_pond(false)
+    @test w_on <= 1.0 + 1e-9               # never above critical
+    @test nb_on > 0                        # … and the limit binds in this release
+    @test w_off > 1.2                      # the local-inertial flux alone passes more
 end
 
 println("\nGeneral-mesh SGS tests complete.")

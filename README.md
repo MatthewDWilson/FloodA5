@@ -1,5 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
-![Version 0.7.0](https://img.shields.io/badge/Version-0.7.0-lightgrey)
+![Version 0.8.0](https://img.shields.io/badge/Version-0.8.0-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -218,11 +218,15 @@ with a hypsometric curve from the DEM, and each face conveys it with a table
 of its own DEM profile (flow area and Σ h^(5/3)), so channels, notches and
 walls narrower than a cell are represented (`docs/HYDRAULICS.md` §9). It
 requires a DEM and a mesh built with `--flow-model sgs`; **meshes built before
-0.7.0 must be rebuilt**. It defaults to Courant 0.5. On synthetic cases it
-reaches the analytic levels within 1–2 cm. On Carlisle at the peak it
-reproduces a 5 m local-inertial solution more closely than 22 m local-inertial
-does, but like any local-inertial model it conveys more than the full SWE in
-deep, fast flow (`docs/HYDRAULICS.md` §15.13).
+0.8.0 must be rebuilt**. It defaults to Courant 0.5, and limits each face to
+critical flow (`--sgs-critical on`; weirs, notches, outflow edges). On
+synthetic cases it reaches the analytic levels within 1–2 cm. On Carlisle at
+the peak it reproduces a 5 m local-inertial solution more closely than 22 m
+local-inertial does, but like any local-inertial model it conveys more than
+the full SWE in deep, fast flow: against the 5 m SWE benchmark it stores 0.74
+of the volume (`docs/HYDRAULICS.md` §15.13–15.14). SGS is a representation
+of the cell's elevations; hydraulic formulations with momentum on it are
+planned.
 
 The local-inertial engines (`standard`, `sgs`) use the Bates et al. (2010) formulation with a
 Froude limiter (Fr ≤ 0.8), a wave-speed CFL timestep (`--courant`, default 0.7)
@@ -278,7 +282,11 @@ Why these:
 > (A5, both solvers) and, for SGS, by a table bug that attached edge sills and
 > R–A curves to the wrong neighbour for most cells. **SGS results before 0.7.0**
 > are affected by its frozen overbank conveyance (`docs/HYDRAULICS.md` §15.13);
-> SGS meshes built before 0.7.0 are refused until rebuilt.
+> SGS meshes built before 0.8.0 are refused until rebuilt. **Until 0.7.1 every
+> DEM sample was taken half a pixel east and south of its point** (A5 meshes
+> and Cartesian meshes from `--meshgen`; raster-aligned Cartesian meshes were
+> not affected; `docs/HYDRAULICS.md` §15.14). Meshes sampled before 0.8.0 load
+> with a warning: regenerate them.
 
 Known limitations: the default leaves more velocity noise in deep channels
 than the 0.2.x scheme did (`--momentum-damping` removes it, at some cost in
@@ -485,9 +493,10 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
   local CFL already apply to it)
 - Making the open-boundary (ghost-edge) flux consistent with the interior
   options (it still uses the original kernel and face-normal friction)
-- Additional SGS methodology development, including further validation of
-  the hydraulic-radius (R-A) flux kernel and extending sub-grid sampling to
-  more general channel/culvert geometries
+- Hydraulic formulations of differing complexity on the SGS geometry —
+  mostly how momentum is handled — to close the gap to the 5 m SWE benchmark
+  at the Carlisle peak (`docs/HYDRAULICS.md` §15.14); extending sub-grid
+  sampling to more general channel/culvert geometries
 - A like-for-like benchmark against LISFLOOD-FP on a matched Cartesian mesh
   (raster-aligned grids are available with `--meshgen-cartesian dem.tif`),
   and a D-Flow FM cross-check
