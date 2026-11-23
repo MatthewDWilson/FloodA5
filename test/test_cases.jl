@@ -111,7 +111,10 @@ end
         inroot = joinpath(other, "test", "case_runs", "c", "m.parquet")
         @test FC._rebase_argv([inroot], other) == [inroot]
     end
-    @test FC._same_argv(FC._rebase_argv([lowercase(other) * sep * "a.tif"], other), [joinpath(FC.REPO, "a.tif")])
+    @test FC._same_argv(FC._rebase_argv([other * sep * "a.tif"], other), [joinpath(FC.REPO, "a.tif")])
+    # Windows paths are case-insensitive (d:\… is D:\…); elsewhere case matters
+    Sys.iswindows() &&
+        @test FC._same_argv(FC._rebase_argv([lowercase(other) * sep * "a.tif"], other), [joinpath(FC.REPO, "a.tif")])
 end
 
 @testset "C4 — expected failures (xfail)" begin
