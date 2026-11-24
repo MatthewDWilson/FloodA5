@@ -51,8 +51,8 @@ without `_orient_collinear!`-style signs.
   `--project=ci` (minimal headless stack, fast to load).
 - Set `FLOODA5_NO_VIS=1` for anything that doesn't need a visualiser — it
   stubs GLMakie and cuts load time substantially. The globe viewer's server
-  (`--vis cesium`, plain HTTP.jl) still works; viewer JS tests: `node --test
-  visualisation/cesium/test/`, browser check: `visualisation/cesium/tools/smoke.mjs`.
+  (`--vis cesium`, plain HTTP.jl) still works; viewer JS tests: `cd visualisation/cesium && node
+  --test test/*.test.js`, browser check: `visualisation/cesium/tools/smoke.mjs`.
 - Unit/regression suite (same as CI):
   `bash ci/run_tests.sh .`  (Git Bash) — or run single files:
   `julia --project=. test/test_wp0_regressions.jl`

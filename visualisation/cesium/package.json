@@ -4,6 +4,6 @@
   "description": "FloodA5 web globe viewer (CesiumJS). No build step and no npm dependencies: CesiumJS is loaded at run time.",
   "type": "module",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   }
 }

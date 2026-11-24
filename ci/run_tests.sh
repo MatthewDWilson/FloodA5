@@ -66,7 +66,7 @@ total=${#TESTS[@]}
 if command -v node >/dev/null 2>&1; then
   total=$((total + 1))
   echo "::group::visualisation/cesium (node --test)"
-  if node --test visualisation/cesium/test/; then
+  if (cd visualisation/cesium && node --test test/*.test.js); then   # file list: Node 20 takes no directory
     echo "PASS  visualisation/cesium/test"
   else
     echo "::error file=visualisation/cesium/test::FAILED"
