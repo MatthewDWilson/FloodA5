@@ -340,7 +340,7 @@ the same cell are summed before flux routing.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--vis [MODE]` | off | Enable live visualisation. Modes: `makie` (GLMakie window; also a bare `--vis`, since 0.8.3) and `cesium` (web globe viewer, §6.2). |
+| `--vis [MODE]` | off | Enable live visualisation. Modes: `makie` (GLMakie window; also a bare `--vis`, since 0.8.3), `cesium` and `giro3d` (web globe viewers, §6.2). |
 | `--vis-port PORT` | 8080 | HTTP port for the globe viewer's server. Ignored for `--vis makie`. |
 
 ---
@@ -504,22 +504,27 @@ Options: `--fps N`, `--var depth|saturation|volume|velocity|ring`, `--from T`
 they carry no mesh geometry). In Julia: `rd = FloodA5Replay.open_replay("sim.h5")`
 (`visualisation/replay_data.jl`), then `MakieVisualiser.replay(rd)`.
 
-### 6.2 Globe viewer, CesiumJS (`--vis cesium`)
+### 6.2 Globe viewers: CesiumJS (`--vis cesium`) and Giro3D (`--vis giro3d`)
 
-A web viewer on a 3D globe (CesiumJS 1.147): the water surface is drawn at
-its height, so with Google Photorealistic 3D Tiles flooded buildings stand
-out of the water. It follows a running simulation live, or replays an output
-file. Open the printed URL (default `http://localhost:8080`) in a browser
-with WebGL 2 (any current Chrome, Edge or Firefox).
+A web viewer on a 3D globe: the water surface is drawn at its height, so
+with Google Photorealistic 3D Tiles flooded buildings stand out of the water.
+It follows a running simulation live, or replays an output file. There are
+two, with the same controls and behaviour on two rendering engines —
+**CesiumJS 1.147** and **Giro3D 2.0.7** (three.js) — while we compare them
+(docs/GLOBE_VIEWERS.md). The server always offers both:
+`/viz/cesium/index.html` and `/viz/giro3d/index.html`; `--vis` picks the one
+`/` opens. Open the printed URL (default `http://localhost:8080`) in a
+browser with WebGL 2 (any current Chrome, Edge or Firefox).
 
 ```bash
 # live: the viewer follows the run; after the run it keeps serving until Ctrl-C
 julia --project=. --threads auto FloodModel.jl --meshload mesh.parquet \
     --rainfall 30 --sim-duration 3600 --output run.h5 --vis cesium [--vis-port 8091]
+#   … --vis giro3d                                       (the Giro3D viewer)
 
 # replay an output file (format 2: the mesh is in the file)
-julia --project=. visualisation/cesium_replay.jl run.h5 [--port 8091] [--offset 53.2] [--open]
-julia --project=. FloodModel.jl --replay run.h5 --vis cesium [--vis-port 8091]   # the same
+julia --project=. visualisation/web_replay.jl run.h5 [--viewer giro3d] [--port 8091] [--offset 53.2] [--open]
+julia --project=. FloodModel.jl --replay run.h5 --vis cesium|giro3d [--vis-port 8091]   # the same
 ```
 
 **What is drawn.** One surface for the whole mesh, each cell flat at its
@@ -543,9 +548,10 @@ across Great Britain; look it up for your area, e.g. with PROJ and the
 national geoid grid). *Estimate* compares the cell
 elevations with the basemap's heights at about 300 cells (Google tiles: the
 30th percentile, since buildings and trees only raise them; terrain: the
-median) and reports the spread. The value is remembered per domain in the
-browser; `--offset` (replay) or `vertical_offset` in `config.json` give the
-default.
+median) and reports the spread. The value is remembered per domain and
+basemap in the browser (basemaps need not share a datum: at Carlisle the
+Google tiles need +52.2 m, Giro3D's Terrarium terrain about 0 m);
+`--offset` (replay) or `vertical_offset` in `config.json` give the default.
 
 **Live frames.** The server keeps one frame per second of wall-clock time
 (`FLOODA5_VIS_INTERVAL`, seconds) within 1 GB (`FLOODA5_VIS_BUDGET_MB`): when
@@ -560,7 +566,10 @@ waiting for Ctrl-C (scripted runs).
 (keys: space, ←, →); playback speed in frames per second or simulation time
 per second; *LIVE* follows the newest frame while the run goes on.
 
-**Basemaps and the Cesium ion token.** *Google Photorealistic 3D* and
+**Basemaps and the Cesium ion token.** Both viewers: *Google
+Photorealistic 3D*, *OpenStreetMap (flat)*, *None*. Terrain: *Cesium World
+Terrain + OSM* (CesiumJS; needs the token) or *Terrarium terrain + OSM*
+(Giro3D; AWS open elevation tiles, no key). *Google Photorealistic 3D* and
 *Cesium World Terrain* need a (free) Cesium ion access token
 (ion.cesium.com → Access Tokens). Give it to the server in the environment —
 it is passed to the browser, never stored in the repository:
@@ -576,11 +585,15 @@ Scope the token to `assets:read` and restrict its allowed URLs to
 `http://localhost:*` in the ion dashboard. A Google Map Tiles API key
 (`FLOODA5_GOOGLE_TILES_KEY`) is the other route to the Google tiles.
 Without either, the viewer uses OpenStreetMap on a flat globe. Google's
-terms: the Google Maps logo and data attributions are shown by CesiumJS;
-Google tiles must not be combined with Bing imagery (the viewer uses none).
-Optional settings go in `visualisation/cesium/config.json` (git-ignored; see
-`config.example.json` and docs/DATA_FORMATS.md §7). For offline use, point
-`FLOODA5_CESIUM_URL` at a local CesiumJS build (`…/Build/Cesium/`).
+terms: the Google Maps logo (CesiumJS) or the words *Google Maps* (Giro3D)
+and the data attributions are shown; Google tiles must not be combined with
+Bing imagery (the viewers use none).
+Optional settings go in `visualisation/viewer-common/config.json`
+(git-ignored; see `config.example.json` and docs/DATA_FORMATS.md §7). Both
+viewers load their engine from a CDN (CesiumJS from cesium.com; Giro3D,
+three.js and OpenLayers as ES modules from esm.sh, pinned in
+`visualisation/giro3d/index.html`). For offline use of the CesiumJS viewer,
+point `FLOODA5_CESIUM_URL` at a local CesiumJS build (`…/Build/Cesium/`).
 
 The server listens on 127.0.0.1 only and answers only requests addressed to
 localhost.

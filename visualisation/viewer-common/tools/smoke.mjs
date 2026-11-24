@@ -62,6 +62,8 @@ async function cdpTarget() {
 }
 
 const consoleErrors = [];
+const requests = new Map(), failed = [];      // network failures (query secrets redacted)
+const netlog = args.includes('--netlog'), apiLog = [], tStart = Date.now();   // --netlog: the viewer's API requests
 let ws, nextId = 1;
 const waiting = new Map();
 function send(method, params = {}) {
@@ -89,6 +91,16 @@ try {
     if (m.id && waiting.has(m.id)) {
       const w = waiting.get(m.id); waiting.delete(m.id);
       m.error ? w.reject(new Error(m.error.message)) : w.resolve(m.result);
+    } else if (m.method === 'Network.requestWillBeSent') {
+      requests.set(m.params.requestId, m.params.request.url);
+      if (netlog && /\/api\//.test(m.params.request.url)) apiLog.push(`${Date.now() - tStart} send ${m.params.request.url.replace(/^https?:\/\/[^/]+/, '')}`);
+    } else if (netlog && (m.method === 'Network.loadingFinished' || m.method === 'Network.responseReceived') &&
+               /\/api\//.test(requests.get(m.params.requestId) || '')) {
+      apiLog.push(`${Date.now() - tStart} ${m.method.slice(8)} ${requests.get(m.params.requestId).replace(/^https?:\/\/[^/]+/, '')}`);
+    } else if (m.method === 'Network.loadingFailed') {
+      const u = (requests.get(m.params.requestId) || '?').replace(/([?&](key|session|access_token)=)[^&]*/g, '$1…');
+      failed.push(`${m.params.errorText}${m.params.canceled ? ' (canceled)' : ''}${m.params.blockedReason ? ` (${m.params.blockedReason})` : ''}: ${u.slice(0, 160)}`);
+      if (netlog && /\/api\//.test(u)) apiLog.push(`${Date.now() - tStart} FAILED ${m.params.errorText} ${u}`);
     } else if (m.method === 'Runtime.exceptionThrown') {
       consoleErrors.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text);
     } else if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) {
@@ -97,6 +109,7 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
+  await send('Network.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
   await send('Page.navigate', { url });
   const t0 = Date.now();
@@ -121,8 +134,25 @@ try {
     await sleep(settle);
     await shot(out.replace(/\.png$/i, `_${k + 1}.png`));
   }
+  const profSecs = +opt('--profile', '0');        // --profile N: CPU profile, top self time
+  let profile;
+  if (profSecs > 0) {
+    await send('Profiler.enable');
+    await send('Profiler.start');
+    await sleep(profSecs * 1000);
+    const { profile: p } = await send('Profiler.stop');
+    const dt = (p.endTime - p.startTime) / p.samples.length / 1000;    // ms per sample
+    const self = new Map(), byId = new Map(p.nodes.map(nd => [nd.id, nd]));
+    for (const id of p.samples) {
+      const cf = byId.get(id).callFrame;
+      const key = `${cf.functionName || '(anon)'} ${cf.url.split('/').slice(-2).join('/')}:${cf.lineNumber}`;
+      self.set(key, (self.get(key) || 0) + dt);
+    }
+    profile = [...self].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${v.toFixed(0).padStart(6)} ms  ${k.slice(0, 140)}`);
+  }
   st = await evaluate('JSON.stringify(window.__flooda5 || null)').then(JSON.parse);
-  console.log(JSON.stringify({ status: st, consoleErrors }, null, 2));
+  console.log(JSON.stringify({ status: st, ...(profile ? { profile } : {}), consoleErrors, failedRequests: failed.slice(0, 20),
+                               failedCount: failed.length, ...(netlog ? { apiLog } : {}) }, null, 2));
   if (!st || st.state === 'error' || st.shownFrame === null || st.errors.length) code = 1;
 } catch (e) {
   console.error(`smoke test failed: ${e.message}`);

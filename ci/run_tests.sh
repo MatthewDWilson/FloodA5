@@ -65,16 +65,16 @@ done
 total=${#TESTS[@]}
 if command -v node >/dev/null 2>&1; then
   total=$((total + 1))
-  echo "::group::visualisation/cesium (node --test)"
-  if node --test visualisation/cesium/test/; then
-    echo "PASS  visualisation/cesium/test"
+  echo "::group::visualisation/viewer-common (node --test)"
+  if (cd visualisation/viewer-common && node --test test/*.test.js); then   # file list: Node 20 takes no directory
+    echo "PASS  visualisation/viewer-common/test"
   else
-    echo "::error file=visualisation/cesium/test::FAILED"
-    failed+=("visualisation/cesium/test (node)")
+    echo "::error file=visualisation/viewer-common/test::FAILED"
+    failed+=("visualisation/viewer-common/test (node)")
   fi
   echo "::endgroup::"
 else
-  echo "SKIP  visualisation/cesium/test (node not found)"
+  echo "SKIP  visualisation/viewer-common/test (node not found)"
 fi
 
 echo

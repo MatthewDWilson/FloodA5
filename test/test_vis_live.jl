@@ -7,14 +7,14 @@
 # end of the run; the last frame the server holds is the run's end state, and
 # cell values (looked up through /api/cell, so in the server's cell order)
 # equal the output file's. Then the same file is served as a replay
-# (visualisation/cesium_replay.jl): frames and cell order as in the file.
+# (visualisation/web_replay.jl): frames and cell order as in the file.
 # Also: a bare `--vis` now means the Makie viewer.
 
 ENV["FLOODA5_NO_VIS"] = "1"
 ENV["FLOODA5_VIS_INTERVAL"] = "0"     # keep every live frame (within the budget)
 ENV["FLOODA5_VIS_LINGER"] = "3"       # serve 3 s after the run, then stop
 include(joinpath(@__DIR__, "..", "FloodModel.jl"))
-include(joinpath(@__DIR__, "..", "visualisation", "cesium_replay.jl"))
+include(joinpath(@__DIR__, "..", "visualisation", "web_replay.jl"))
 const FA = FloodA5Analysis
 using Test, HTTP, JSON3, HDF5, Logging
 
@@ -93,7 +93,7 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
 
     # the same run as a replay
     rport = free_port()
-    vis, f = cesium_replay_server(H5; port = rport)
+    vis, f = web_replay_server(H5; port = rport, viewer = "giro3d")
     try
         run = FA.load_run(H5)
         info = json_(rport, "/api/info")
