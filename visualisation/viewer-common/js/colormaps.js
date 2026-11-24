@@ -5,6 +5,10 @@
 const MAPS = {
   // water depth: pale cyan → deep blue
   depth: [[0, 198, 235, 255], [0.25, 110, 190, 240], [0.5, 40, 130, 220], [0.75, 20, 70, 170], [1, 10, 25, 100]],
+  // sediment-laden water: light brown → dark brown
+  sediment: [[0, 236, 218, 180], [0.25, 214, 184, 132], [0.5, 184, 143, 88], [0.75, 143, 101, 55], [1, 96, 62, 30]],
+  // perceptually uniform, readable with colour-vision deficiencies
+  cividis: [[0, 0, 34, 78], [0.25, 61, 78, 110], [0.5, 124, 123, 120], [0.75, 188, 175, 111], [1, 255, 234, 70]],
   // perceptually uniform, for water level / general use
   viridis: [[0, 68, 1, 84], [0.25, 59, 82, 139], [0.5, 33, 145, 140], [0.75, 94, 201, 98], [1, 253, 231, 37]],
   // speed: dark → hot
@@ -17,9 +21,16 @@ const MAPS = {
             [0.9, 210, 200, 190], [1, 250, 250, 250]],
   // fraction 0–1
   blues: [[0, 247, 251, 255], [0.5, 107, 174, 214], [1, 8, 48, 107]],
+  greys: [[0, 245, 245, 245], [1, 40, 40, 40]],
 };
 
 export const COLORMAP_NAMES = Object.keys(MAPS);
+
+/** Names shown in the palette menu. */
+export const COLORMAP_LABELS = {
+  depth: 'Water (blue)', sediment: 'Sediment (brown)', viridis: 'Viridis', cividis: 'Cividis',
+  magma: 'Magma', turbo: 'Turbo', blues: 'Blues', greys: 'Greys', terrain: 'Terrain',
+};
 
 /** Colour (r, g, b in 0–255) of map `name` at t ∈ [0, 1]. */
 export function colorAt(name, t) {

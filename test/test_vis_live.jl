@@ -93,9 +93,15 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
 
     # the same run as a replay
     rport = free_port()
-    vis, f = web_replay_server(H5; port = rport, viewer = "giro3d")
+    vis, f = web_replay_server(H5; port = rport, viewer = "giro3d", autoplay = true)
     try
         run = FA.load_run(H5)
+        cfg = json_(rport, "/api/config")
+        @test cfg.autoplay == true && !haskey(cfg, :vertical_offset)    # no --offset: estimated
+        rr = json_(rport, "/api/ranges?wet=0")         # (a short test run: little is 5 cm deep)
+        dr = rr.vars.water_depth
+        @test rr.complete && rr.frames == min(length(run.t), 24) && dr.n > 0
+        @test 0 <= dr.min <= dr.p02 <= dr.p98 <= dr.max
         info = json_(rport, "/api/info")
         @test info.mode == "replay" && info.complete && info.n_cells == length(run.mesh)
         @test "water_depth" in info.vars && "velocity" in info.vars

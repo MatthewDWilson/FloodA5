@@ -11,28 +11,32 @@
 import * as THREE from 'three';
 import { buildSurface, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
 import { colormapTable } from '../../viewer-common/js/colormaps.js';
-import { defaultStyle, glslHelpers } from '../../viewer-common/js/surface.js';
+import { defaultStyle, glslHelpers, glslFragmentHelpers } from '../../viewer-common/js/surface.js';
 
 const VERTEX = `
 #include <common>
 #include <logdepthbuf_pars_vertex>
 ${glslHelpers()}
 attribute float cell;
+attribute float edge;
 uniform sampler2D uDepth;
 uniform sampler2D uCvar;
 uniform sampler2D uStatic;
-uniform float uTexW, uStaticW, uH0, uOffset, uMode, uCmode, uExag;
+uniform float uTexW, uStaticW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias;
 uniform vec3 uCentre;
 varying float vDepth;
 varying float vCval;
+varying float vEdge;
 void main() {
   int i = int(cell + 0.5);
   vec4 st = fa5Static(uStatic, uStaticW, i);
   float d = max(fa5Packed(uDepth, uTexW, i), 0.0);
   float level = fa5Level(uMode, uExag, d, st);
   vec3 n = fa5Normal(position + uCentre);
-  vec3 p = position + n * (level + uOffset - uH0);
+  // (the mesh's matrix is a translation to uCentre: model = world − uCentre)
+  vec3 p = fa5DepthBias(position + n * (level + uOffset - uH0), cameraPosition - uCentre, uDepthBias);
   vDepth = d;
+  vEdge = edge;
   float cv = (uCmode > 1.5 && uCmode < 2.5) ? fa5Packed(uCvar, uTexW, i) : 0.0;
   vCval = fa5ColorValue(uCmode, d, st, cv);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
@@ -43,22 +47,26 @@ void main() {
 const FRAGMENT = `
 #include <common>
 #include <logdepthbuf_pars_fragment>
-${glslHelpers()}
+${glslHelpers()}${glslFragmentHelpers()}
 uniform sampler2D uCmap;
-uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode;
+uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode, uBorders;
 varying float vDepth;
 varying float vCval;
+varying float vEdge;
 // three.js declares no fragment output for an explicit GLSL3 ShaderMaterial
 layout(location = 0) out highp vec4 fa5FragColor;
 void main() {
+  float line = fa5Border(vEdge, uBorders);
   if (uMode < 1.5 && vDepth < uMinDepth) discard;
   #include <logdepthbuf_fragment>
-  fa5FragColor = vec4(texture(uCmap, fa5MapCoord(vCval, uCmin, uCmax)).rgb, uAlpha);
+  vec3 c = mix(texture(uCmap, fa5MapCoord(vCval, uCmin, uCmax)).rgb, vec3(1.0), line);
+  fa5FragColor = vec4(c, max(uAlpha, line));
 }
 `;
 
 const STYLE_UNIFORMS = { mode: 'uMode', cmode: 'uCmode', cmin: 'uCmin', cmax: 'uCmax', alpha: 'uAlpha',
-                         minDepth: 'uMinDepth', exag: 'uExag', offset: 'uOffset' };
+                         minDepth: 'uMinDepth', exag: 'uExag', offset: 'uOffset', borders: 'uBorders',
+                         depthBias: 'uDepthBias' };
 
 export class SurfaceMesh {
   /**
@@ -83,6 +91,7 @@ export class SurfaceMesh {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(surface.positions, 3));
     g.setAttribute('cell', new THREE.BufferAttribute(surface.cell, 1));
+    g.setAttribute('edge', new THREE.BufferAttribute(surface.edge, 1));
     g.setIndex(new THREE.BufferAttribute(surface.indices, 1));
     g.computeBoundingSphere();
     this.depthTex = floatTexture(packCellValues(new Float32Array(0), this.n));
@@ -105,6 +114,7 @@ export class SurfaceMesh {
         uOffset: { value: s.offset }, uMode: { value: s.mode }, uCmode: { value: s.cmode },
         uCmin: { value: s.cmin }, uCmax: { value: s.cmax }, uAlpha: { value: s.alpha },
         uMinDepth: { value: s.minDepth }, uExag: { value: s.exag },
+        uBorders: { value: s.borders }, uDepthBias: { value: s.depthBias },
       },
       transparent: role !== 'bed',
       depthWrite: role === 'bed',

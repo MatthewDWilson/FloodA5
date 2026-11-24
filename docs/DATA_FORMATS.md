@@ -487,6 +487,7 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | `GET /api/mesh` | binary | The mesh (below); 204 until it is set |
 | `GET /api/frames` | JSON | `{complete, frames: [{id, t}, …]}` in time order |
 | `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
+| `GET /api/ranges?wet=0.05` | JSON | Colour ranges over the run (since 0.8.6): `{wet, frames, of, complete, vars: {var: {p02, p98, min, max, n}}}` — below |
 | `GET /api/cell/{i}?frame={id}` | JSON | Cell `i` (0-based): `{id, lon, lat, elevation, base, values: {var: v}}` |
 | `WS /api/live` | JSON messages | Notifications (below) |
 
@@ -495,6 +496,14 @@ Frame variables use the output file's names: `water_depth`, `velocity`,
 Water level = `base + water_depth`. Frame ids are stable; live frames thinned
 by the memory budget disappear from `/api/frames` (a `reindex` message says
 so). Non-finite values in JSON are `null`.
+
+`/api/ranges` (`VisualisationServer.run_ranges`): for each frame variable and
+`level` (`base + water_depth`), the 2nd and 98th percentiles, minimum,
+maximum and count of the values in wet cells (`water_depth ≥ wet`, default
+0.05 m) over up to 24 frames spread evenly over the run (`frames` of `of`);
+cells are subsampled evenly beyond 4 million values. A live run's ranges
+cover the frames so far (`complete` false). Cached until the mesh or the
+frames change.
 
 ### Binary mesh (`/api/mesh`)
 
@@ -546,7 +555,8 @@ file, below) and `FLOODA5_CESIUM_URL`.
 | `google_key` | `FLOODA5_GOOGLE_TILES_KEY` | `""` | Google Map Tiles API key (the other route to the Google tiles) |
 | `cesium_url` | `FLOODA5_CESIUM_URL` | the CesiumJS 1.147 release on cesium.com | Base URL of a CesiumJS build (`…/Build/Cesium/`; a local copy for offline use) |
 | `default_basemap` | — | `google3d` with a token, else `osm` | `google3d` / `terrain` / `osm` / `none` (the page's `?basemap=` overrides) |
-| `vertical_offset` | — | 0 | Default offset (m) from model heights to ellipsoidal heights; the viewer remembers its own per domain |
+| `vertical_offset` | — | none | Offset (m) from model heights to ellipsoidal heights, used on basemaps with ellipsoidal heights (`web_replay.jl --offset`); without it the viewer estimates one per basemap and remembers it (USER_GUIDE §6.2) |
+| `autoplay` | — | `false` | Start playing a replay when the page opens (`web_replay.jl --autoplay`; the page's `?autoplay=1` overrides) |
 
 The two keys are looked up (`io/FloodA5Keys.jl`, since 0.8.5) in the
 environment variable of that name, then in JSON key files: the file named by

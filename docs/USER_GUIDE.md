@@ -523,9 +523,12 @@ julia --project=. --threads auto FloodModel.jl --meshload mesh.parquet \
 #   … --vis giro3d                                       (the Giro3D viewer)
 
 # replay an output file (format 2: the mesh is in the file)
-julia --project=. visualisation/web_replay.jl run.h5 [--viewer giro3d] [--port 8091] [--offset 53.2] [--open]
+julia --project=. visualisation/web_replay.jl run.h5 [--viewer giro3d] [--port 8091] [--offset 53.2] [--autoplay] [--open]
 julia --project=. FloodModel.jl --replay run.h5 --vis cesium|giro3d [--vis-port 8091]   # the same
 ```
+
+A replay opens at the first frame and waits for *Play*; `--autoplay` (or
+`?autoplay=1` in the URL) starts playing when the page opens.
 
 **What is drawn.** One surface for the whole mesh, each cell flat at its
 water level: `datum + depth`, where the datum is the cell elevation (standard,
@@ -536,22 +539,48 @@ ground or a building is higher — wet cells partly under buildings show as
 water between them. *Depth × exaggeration* draws `bed + depth × N` instead
 (for flat basemaps). *Bed surface* draws the mesh elevations, coloured by
 height: the default on the flat basemaps, where there is no terrain.
-Colour by water depth, water level, speed or (SGS) wetted fraction; the
-range is per frame or fixed. Hover over a cell for its depth, level, bed and
-id.
+*Cell borders* draws each cell's outline as a white hairline (off by
+default; faded out where cells are smaller than about 8 pixels). Hover over
+a cell for its depth, level, bed and id.
 
-**Vertical offset.** Model heights are in the DEM's datum (e.g. Ordnance
-Datum Newlyn); the globe, Google tiles and Cesium World Terrain use heights
-above the WGS84 ellipsoid. The *vertical offset* is added to every model
-height to convert: the geoid separation of the datum (roughly +45 to +55 m
-across Great Britain; look it up for your area, e.g. with PROJ and the
-national geoid grid). *Estimate* compares the cell
-elevations with the basemap's heights at about 300 cells (Google tiles: the
-30th percentile, since buildings and trees only raise them; terrain: the
-median) and reports the spread. The value is remembered per domain and
-basemap in the browser (basemaps need not share a datum: at Carlisle the
-Google tiles need +52.2 m, Giro3D's Terrarium terrain about 0 m);
-`--offset` (replay) or `vertical_offset` in `config.json` give the default.
+When zoomed out, 3D tiles and terrain are drawn from coarse levels of
+detail that stand metres above the ground they simplify; the water is
+therefore drawn slightly nearer the camera than it is — up to 1.5 % of its
+distance, from 800 m away (nothing closer, so close views keep exact
+occlusion) — so that shallow water is not hidden in large triangles.
+
+**Colours.** Colour by water depth, water level, speed or (SGS) wetted
+fraction. The range is, by default, fixed for the whole run: the 2nd to
+98th percentiles over the wet cells of up to 24 frames spread over the run
+(the server's `/api/ranges`; a live run's are updated as it goes). *frame*
+uses the 1st–99th percentiles of the frame shown, *fixed* your own limits.
+Click the colour bar to choose a palette: water (blue), sediment (light to
+dark brown, for sediment-laden water), viridis, cividis, magma, turbo, blues,
+greys. The choice is remembered per variable in the browser.
+
+**Vertical offset.** Model heights are in the DEM's datum (usually mean sea
+level: a geoid); Google tiles and Cesium World Terrain use heights above the
+WGS84 ellipsoid. The *vertical offset* is added to every model height to
+convert: there, the geoid height — between about −107 and +86 m worldwide
+(look it up for your area, e.g. with PROJ and the national geoid grid).
+Each basemap has its own offset, since their heights need not share a datum:
+at Carlisle the Google tiles need +52.2 m, Cesium World Terrain about
++52.9 m, Giro3D's Terrarium terrain (above mean sea level) about 0 m. The
+viewer uses, in order:
+
+1. `--offset` (replay) or `vertical_offset` in `config.json`, for a basemap
+   with ellipsoidal heights (Google tiles, Cesium World Terrain);
+2. the value saved in this browser for this domain and basemap (set by hand
+   or estimated before);
+3. on a flat basemap (OpenStreetMap, none): minus the 2nd percentile of the
+   bed elevations, so the model's lowest ground sits on the map;
+4. otherwise an estimate from the basemap, made when the basemap is first
+   shown and then saved.
+
+*Estimate* redoes the estimate: it compares the cell elevations with the
+basemap's heights at about 300 cells (Google tiles: the 30th percentile,
+since buildings and trees only raise them; terrain: the median) and reports
+the spread. The panel says where the current value came from.
 
 **Live frames.** The server keeps one frame per second of wall-clock time
 (`FLOODA5_VIS_INTERVAL`, seconds) within 1 GB (`FLOODA5_VIS_BUDGET_MB`): when
@@ -564,7 +593,8 @@ waiting for Ctrl-C (scripted runs).
 
 **Controls.** Timeline slider; first / previous / play / next / last
 (keys: space, ←, →); playback speed in frames per second or simulation time
-per second; *LIVE* follows the newest frame while the run goes on.
+per second; *LIVE* follows the newest frame while the run goes on. A replay,
+or a run that has finished, opens at the first frame.
 
 **Basemaps and the Cesium ion token.** Both viewers: *Google
 Photorealistic 3D*, *OpenStreetMap (flat)*, *None*. Terrain: *Cesium World

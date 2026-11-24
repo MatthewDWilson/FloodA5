@@ -126,6 +126,19 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test cfg["protocol"] == 2 && cfg["vertical_offset"] == 1.5
             @test endswith(cfg["cesium_url"], "/") && haskey(cfg, "ion_token")
 
+            # colour ranges over the run: wet cells (depth ≥ wet) of every frame so far
+            rr = json_(port, "/api/ranges?wet=0.05")
+            @test rr["complete"] == false && rr["frames"] == 2 && rr["of"] == 2 && rr["wet"] == 0.05
+            dr = rr["vars"]["water_depth"]                      # wet depths 0.5, 1.0, 0.6, 1.1
+            @test dr["n"] == 4 && isapprox(dr["min"], 0.5; atol = 1e-6) && isapprox(dr["max"], 1.1; atol = 1e-6)
+            @test isapprox(dr["p02"], 0.506; atol = 1e-5) && isapprox(dr["p98"], 1.094; atol = 1e-5)
+            @test rr["vars"]["velocity"]["n"] == 4 && isapprox(rr["vars"]["velocity"]["max"], 0.3; atol = 1e-6)
+            lv = rr["vars"]["level"]                            # base + depth (cell 2: 11.5 + 0.5, …)
+            @test lv["n"] == 4 && isapprox(lv["min"], 12.0; atol = 1e-5)
+            @test json_(port, "/api/ranges?wet=0.55")["vars"]["water_depth"]["n"] == 3
+            @test json_(port, "/api/ranges?wet=nonsense")["wet"] == 0.05
+            @test json_(port, "/api/ranges?wet=0")["vars"]["water_depth"]["n"] == 6
+
             # WebSocket: frame and complete messages to a connected client …
             msgs = Channel{Any}(32)
             ws_task = @async HTTP.WebSockets.open("ws://127.0.0.1:$port/api/live") do ws
@@ -154,6 +167,9 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test late["complete"] == true
             @test late["frames"] == 3
             @test json_(port, "/api/frames")["complete"] == true
+            # the ranges follow the new frame (not the cached two-frame answer)
+            rr = json_(port, "/api/ranges?wet=0.05")
+            @test rr["complete"] == true && rr["frames"] == 3 && rr["vars"]["water_depth"]["n"] == 7
 
             # static files, path checks, Host guard
             for v in ("cesium", "giro3d")                 # both viewers are served
@@ -221,6 +237,16 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test reads[] == 1                       # cached
             @test get_(port, "/api/frames/4/water_depth").status == 404
             @test json_(port, "/api/info")["mode"] == "replay"
+            # ranges over a replay: frames k = 1, 2, 3 hold k, k+1, k+2
+            rr = json_(port, "/api/ranges")
+            @test rr["complete"] == true && rr["frames"] == 3 && rr["wet"] == 0.05
+            @test rr["vars"]["water_depth"]["n"] == 9 && rr["vars"]["water_depth"]["min"] == 1 &&
+                  rr["vars"]["water_depth"]["max"] == 5
+            n_reads = reads[]
+            json_(port, "/api/ranges")
+            @test reads[] == n_reads                  # cached
+            @test VS.run_ranges(vis; max_frames = 2).frames == 2      # frames spread over the run
+            @test VS.run_ranges(vis; max_values = 3).vars["water_depth"].n == 3   # cells subsampled
             # stop() releases connected clients (their read loops end)
             n_seen = Ref(0)
             client = @async try
