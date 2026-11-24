@@ -115,7 +115,7 @@ default results unchanged).
 - Tests: `test/test_vis_server.jl` (protocol, thinning, budget, late
   clients, shutdown, Host guard, paths), `test/test_vis_live.jl` (a live run
   followed over the WebSocket against its HDF5 output; replay; bare `--vis`),
-  and the viewer's JavaScript (`node --test visualisation/cesium/test/`,
+  and the viewer's JavaScript (`cd visualisation/cesium && node --test test/*.test.js`,
   run by `ci/run_tests.sh`); a shared binary fixture keeps the Julia
   encoder and the JavaScript decoder in step. `ci/Project.toml` gains HTTP
   (1.x). Browser check (local): `visualisation/cesium/tools/smoke.mjs`.
