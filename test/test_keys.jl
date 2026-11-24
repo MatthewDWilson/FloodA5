@@ -44,6 +44,11 @@ free_port() = (l = HTTP.Sockets.listen(HTTP.Sockets.IPv4("127.0.0.1"), 0);
             @test K.flooda5_key(NAME; files = [none], default = "d") == "d"
             @test K.key_source(NAME; files = [none]) === nothing
         end
+        @testset "byte-order mark" begin
+            bom = joinpath(dir, "bom", "keys.json"); mkpath(dirname(bom))
+            write(bom, "﻿" * JSON3.write(Dict(NAME => "token-bom")))
+            @test K.flooda5_key(NAME; files = [bom]) == "token-bom"
+        end
         @testset "malformed file" begin
             v = with_logger(NullLogger()) do
                 K.flooda5_key(NAME; files = [bad, b])

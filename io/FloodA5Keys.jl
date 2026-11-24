@@ -39,8 +39,8 @@ const _WARNED = Set{String}()
 function _read_keys(f::AbstractString)
     isfile(f) || return Dict{String,Any}()
     try
-        d = JSON3.read(read(f, String), Dict{String,Any})
-        return d
+        # (a UTF-8 byte-order mark, as Notepad and Windows PowerShell 5.1 write, is dropped)
+        return JSON3.read(lstrip(==('﻿'), read(f, String)), Dict{String,Any})
     catch
         f in _WARNED || (push!(_WARNED, f); @warn "FloodA5Keys: $f is not a JSON object of keys; ignoring it")
         return Dict{String,Any}()
