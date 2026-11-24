@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-25): 0.8.4 — the default engine is
+(`VERSIONING.md`). Status (2026-11-25): 0.8.5 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -41,7 +41,10 @@ viewer rebuilt (`--vis cesium`, `visualisation/cesium_replay.jl`; USER_GUIDE
 Makie). 0.8.4: the same viewer on Giro3D (`--vis giro3d`); both share
 `visualisation/viewer-common/` (app, UI, protocol, surface GLSL; engines
 are thin adapters); replay is `visualisation/web_replay.jl`. Choosing
-between them: docs/GLOBE_VIEWERS.md.
+between them: docs/GLOBE_VIEWERS.md. 0.8.5: access keys (Cesium ion token,
+…) through `io/FloodA5Keys.jl` — environment first, then git-ignored
+`keys.json` / `~/.flooda5/keys.json` (template `keys.example.json`); never
+print a key's value (use `key_source`).
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.14 SGS). SGS meshes

@@ -47,6 +47,10 @@ using HTTP
 using JSON3
 using Sockets
 
+# Access keys (Cesium ion token, Google key): environment, then key files
+include(joinpath(@__DIR__, "..", "io", "FloodA5Keys.jl"))
+using .FloodA5Keys: flooda5_key, key_source
+
 # Call everything qualified (VisualisationServer.start, …): FloodModel.jl
 # also loads MakieVisualiser, which has its own start/stop/push_frame!.
 export VisServer, MeshPayload
@@ -274,6 +278,11 @@ function start(; port::Int = 8080, host::AbstractString = "127.0.0.1",
     r isa Exception && throw(r)
     s.server = r
     @info "VisServer: listening on http://localhost:$port"
+    src = key_source("FLOODA5_CESIUM_ION_TOKEN")
+    src === nothing ?
+        @info("VisServer: no Cesium ion token (FLOODA5_CESIUM_ION_TOKEN in the environment, keys.json " *
+              "or ~/.flooda5/keys.json; template keys.example.json): Google 3D tiles unavailable") :
+        @info("VisServer: Cesium ion token from $src")
     return s
 end
 
@@ -411,11 +420,13 @@ end
     viewer_config(s) → Dict
 
 `/api/config`: `visualisation/viewer-common/config.json` (git-ignored) if present,
-then the server's `config`, then the environment: `FLOODA5_CESIUM_ION_TOKEN`
+then the server's `config`, then the keys — `FLOODA5_CESIUM_ION_TOKEN`
 (Cesium ion access token: Google Photorealistic 3D Tiles, Cesium World
-Terrain), `FLOODA5_GOOGLE_TILES_KEY` (Google Map Tiles API key, the other
-route to the Google tiles) and `FLOODA5_CESIUM_URL` (base URL of a CesiumJS
-build, e.g. a local copy for offline use).
+Terrain) and `FLOODA5_GOOGLE_TILES_KEY` (Google Map Tiles API key, the other
+route to the Google tiles) — from the environment or a key file
+(`io/FloodA5Keys.jl`: keys.json in the repository root or
+~/.flooda5/keys.json), then `FLOODA5_CESIUM_URL` (base URL of a CesiumJS
+build, e.g. a local copy for offline use) from the environment.
 """
 function viewer_config(s::VisServer)
     c = Dict{String,Any}("protocol" => PROTOCOL, "cesium_url" => DEFAULT_CESIUM_URL,
@@ -431,11 +442,12 @@ function viewer_config(s::VisServer)
         end
     end
     merge!(c, s.config)
-    for (k, e) in (("ion_token", "FLOODA5_CESIUM_ION_TOKEN"), ("google_key", "FLOODA5_GOOGLE_TILES_KEY"),
-                   ("cesium_url", "FLOODA5_CESIUM_URL"))
-        v = get(ENV, e, "")
+    for (k, e) in (("ion_token", "FLOODA5_CESIUM_ION_TOKEN"), ("google_key", "FLOODA5_GOOGLE_TILES_KEY"))
+        v = flooda5_key(e)
         isempty(v) || (c[k] = v)
     end
+    v = get(ENV, "FLOODA5_CESIUM_URL", "")
+    isempty(v) || (c["cesium_url"] = v)
     occursin("YOUR_", string(c["ion_token"])) && (c["ion_token"] = "")
     endswith(string(c["cesium_url"]), "/") || (c["cesium_url"] = string(c["cesium_url"], "/"))
     return c
@@ -599,7 +611,7 @@ function _static(s::VisServer, parts)
     root = abspath(s.viz_dir)
     f = abspath(joinpath(root, parts...))
     (startswith(f, root) && isfile(f)) || return _text(404, "Not found")
-    basename(f) == "config.json" && return _text(404, "Not found")   # served via /api/config
+    basename(f) in ("config.json", "keys.json") && return _text(404, "Not found")   # never served as files
     ext = lowercase(splitext(f)[2])
     return HTTP.Response(200, ["Content-Type" => get(_MIME, ext, "application/octet-stream"),
                                "Cache-Control" => "no-cache"], read(f))

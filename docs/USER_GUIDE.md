@@ -571,15 +571,26 @@ Photorealistic 3D*, *OpenStreetMap (flat)*, *None*. Terrain: *Cesium World
 Terrain + OSM* (CesiumJS; needs the token) or *Terrarium terrain + OSM*
 (Giro3D; AWS open elevation tiles, no key). *Google Photorealistic 3D* and
 *Cesium World Terrain* need a (free) Cesium ion access token
-(ion.cesium.com → Access Tokens). Give it to the server in the environment —
-it is passed to the browser, never stored in the repository:
+(ion.cesium.com → Access Tokens). Put it in a **keys file** (since 0.8.5):
+the same on every OS, read by every new run, never committed:
 
 ```bash
-# Windows (persistent; restart VS Code / the terminal afterwards)
-setx FLOODA5_CESIUM_ION_TOKEN "eyJ…"
-# bash
-export FLOODA5_CESIUM_ION_TOKEN="eyJ…"
+# per user, shared by every clone and worktree (recommended)
+mkdir ~/.flooda5            # PowerShell: mkdir $HOME\.flooda5
+cp keys.example.json ~/.flooda5/keys.json
+# …or in the repository root:  cp keys.example.json keys.json   (git-ignored)
+# then edit the file: "FLOODA5_CESIUM_ION_TOKEN": "eyJ…"
 ```
+
+Keys are looked up in this order (`io/FloodA5Keys.jl`): the environment
+variable of the same name (for CI and servers), the file named by
+`FLOODA5_KEYS`, `keys.json` in the repository root, `~/.flooda5/keys.json`.
+The viewer's server logs where its token came from (never the value), or
+that there is none. Environment variables work too, but on Windows a value
+set with `setx` reaches only processes started afterwards from Explorer — a
+VS Code that was already running (even after closing its windows, if a
+`Code.exe` stayed alive) keeps the old environment. The token is passed to
+the browser, so keep it scoped (below).
 
 Scope the token to `assets:read` and restrict its allowed URLs to
 `http://localhost:*` in the ion dashboard. A Google Map Tiles API key
