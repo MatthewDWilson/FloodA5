@@ -21,6 +21,25 @@ export function geodeticToEcef(lon, lat, h = 0) {
   return [(N + h) * c * Math.cos(lo), (N + h) * c * Math.sin(lo), (N * (1 - WGS84_E2) + h) * s];
 }
 
+/**
+ * ECEF (metres) → geodetic {lon, lat (degrees), h (metres above the ellipsoid)}.
+ * Bowring's method (with the second eccentricity in the latitude numerator),
+ * one step: better than 1 mm for heights within ±10 km of the surface.
+ * (Giro3D 2.0.7's Ellipsoid.toGeodetic uses the first eccentricity there and
+ * is ~130 m off in height at mid-latitudes: use this instead.)
+ */
+export function ecefToGeodetic(x, y, z) {
+  const a = WGS84_A, b = WGS84_B, e2 = WGS84_E2, ep2 = (a * a - b * b) / (b * b);
+  const p = Math.hypot(x, y);
+  const th = Math.atan2(z * a, p * b);
+  const st = Math.sin(th), ct = Math.cos(th);
+  const lat = Math.atan2(z + ep2 * b * st * st * st, p - e2 * a * ct * ct * ct);
+  const sl = Math.sin(lat), cl = Math.cos(lat);
+  const N = a / Math.sqrt(1 - e2 * sl * sl);
+  const h = Math.abs(cl) > 1e-10 ? p / cl - N : Math.abs(z) / Math.abs(sl) - N * (1 - e2);
+  return { lon: Math.atan2(y, x) / DEG, lat: lat / DEG, h };
+}
+
 /** Absolute vertex longitudes/latitudes (Float64) of a parsed mesh. */
 export function vertexLonLat(mesh) {
   const n = mesh.nVertices, lon = new Float64Array(n), lat = new Float64Array(n);

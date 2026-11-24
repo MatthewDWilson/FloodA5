@@ -1,71 +1,39 @@
-// water.js — the water and bed surfaces as CesiumJS models with a custom shader.
+// water.js — the water and bed surfaces as CesiumJS models with a custom shader
+// (the model and its uniforms: viewer-common/js/surface.js).
 //
-// One glTF model holds every cell (its own vertices, so each cell is flat at
-// its own level). Per-cell values live in float textures: the frame's depth
-// (and the colouring variable) four cells per texel, the static bed and depth
-// datum one cell per texel. The vertex shader moves each vertex along the
-// ellipsoid normal to
-//     water surface:  level = datum + depth            (mode 0)
-//     exaggerated:    level = bed + depth × exag       (mode 1)
-//     bed:            level = bed                      (mode 2)
-// plus the vertical offset (model heights → ellipsoidal heights). A new
-// frame is one texture upload: CesiumJS keeps the old texture until the new
-// one is created, so nothing flashes. Water is translucent and depth-tested,
-// so 3D Tiles buildings stand out of it.
-//
-// Requires a WebGL 2 context (texelFetch): CesiumJS's default.
+// One glTF model per surface, built in the browser; a new frame is one texture
+// upload (CesiumJS keeps the old texture until the new one is created, so
+// nothing flashes). Water is translucent and depth-tested. Needs WebGL 2.
 
-import { buildSurface, buildGlb, packCellValues, packStatic, finiteMedian } from './geometry.js';
-import { colormapTable } from './colormaps.js';
+import { buildSurface, buildGlb, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
+import { colormapTable } from '../../viewer-common/js/colormaps.js';
+import { defaultStyle, glslHelpers } from '../../viewer-common/js/surface.js';
 
-const VERTEX = `
-float fa5Packed(sampler2D tex, float w, int i) {
-  int wi = int(w);
-  int ti = i / 4;
-  int c = i - ti * 4;
-  vec4 v = texelFetch(tex, ivec2(ti - (ti / wi) * wi, ti / wi), 0);
-  return c == 0 ? v.x : (c == 1 ? v.y : (c == 2 ? v.z : v.w));
-}
+const VERTEX = `${glslHelpers()}
 void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
   int i = int(vsInput.attributes.cell + 0.5);
-  int sw = int(u_staticW);
-  vec4 st = texelFetch(u_static, ivec2(i - (i / sw) * sw, i / sw), 0);
+  vec4 st = fa5Static(u_static, u_staticW, i);
   float d = max(fa5Packed(u_depth, u_texW, i), 0.0);
-  float level;
-  if (u_mode > 1.5) level = st.x;
-  else if (u_mode > 0.5) level = st.x + d * u_exag;
-  else level = st.y + d;
-  vec3 p = vsInput.attributes.positionMC + u_centre;
-  vec3 n = normalize(vec3(p.x / 40680631590769.0, p.y / 40680631590769.0, p.z / 40408299984661.445));
+  float level = fa5Level(u_mode, u_exag, d, st);
+  vec3 n = fa5Normal(vsInput.attributes.positionMC + u_centre);
   vsOutput.positionMC = vsInput.attributes.positionMC + n * (level + u_offset - u_h0);
   v_depth = d;
-  float cv;
-  if (u_cmode < 0.5) cv = d;
-  else if (u_cmode < 1.5) cv = st.y + d;
-  else if (u_cmode < 2.5) cv = fa5Packed(u_cvar, u_texW, i);
-  else cv = st.x;
-  v_cval = cv;
+  float cv = (u_cmode > 1.5 && u_cmode < 2.5) ? fa5Packed(u_cvar, u_texW, i) : 0.0;
+  v_cval = fa5ColorValue(u_cmode, d, st, cv);
 }
 `;
 
-const FRAGMENT = `
+// (CesiumJS compiles the custom vertex and fragment texts separately: both need the helpers)
+const FRAGMENT = `${glslHelpers()}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   if (u_mode < 1.5 && v_depth < u_minDepth) discard;
-  float t = clamp((v_cval - u_cmin) / max(u_cmax - u_cmin, 1e-9), 0.0, 1.0);
-  material.diffuse = texture(u_cmap, vec2(t * 0.99609375 + 0.001953125, 0.5)).rgb;
+  material.diffuse = texture(u_cmap, fa5MapCoord(v_cval, u_cmin, u_cmax)).rgb;
   material.alpha = u_alpha;
 }
 `;
 
-/** Colour modes: what the surface is coloured by. */
-export const COLOR_MODE = { depth: 0, level: 1, texture: 2, bed: 3 };
-
 export class SurfaceLayer {
-  /**
-   * @param {Cesium.Viewer} viewer
-   * @param {object} mesh       parsed mesh (protocol.js)
-   * @param {object} opts       {role: 'water'|'bed', h0}
-   */
+  /** @param {object} opts {role: 'water'|'bed', h0} */
   static async create(viewer, mesh, opts = {}) {
     const layer = new SurfaceLayer(viewer, mesh, opts);
     await layer._load();
@@ -78,9 +46,7 @@ export class SurfaceLayer {
     this.role = role;
     this.h0 = Number.isFinite(h0) ? h0 : (finiteMedian(mesh.base) || 0);
     this.n = mesh.nCells;
-    this.style = { mode: role === 'bed' ? 2 : 0, cmode: role === 'bed' ? COLOR_MODE.bed : COLOR_MODE.depth,
-                   cmin: 0, cmax: 1, alpha: role === 'bed' ? 1 : 0.8, minDepth: 0.05, exag: 10,
-                   offset: 0, colormap: role === 'bed' ? 'terrain' : 'depth' };
+    this.style = defaultStyle(role);
     this._depthBuf = null;
     this._cvarBuf = null;
   }
@@ -89,30 +55,28 @@ export class SurfaceLayer {
     const C = window.Cesium;
     const surface = buildSurface(this.mesh, this.h0);
     this.centre = surface.centre;
-    const glb = buildGlb(surface);
-    const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    const url = URL.createObjectURL(new Blob([buildGlb(surface)], { type: 'model/gltf-binary' }));
     const st = packStatic(this.mesh.elevation, this.mesh.base, this.n);
     const zero = packCellValues(new Float32Array(0), this.n);
-    this._texW = zero.width;
-    const U = C.UniformType;
+    const U = C.UniformType, s = this.style;
     this.shader = new C.CustomShader({
       uniforms: {
         u_depth: { type: U.SAMPLER_2D, value: floatTexture(zero) },
         u_cvar: { type: U.SAMPLER_2D, value: floatTexture(zero) },
         u_static: { type: U.SAMPLER_2D, value: floatTexture(st) },
-        u_cmap: { type: U.SAMPLER_2D, value: colormapTexture(this.style.colormap) },
+        u_cmap: { type: U.SAMPLER_2D, value: colormapTexture(s.colormap) },
         u_texW: { type: U.FLOAT, value: zero.width },
         u_staticW: { type: U.FLOAT, value: st.width },
         u_centre: { type: U.VEC3, value: new C.Cartesian3(...surface.centre) },
         u_h0: { type: U.FLOAT, value: this.h0 },
-        u_offset: { type: U.FLOAT, value: this.style.offset },
-        u_mode: { type: U.FLOAT, value: this.style.mode },
-        u_cmode: { type: U.FLOAT, value: this.style.cmode },
-        u_cmin: { type: U.FLOAT, value: this.style.cmin },
-        u_cmax: { type: U.FLOAT, value: this.style.cmax },
-        u_alpha: { type: U.FLOAT, value: this.style.alpha },
-        u_minDepth: { type: U.FLOAT, value: this.style.minDepth },
-        u_exag: { type: U.FLOAT, value: this.style.exag },
+        u_offset: { type: U.FLOAT, value: s.offset },
+        u_mode: { type: U.FLOAT, value: s.mode },
+        u_cmode: { type: U.FLOAT, value: s.cmode },
+        u_cmin: { type: U.FLOAT, value: s.cmin },
+        u_cmax: { type: U.FLOAT, value: s.cmax },
+        u_alpha: { type: U.FLOAT, value: s.alpha },
+        u_minDepth: { type: U.FLOAT, value: s.minDepth },
+        u_exag: { type: U.FLOAT, value: s.exag },
       },
       varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT },
       lightingModel: C.LightingModel.UNLIT,
@@ -133,8 +97,7 @@ export class SurfaceLayer {
         allowPicking: false,
       });
     } finally {
-      // the model keeps its own copy once loaded
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);   // the model keeps its own copy
     }
     this.viewer.scene.primitives.add(this.model);
     await new Promise((resolve, reject) => {

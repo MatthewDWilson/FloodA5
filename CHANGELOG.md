@@ -33,6 +33,35 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-11-25
+
+The globe viewer on a second engine, Giro3D (branch `wpv-giro3d`, on 0.8.3;
+PATCH: no solver change, default results unchanged).
+
+- **`--vis giro3d`**: the same viewer on Giro3D 2.0.7 / three.js r180, loaded
+  as pinned ES modules from esm.sh through an import map (no build step).
+  Google Photorealistic 3D Tiles through Cesium ion (or a Google key),
+  Terrarium terrain + OSM (open AWS elevation tiles, no key), OSM, none.
+  Comparison with the CesiumJS viewer, measurements and the problems found:
+  docs/GLOBE_VIEWERS.md.
+- The viewers share `visualisation/viewer-common/`: the app (controls, live
+  and replay, playback, colour range, statistics, hover, offset estimate),
+  the controls' markup, protocol, geometry, colour maps, and the surface
+  model with the GLSL both engines use. `visualisation/cesium/` and
+  `visualisation/giro3d/` are thin engine adapters. The JS tests, the smoke
+  tool and `config.example.json` moved there; `config.json` is now
+  `visualisation/viewer-common/config.json` (git-ignored).
+- The server serves both viewers (`/viz/cesium/index.html`,
+  `/viz/giro3d/index.html`) and only the viewer directories; `/` opens the
+  one chosen (`start(; viewer)`, `/api/info` `viewer`).
+- `visualisation/cesium_replay.jl` → `visualisation/web_replay.jl`
+  (`--viewer cesium|giro3d`); `--replay RUN.h5 --vis giro3d`.
+- The vertical offset is remembered per basemap (Google tiles are
+  ellipsoidal, Terrarium is in the DEM's datum: 52.2 m vs ≈ 0 m at Carlisle).
+- `geometry.ecefToGeodetic` (Giro3D 2.0.7's `Ellipsoid.toGeodetic` is ~130 m
+  off in height); the viewers retry API requests on network errors;
+  `smoke.mjs --profile N` and `--netlog`.
+
 ## [0.8.3] — 2026-11-24
 
 The web globe viewer, rebuilt (branch `wpv-cesium`; PATCH: no solver change,

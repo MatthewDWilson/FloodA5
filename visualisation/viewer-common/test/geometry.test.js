@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseMesh } from '../js/protocol.js';
 import {
-  geodeticToEcef, buildSurface, buildGlb, packCellValues, packStatic, packedSize,
+  geodeticToEcef, ecefToGeodetic, buildSurface, buildGlb, packCellValues, packStatic, packedSize,
   CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile, WGS84_A, WGS84_B,
 } from '../js/geometry.js';
 
@@ -39,6 +39,18 @@ test('geodeticToEcef', () => {
   // height is along the ellipsoid normal
   const p0 = geodeticToEcef(-2.9, 54.9, 0), p1 = geodeticToEcef(-2.9, 54.9, 50);
   assert.ok(Math.abs(Math.hypot(...p1.map((x, k) => x - p0[k])) - 50) < 1e-6);
+});
+
+test('ecefToGeodetic inverts geodeticToEcef', () => {
+  for (const [lon, lat, h] of [[-2.93, 54.893, 3000], [-2.93, 54.893, -60], [172.6, -43.5, 15], [0, 0, 0],
+                               [179.9, 89.9, 100], [-120, -89.99, 2000], [45, 30, 8848], [10, 60, -400]]) {
+    const g = ecefToGeodetic(...geodeticToEcef(lon, lat, h));
+    assert.ok(Math.abs(g.lon - lon) < 1e-9, `lon ${g.lon} vs ${lon}`);
+    assert.ok(Math.abs(g.lat - lat) < 1e-9, `lat ${g.lat} vs ${lat}`);
+    assert.ok(Math.abs(g.h - h) < 1e-3, `h ${g.h} vs ${h}`);
+  }
+  const pole = ecefToGeodetic(0, 0, WGS84_B + 50);
+  assert.ok(Math.abs(pole.lat - 90) < 1e-9 && Math.abs(pole.h - 50) < 1e-3);
 });
 
 test('buildSurface triangulates each cell on its own vertices', () => {

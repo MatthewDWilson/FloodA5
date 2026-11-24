@@ -490,7 +490,7 @@ const _DROP_FLAGS = Set(["--meshgen", "--meshres", "--meshgen-cartesian", "--dx"
                          "--dem-method", "--dem-samples", "--dem-seed", "--dem-strict",
                          "--sgs-bins", "--sgs-samples", "--sgs-connectivity", "--mesh-only", "--output",
                          "--vis-port", "--embed-mesh"])
-const _VIS_MODES = Set(["cesium", "makie"])
+const _VIS_MODES = Set(["cesium", "giro3d", "makie"])
 
 # Split argv into (flag, values) items; `--vis` takes an optional mode.
 function _argv_items(argv::Vector{String})
