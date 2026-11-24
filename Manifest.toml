@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "73d827cd5f85a692935ec7337300dcc6d69dbf5c"
+project_hash = "94d17524afd4ab5ed0bf6e61d6613ef78d827882"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -1730,11 +1730,6 @@ git-tree-sha1 = "191686b1ac1ea9c89fc52e996ad15d1d241d1e33"
 uuid = "5ced341a-0733-55b8-9ab6-a4889d929147"
 version = "1.10.1+0"
 
-[[deps.MIMEs]]
-git-tree-sha1 = "c64d943587f7187e751162b3b84445bbbd79f691"
-uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
-version = "1.1.0"
-
 [[deps.MPIABI_jll]]
 deps = ["Artifacts", "Hwloc_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "MPIPreferences", "TOML"]
 git-tree-sha1 = "9be143b6045719e8fb019d2b3bc2aebad1184fef"
@@ -2032,30 +2027,6 @@ version = "1.6.1+0"
 git-tree-sha1 = "94ba93778373a53bfd5a0caaf7d809c445292ff4"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.8.2"
-
-[[deps.Oxygen]]
-deps = ["DataStructures", "Dates", "HTTP", "JSON", "LRUCache", "MIMEs", "Reexport", "RelocatableFolders", "Sockets", "Statistics", "StructTypes"]
-git-tree-sha1 = "2c6a74ad15c7e55c8fc7fbd6edad9008b6fbb869"
-uuid = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
-version = "1.10.2"
-
-    [deps.Oxygen.extensions]
-    BonitoExt = "Bonito"
-    CairoMakieExt = "CairoMakie"
-    MustacheExt = "Mustache"
-    OteraEngineExt = "OteraEngine"
-    ProtoBufExt = "ProtoBuf"
-    TimeZonesExt = "TimeZones"
-    WGLMakieExt = ["WGLMakie", "Bonito"]
-
-    [deps.Oxygen.weakdeps]
-    Bonito = "824d6782-a2ef-11e9-3a09-e5662e0c26f8"
-    CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
-    Mustache = "ffc61752-8dc7-55ee-8c37-f3e9cdd09e70"
-    OteraEngine = "b2d7f28f-acd6-4007-8b26-bc27716e5513"
-    ProtoBuf = "3349acd9-ac6a-5e09-bcdb-63829b23a429"
-    TimeZones = "f269a46b-ccf7-5d73-abea-4c690281aa53"
-    WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]

@@ -1,0 +1,244 @@
+# test/test_vis_server.jl — the web viewer's server (visualisation/VisualisationServer.jl)
+#
+#   julia --project=ci test/test_vis_server.jl
+#
+# Protocol 2 (docs/DATA_FORMATS.md §6): binary mesh layout, frame list and
+# Float32 frames, the WebSocket hello (a client that connects after the run
+# ended learns that it is complete), live-frame thinning and the memory
+# budget, replay sources, static-file path checks, the Host-header guard and
+# the viewer configuration. Also checks that the mesh encoding matches the
+# fixture the JavaScript tests decode (visualisation/cesium/test/fixtures).
+
+using Test
+using HTTP, JSON3
+
+isdefined(Main, :VisualisationServer) ||
+    include(joinpath(@__DIR__, "..", "visualisation", "VisualisationServer.jl"))
+const VS = VisualisationServer
+
+const FIXTURE = joinpath(@__DIR__, "..", "visualisation", "cesium", "test", "fixtures", "mesh_small.bin")
+
+# Three cells: a closed square ring (vector of points), an open triangle, and a
+# pentagon given as a 2×k matrix (the HDF5 polygon layout).
+function small_mesh()
+    rings = Any[
+        [[172.0, -43.0], [172.001, -43.0], [172.001, -42.999], [172.0, -42.999], [172.0, -43.0]],
+        [[172.001, -43.0], [172.002, -43.0], [172.0015, -42.999]],
+        [172.002 172.003 172.0035 172.0025 172.0015;
+         -43.0  -43.0   -42.9995 -42.999   -42.9995],
+    ]
+    return VS.encode_mesh(rings, ["c1", "c2", "c3"], [10.0, 11.5, NaN], [9.5, 11.5, 12.0])
+end
+
+# Little-endian readers over the payload
+r32(b, o) = ltoh(reinterpret(UInt32, b[o+1:o+4])[1])
+f32(b, o) = ltoh(reinterpret(Float32, b[o+1:o+4])[1])
+f64(b, o) = ltoh(reinterpret(Float64, b[o+1:o+8])[1])
+
+free_port() = (s = HTTP.Sockets.listen(HTTP.Sockets.IPv4("127.0.0.1"), 0);
+               p = Int(HTTP.Sockets.getsockname(s)[2]); close(s); p)
+get_(port, path; headers = []) = HTTP.get("http://127.0.0.1:$port$path", headers;
+                                         status_exception = false, retry = false)
+json_(port, path) = JSON3.read(String(get_(port, path).body))
+
+@testset "VisualisationServer" begin
+
+    @testset "mesh encoding" begin
+        m = small_mesh()
+        b = m.bytes
+        @test b[1:4] == b"FA5M"
+        @test r32(b, 4) == 1 && r32(b, 8) == 3
+        nv = r32(b, 12)
+        @test nv == 4 + 3 + 5                       # closing repeat dropped
+        olon = f64(b, 16); olat = f64(b, 24)
+        @test olon ≈ (172.0 + 172.0035) / 2 && olat ≈ (-43.0 - 42.999) / 2
+        offs = [r32(b, 32 + 4i) for i in 0:3]
+        @test offs == [0, 4, 7, 12]
+        o_dlon = 32 + 4 * 4; o_dlat = o_dlon + 4nv; o_elev = o_dlat + 4nv; o_base = o_elev + 4 * 3
+        @test length(b) == o_base + 4 * 3
+        @test olon + f32(b, o_dlon) ≈ 172.0 atol = 1e-7
+        @test olat + f32(b, o_dlat + 4 * 6) ≈ -42.999 atol = 1e-7     # triangle apex
+        @test f32(b, o_elev) == 10.0f0 && isnan(f32(b, o_elev + 8))
+        @test f32(b, o_base + 4) == 11.5f0
+        @test m.ids == ["c1", "c2", "c3"] && m.lon[1] ≈ 172.0005
+        # the JavaScript tests decode this fixture: keep the two sides in step
+        if get(ENV, "FLOODA5_UPDATE_FIXTURES", "") == "1"
+            mkpath(dirname(FIXTURE)); write(FIXTURE, b)
+        end
+        @test isfile(FIXTURE) && read(FIXTURE) == b
+        @test_throws ErrorException VS.encode_mesh([[[0.0, 0.0], [1.0, 0.0]]], ["x"], [0.0], [0.0])
+        @test_throws ErrorException VS.encode_mesh([[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]], ["x", "y"], [0.0], [0.0])
+    end
+
+    @testset "depth datum" begin
+        e = [1.0, 2.0, 3.0]
+        @test VS.depth_datum(:standard, e, Dict()) == e
+        @test VS.depth_datum("sgs", e, Dict("sgs_z_min" => [0.5, NaN, 2.0])) == [0.5, 2.0, 2.0]
+        @test VS.depth_datum(:swe, e, Dict("sgs_z_min" => [0.0, 0.0, 0.0])) == e
+    end
+
+    @testset "frame budget" begin
+        f = VS.LiveFrames(10 * 3 * 4)               # room for 10 frames of 3 Float32
+        for k in 1:25
+            push!(f.ids, k); push!(f.t, k); push!(f.data, Dict("h" => Float32[k, k, k]))
+            f.bytes += 12
+            VS._decimate!(f)
+            @test f.bytes <= f.budget
+            @test f.ids[1] == 1 && f.ids[end] == k  # first and latest always kept
+            @test issorted(f.ids)
+        end
+    end
+
+    @testset "live server" begin
+        port = free_port()
+        vis = VS.start(; port, min_interval = 0.2, info = Dict("label" => "test", "flow_model" => "standard"),
+                       config = Dict("vertical_offset" => 1.5))
+        try
+            @test json_(port, "/api/info")["mesh_ready"] == false
+            @test get_(port, "/api/mesh").status == 204
+            m = small_mesh()
+            VS.set_mesh!(vis, m)
+            r = get_(port, "/api/mesh")
+            @test r.status == 200 && r.body == m.bytes
+
+            @test VS.wants_frame(vis)
+            id1 = VS.push_frame!(vis, 10.0, Dict("water_depth" => [0.0, 0.5, 1.0], "velocity" => [0.0, 0.1, 0.2]))
+            @test !VS.wants_frame(vis)              # thinned until min_interval has passed
+            sleep(0.25)
+            @test VS.wants_frame(vis)
+            id2 = VS.push_frame!(vis, 20.0, Dict("water_depth" => [0.0, 0.6, 1.1], "velocity" => [0.0, 0.1, 0.3]))
+            fl = json_(port, "/api/frames")
+            @test fl["complete"] == false
+            @test [x["id"] for x in fl["frames"]] == [id1, id2] && fl["frames"][2]["t"] == 20.0
+            d = get_(port, "/api/frames/$id2/water_depth")
+            @test d.status == 200 && reinterpret(Float32, d.body) == Float32[0.0, 0.6, 1.1]
+            @test get_(port, "/api/frames/$id2/nonesuch").status == 404
+            @test get_(port, "/api/frames/999/water_depth").status == 404
+            @test get_(port, "/api/frames/x/water_depth").status == 400
+            info = json_(port, "/api/info")
+            @test info["protocol"] == 2 && info["mode"] == "live" && info["frames"] == 2
+            @test sort(String.(info["vars"])) == ["velocity", "water_depth"] && info["n_cells"] == 3
+            c = json_(port, "/api/cell/1?frame=$id2")
+            @test c["id"] == "c2" && c["values"]["water_depth"] ≈ 0.6 && c["base"] == 11.5
+            @test json_(port, "/api/cell/2")["elevation"] === nothing      # NaN → null
+            @test get_(port, "/api/cell/3").status == 404
+            cfg = json_(port, "/api/config")
+            @test cfg["protocol"] == 2 && cfg["vertical_offset"] == 1.5
+            @test endswith(cfg["cesium_url"], "/") && haskey(cfg, "ion_token")
+
+            # WebSocket: frame and complete messages to a connected client …
+            msgs = Channel{Any}(32)
+            ws_task = @async HTTP.WebSockets.open("ws://127.0.0.1:$port/api/live") do ws
+                for m in ws
+                    put!(msgs, JSON3.read(m))
+                    JSON3.read(m)["type"] == "complete" && break
+                end
+            end
+            hello = take!(msgs)
+            @test hello["type"] == "hello" && hello["complete"] == false && hello["frames"] == 2 &&
+                  hello["mesh_ready"] == true
+            sleep(0.25)
+            id3 = VS.push_frame!(vis, 30.0, Dict("water_depth" => [0.1, 0.7, 1.2], "velocity" => [0.0, 0.2, 0.3]))
+            fm = take!(msgs)
+            @test fm["type"] == "frame" && fm["id"] == id3 && fm["t"] == 30.0
+            VS.notify_complete!(vis)
+            @test take!(msgs)["type"] == "complete"
+            wait(ws_task)
+            # … and a client that connects after the end is told so in its hello
+            lateref = Ref{Any}(nothing)
+            HTTP.WebSockets.open("ws://127.0.0.1:$port/api/live") do ws
+                lateref[] = JSON3.read(HTTP.WebSockets.receive(ws))
+            end
+            late = lateref[]
+            @test late["type"] == "hello"
+            @test late["complete"] == true
+            @test late["frames"] == 3
+            @test json_(port, "/api/frames")["complete"] == true
+
+            # static files, path checks, Host guard
+            r = get_(port, "/viz/index.html")
+            @test r.status == 200 && occursin("text/html", HTTP.header(r, "Content-Type"))
+            @test get_(port, "/").status == 200           # redirected to the viewer
+            r = HTTP.get("http://127.0.0.1:$port/?basemap=osm"; redirect = false, status_exception = false)
+            @test r.status == 302 && HTTP.header(r, "Location") == "/viz/index.html?basemap=osm"
+            @test get_(port, "/viz/../FloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/%2e%2e/FloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/..%5CFloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/config.json").status == 404
+            @test get_(port, "/viz/nonesuch.js").status == 404
+            @test get_(port, "/api/info"; headers = ["Host" => "evil.example:$port"]).status == 403
+            @test get_(port, "/api/info"; headers = ["Host" => "localhost:$port"]).status == 200
+            @test HTTP.post("http://127.0.0.1:$port/api/info"; status_exception = false).status == 405
+
+            # The server answers while this (main) task computes, as the time
+            # loop does: in Julia 1.12 the main task runs on interactive thread 1,
+            # the pool the server uses, so the loop yields once per "step"
+            # (FloodModel.jl run_simulation! does the same with --vis cesium).
+            t0 = time(); lat = Ref(NaN)
+            probe = Threads.@spawn begin
+                t1 = time(); get_(port, "/api/info"); lat[] = time() - t1
+            end
+            x = 0.0
+            while time() - t0 < 2.0
+                t_step = time()
+                while time() - t_step < 0.01     # a 10 ms step without yielding
+                    x += sin(x)
+                end
+                yield()
+            end
+            wait(probe)
+            @test lat[] < 0.5
+        finally
+            VS.stop(vis)
+        end
+        sleep(0.2)
+        @test VS._port_free("127.0.0.1", port)
+    end
+
+    @testset "replay server" begin
+        port = free_port()
+        vis = VS.start(; port)
+        try
+            VS.set_mesh!(vis, small_mesh())
+            reads = Ref(0)
+            VS.set_replay!(vis, [0.0, 60.0, 120.0], ["water_depth"],
+                           (k, v) -> (reads[] += 1; Float32[k, k + 1, k + 2]))
+            @test !VS.wants_frame(vis)
+            @test_throws ErrorException VS.push_frame!(vis, 1.0, Dict("water_depth" => [0.0, 0, 0]))
+            fl = json_(port, "/api/frames")
+            @test fl["complete"] == true && [x["t"] for x in fl["frames"]] == [0.0, 60.0, 120.0]
+            @test reinterpret(Float32, get_(port, "/api/frames/2/water_depth").body) == Float32[2, 3, 4]
+            get_(port, "/api/frames/2/water_depth")
+            @test reads[] == 1                       # cached
+            @test get_(port, "/api/frames/4/water_depth").status == 404
+            @test json_(port, "/api/info")["mode"] == "replay"
+            # stop() releases connected clients (their read loops end)
+            n_seen = Ref(0)
+            client = @async try
+                HTTP.WebSockets.open("ws://127.0.0.1:$port/api/live") do ws
+                    for _ in ws
+                        n_seen[] += 1
+                    end
+                end
+            catch
+            end
+            t0 = time(); while n_seen[] == 0 && time() - t0 < 10; sleep(0.05); end
+            @test n_seen[] >= 1                       # the hello
+            VS.stop(vis)
+            t0 = time(); while !istaskdone(client) && time() - t0 < 10; sleep(0.05); end
+            @test istaskdone(client)
+        finally
+            VS.stop(vis)
+        end
+    end
+
+    @testset "port in use" begin
+        port = free_port()
+        vis = VS.start(; port)
+        try
+            @test_throws ErrorException VS.start(; port)
+        finally
+            VS.stop(vis)
+        end
+    end
+end

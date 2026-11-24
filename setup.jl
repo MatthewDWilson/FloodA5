@@ -95,7 +95,7 @@ println("\n[ 1/4 ] Installing / updating Julia packages …")
 # Required
 required = [
     "PyCall", "JSON3", "ArchGDAL", "HDF5",
-    "Oxygen", "HTTP",
+    "HTTP",
 ]
 
 # Optional (warn but don't abort if they fail)

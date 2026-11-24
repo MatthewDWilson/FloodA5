@@ -4,7 +4,8 @@
 # Rasters, …), which takes a long time to install/precompile and needs an
 # OpenGL context for GLMakie. The simulation core and the unit tests need only
 # the packages below (FloodModel.jl / A5Grid.jl / DiamondFlux.jl imports), when
-# run with FLOODA5_NO_VIS=1 so the visualisation modules are stubbed.
+# run with FLOODA5_NO_VIS=1 so GLMakie is stubbed (the web viewer's server,
+# visualisation/VisualisationServer.jl, needs only HTTP and JSON3).
 #
 #   julia --project=ci -e 'using Pkg; Pkg.instantiate()'
 #   FLOODA5_NO_VIS=1 julia --project=ci test/test_wp0_regressions.jl
@@ -17,6 +18,7 @@ Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -32,6 +34,7 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Adapt = "4.7.0"
 ArchGDAL = "0.10.12"
 HDF5 = "0.17.3"
+HTTP = "1.11"          # 2.x is a breaking release; the web viewer's server uses 1.x
 JSON3 = "1.14.3"
 KernelAbstractions = "0.9.42"
 Polyester = "0.7.19"

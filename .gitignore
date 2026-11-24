@@ -32,3 +32,8 @@ benchmarks/results/*-quick.json
 
 # Executed notebook copies (notebooks/nbtools.jl execute)
 test/notebook_runs/
+
+# Web viewer: local settings may hold a Cesium ion token (docs/DATA_FORMATS.md §7)
+visualisation/cesium/config.json
+# smoke-test screenshots (visualisation/cesium/tools/smoke.mjs)
+visualisation/cesium/*.png

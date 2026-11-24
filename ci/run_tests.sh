@@ -40,6 +40,8 @@ TESTS=(
   test/test_output_format.jl
   test/test_analysis.jl
   test/test_replay.jl
+  test/test_vis_server.jl
+  test/test_vis_live.jl
   test/test_plots.jl
   test/test_cases.jl
   test/test_notebooks.jl
@@ -58,11 +60,28 @@ for t in "${TESTS[@]}"; do
   echo "::endgroup::"
 done
 
+# The web viewer's JavaScript (protocol, geometry, colour maps): Node's own
+# test runner, no npm packages. Skipped where Node is not installed.
+total=${#TESTS[@]}
+if command -v node >/dev/null 2>&1; then
+  total=$((total + 1))
+  echo "::group::visualisation/cesium (node --test)"
+  if node --test visualisation/cesium/test/; then
+    echo "PASS  visualisation/cesium/test"
+  else
+    echo "::error file=visualisation/cesium/test::FAILED"
+    failed+=("visualisation/cesium/test (node)")
+  fi
+  echo "::endgroup::"
+else
+  echo "SKIP  visualisation/cesium/test (node not found)"
+fi
+
 echo
 if [ ${#failed[@]} -eq 0 ]; then
-  echo "All ${#TESTS[@]} test files passed."
+  echo "All $total test files passed."
 else
-  echo "${#failed[@]} of ${#TESTS[@]} test files FAILED:"
+  echo "${#failed[@]} of $total test files FAILED:"
   printf '  %s\n' "${failed[@]}"
   exit 1
 fi

@@ -39,8 +39,9 @@ Key characteristics:
   use WGS 84 (EPSG:4326); no projected CRS selection required.
 - **LISFLOOD-FP compatible inputs** — reads `.bci`/`.bdy` boundary condition files
   for cross-portability with existing LISFLOOD-FP workflows.
-- **Two visualisation backends** — a CesiumJS web viewer and a native GLMakie desktop
-  window, both updating live during simulation.
+- **Two visualisation backends** — a native GLMakie desktop window and a web
+  globe viewer (CesiumJS, water drawn at its height over 3D tiles), both live
+  during a simulation and for replaying output files.
 
 ---
 
@@ -161,10 +162,11 @@ FloodA5/
 │   ├── MakieVisualiser.jl     # Native desktop viewer (GLMakie)
 │   ├── replay.jl              # Replay an HDF5 output in the GLMakie viewer
 │   ├── replay_data.jl         # Replay data (Makie-free, tested in CI)
-│   ├── VisualisationServer.jl # HTTP + WebSocket server for CesiumJS viewer
+│   ├── VisualisationServer.jl # HTTP + WebSocket server for the globe viewer (HTTP.jl)
+│   ├── cesium_replay.jl       # Replay an HDF5 output in the globe viewer
 │   ├── view_h5_output.jl      # Post-processing viewer for HDF5 output
 │   ├── visualise_mesh.jl      # Publication-quality mesh and SGS figures
-│   └── cesium/                # CesiumJS static files
+│   └── cesium/                # Globe viewer (CesiumJS): index.html, js/, test/ (node --test)
 ├── test/
 │   ├── carlisle/              # Carlisle 2005 flood domain and boundary files
 │   ├── planar_embankment/     # Planar-slope (flow-direction) test case
@@ -321,21 +323,25 @@ machines.
 
 FloodA5 includes two visualisation backends:
 
-**GLMakie** (`--vis makie`) — a native desktop window that updates live during
-simulation. No browser, no token, no configuration required. This is the
-recommended option. The same window replays any HDF5 output file, with a
-frame slider and playback controls, whether or not the run was visualised
-live:
+**GLMakie** (`--vis makie`, or a bare `--vis`) — a native desktop window that
+updates live during simulation. No browser, no token, no configuration
+required. The same window replays any HDF5 output file, with a frame slider
+and playback controls, whether or not the run was visualised live:
 
 ```bash
 julia --project=. --threads auto visualisation/replay.jl sim.h5     # or FloodModel.jl --replay sim.h5
 ```
 
-**CesiumJS** (`--vis cesium` or `--vis`) — a browser-based 3D viewer with
-Google Photorealistic Tiles support.
+**Globe viewer** (`--vis cesium`) — a web viewer (CesiumJS) on a 3D globe.
+The water surface is drawn at its height, so over Google Photorealistic 3D
+Tiles buildings and trees stand out of the flood. Live during a run, or a
+replay of an output file; scales to meshes of 500k+ cells. Google tiles and
+Cesium World Terrain need a free Cesium ion token in
+`FLOODA5_CESIUM_ION_TOKEN` (docs/USER_GUIDE.md §6.2).
 
-> **Note:** The CesiumJS viewer is currently paused in development and may have
-> rough edges. `--vis makie` is recommended for all current use.
+```bash
+julia --project=. visualisation/cesium_replay.jl sim.h5 --open     # or FloodModel.jl --replay sim.h5 --vis cesium
+```
 
 By default, domain-edge cells use a **zero-gradient (transmissive) outflow**
 condition — water exits freely without reflection. This can be overridden:
@@ -512,10 +518,10 @@ Cartesian meshes (`docs/HYDRAULICS.md` §15.10–15.12).
   and the GPU's fixed cost per step on small meshes
 
 **Visualisation**
-- The GLMakie viewer is the primary viewer. The CesiumJS web viewer is low
-  priority; its known issues include a frame-update flash and inconsistent
-  `simcomplete` signalling for live updates (see
-  [docs/METHODS.md](docs/METHODS.md))
+- Globe viewer: a smooth (vertex-interpolated) water surface as an option to
+  the flat-per-cell one; velocity arrows; geoid grids (PROJ) for the vertical
+  offset instead of a per-domain estimate; a Giro3D version of the viewer
+  for comparison
 
 **Longer-term**
 - Multi-resolution adaptive mesh refinement (Phase 3 in the project's

@@ -340,8 +340,8 @@ the same cell are summed before flux routing.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--vis [MODE]` | off | Enable live visualisation. Omitting MODE defaults to `cesium`. Available modes: `cesium`, `makie`. |
-| `--vis-port PORT` | 8080 | HTTP port for the Cesium server. Ignored for `--vis makie`. |
+| `--vis [MODE]` | off | Enable live visualisation. Modes: `makie` (GLMakie window; also a bare `--vis`, since 0.8.3) and `cesium` (web globe viewer, §6.2). |
+| `--vis-port PORT` | 8080 | HTTP port for the globe viewer's server. Ignored for `--vis makie`. |
 
 ---
 
@@ -454,10 +454,11 @@ Cells outside the raster extent use the global `--manning-n` value.
 
 ## 6. Visualisation
 
-### 6.1 GLMakie viewer (`--vis makie`) — recommended
+### 6.1 GLMakie viewer (`--vis makie` or `--vis`)
 
-A native desktop window — no browser, no Cesium Ion token, no configuration
-required. This is the recommended visualisation option.
+A native desktop window — no browser, no Cesium ion token, no configuration
+required. A bare `--vis` gives this viewer (since 0.8.3; before, it gave the
+CesiumJS one).
 
 - Pentagon polygons coloured by selected variable
 - Dropdown: depth · saturation · volume · velocity
@@ -503,32 +504,86 @@ Options: `--fps N`, `--var depth|saturation|volume|velocity|ring`, `--from T`
 they carry no mesh geometry). In Julia: `rd = FloodA5Replay.open_replay("sim.h5")`
 (`visualisation/replay_data.jl`), then `MakieVisualiser.replay(rd)`.
 
-### 6.2 CesiumJS viewer (`--vis cesium` or `--vis`)
+### 6.2 Globe viewer, CesiumJS (`--vis cesium`)
 
-> **Note:** The CesiumJS viewer is currently paused in development. It is
-> functional for basic use but may have rough edges. `--vis makie` is
-> recommended for all current work.
-
-A browser-based 3D viewer that updates live during simulation. Open
-`http://localhost:8080` while the model is running.
-
-**Controls:**
-- Variable selector (dropdown) — depth, saturation, volume, velocity
-- Colorbar with auto-scale toggle and manual ceiling slider
-- 3D extrusion with adjustable vertical exaggeration
-- Cell outline and zero-value cell visibility toggles
-- Basemap selector: Google 3D Photorealistic Tiles / OSM / None
-- Live mode (follows simulation) / Replay mode (scrub timeline)
-
-**Google 3D Photorealistic Tiles** require a free Cesium Ion token. To set one up:
+A web viewer on a 3D globe (CesiumJS 1.147): the water surface is drawn at
+its height, so with Google Photorealistic 3D Tiles flooded buildings stand
+out of the water. It follows a running simulation live, or replays an output
+file. Open the printed URL (default `http://localhost:8080`) in a browser
+with WebGL 2 (any current Chrome, Edge or Firefox).
 
 ```bash
-cp visualisation/cesium/config.example.json visualisation/cesium/config.json
-# Edit config.json and set cesium_ion_token from ion.cesium.com/tokens
+# live: the viewer follows the run; after the run it keeps serving until Ctrl-C
+julia --project=. --threads auto FloodModel.jl --meshload mesh.parquet \
+    --rainfall 30 --sim-duration 3600 --output run.h5 --vis cesium [--vis-port 8091]
+
+# replay an output file (format 2: the mesh is in the file)
+julia --project=. visualisation/cesium_replay.jl run.h5 [--port 8091] [--offset 53.2] [--open]
+julia --project=. FloodModel.jl --replay run.h5 --vis cesium [--vis-port 8091]   # the same
 ```
 
-Add `visualisation/cesium/config.json` to `.gitignore` to keep your token out of
-version control. The viewer falls back to OpenStreetMap tiles if the token is absent.
+**What is drawn.** One surface for the whole mesh, each cell flat at its
+water level: `datum + depth`, where the datum is the cell elevation (standard,
+SWE) or the cell's lowest sub-grid elevation (SGS). Cells shallower than the
+*wet if depth ≥* threshold (default 5 cm) are not drawn. The surface is translucent and
+depth-tested, so the photorealistic tiles (or terrain) hide it where the
+ground or a building is higher — wet cells partly under buildings show as
+water between them. *Depth × exaggeration* draws `bed + depth × N` instead
+(for flat basemaps). *Bed surface* draws the mesh elevations, coloured by
+height: the default on the flat basemaps, where there is no terrain.
+Colour by water depth, water level, speed or (SGS) wetted fraction; the
+range is per frame or fixed. Hover over a cell for its depth, level, bed and
+id.
+
+**Vertical offset.** Model heights are in the DEM's datum (e.g. Ordnance
+Datum Newlyn); the globe, Google tiles and Cesium World Terrain use heights
+above the WGS84 ellipsoid. The *vertical offset* is added to every model
+height to convert: the geoid separation of the datum (roughly +45 to +55 m
+across Great Britain; look it up for your area, e.g. with PROJ and the
+national geoid grid). *Estimate* compares the cell
+elevations with the basemap's heights at about 300 cells (Google tiles: the
+30th percentile, since buildings and trees only raise them; terrain: the
+median) and reports the spread. The value is remembered per domain in the
+browser; `--offset` (replay) or `vertical_offset` in `config.json` give the
+default.
+
+**Live frames.** The server keeps one frame per second of wall-clock time
+(`FLOODA5_VIS_INTERVAL`, seconds) within 1 GB (`FLOODA5_VIS_BUDGET_MB`): when
+the budget is reached it drops every second frame, so the whole run stays
+viewable at a coarser time step. The end state is always sent. The HDF5
+output keeps every output interval; replay it for the full record. A page
+opened after the run ended, or reloaded, shows the complete run.
+`FLOODA5_VIS_LINGER=S` stops serving S seconds after the run instead of
+waiting for Ctrl-C (scripted runs).
+
+**Controls.** Timeline slider; first / previous / play / next / last
+(keys: space, ←, →); playback speed in frames per second or simulation time
+per second; *LIVE* follows the newest frame while the run goes on.
+
+**Basemaps and the Cesium ion token.** *Google Photorealistic 3D* and
+*Cesium World Terrain* need a (free) Cesium ion access token
+(ion.cesium.com → Access Tokens). Give it to the server in the environment —
+it is passed to the browser, never stored in the repository:
+
+```bash
+# Windows (persistent; restart VS Code / the terminal afterwards)
+setx FLOODA5_CESIUM_ION_TOKEN "eyJ…"
+# bash
+export FLOODA5_CESIUM_ION_TOKEN="eyJ…"
+```
+
+Scope the token to `assets:read` and restrict its allowed URLs to
+`http://localhost:*` in the ion dashboard. A Google Map Tiles API key
+(`FLOODA5_GOOGLE_TILES_KEY`) is the other route to the Google tiles.
+Without either, the viewer uses OpenStreetMap on a flat globe. Google's
+terms: the Google Maps logo and data attributions are shown by CesiumJS;
+Google tiles must not be combined with Bing imagery (the viewer uses none).
+Optional settings go in `visualisation/cesium/config.json` (git-ignored; see
+`config.example.json` and docs/DATA_FORMATS.md §7). For offline use, point
+`FLOODA5_CESIUM_URL` at a local CesiumJS build (`…/Build/Cesium/`).
+
+The server listens on 127.0.0.1 only and answers only requests addressed to
+localhost.
 
 ### 6.3 Post-processing viewer
 
