@@ -7,7 +7,7 @@
 # ended learns that it is complete), live-frame thinning and the memory
 # budget, replay sources, static-file path checks, the Host-header guard and
 # the viewer configuration. Also checks that the mesh encoding matches the
-# fixture the JavaScript tests decode (visualisation/cesium/test/fixtures).
+# fixture the JavaScript tests decode (visualisation/viewer-common/test/fixtures).
 
 using Test
 using HTTP, JSON3
@@ -16,7 +16,7 @@ isdefined(Main, :VisualisationServer) ||
     include(joinpath(@__DIR__, "..", "visualisation", "VisualisationServer.jl"))
 const VS = VisualisationServer
 
-const FIXTURE = joinpath(@__DIR__, "..", "visualisation", "cesium", "test", "fixtures", "mesh_small.bin")
+const FIXTURE = joinpath(@__DIR__, "..", "visualisation", "viewer-common", "test", "fixtures", "mesh_small.bin")
 
 # Three cells: a closed square ring (vector of points), an open triangle, and a
 # pentagon given as a 2×k matrix (the HDF5 polygon layout).
@@ -156,16 +156,25 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test json_(port, "/api/frames")["complete"] == true
 
             # static files, path checks, Host guard
-            r = get_(port, "/viz/index.html")
-            @test r.status == 200 && occursin("text/html", HTTP.header(r, "Content-Type"))
+            for v in ("cesium", "giro3d")                 # both viewers are served
+                r = get_(port, "/viz/$v/index.html")
+                @test r.status == 200 && occursin("text/html", HTTP.header(r, "Content-Type"))
+                @test get_(port, "/viz/$v/js/main.js").status == 200
+            end
+            r = get_(port, "/viz/viewer-common/js/app.js")
+            @test r.status == 200 && occursin("javascript", HTTP.header(r, "Content-Type"))
             @test get_(port, "/").status == 200           # redirected to the viewer
             r = HTTP.get("http://127.0.0.1:$port/?basemap=osm"; redirect = false, status_exception = false)
-            @test r.status == 302 && HTTP.header(r, "Location") == "/viz/index.html?basemap=osm"
+            @test r.status == 302 && HTTP.header(r, "Location") == "/viz/cesium/index.html?basemap=osm"
+            @test get_(port, "/viz/VisualisationServer.jl").status == 404     # only the viewer directories
+            @test get_(port, "/viz/plots/makie.jl").status == 404
             @test get_(port, "/viz/../FloodModel.jl").status in (403, 404)
-            @test get_(port, "/viz/%2e%2e/FloodModel.jl").status in (403, 404)
-            @test get_(port, "/viz/..%5CFloodModel.jl").status in (403, 404)
-            @test get_(port, "/viz/config.json").status == 404
-            @test get_(port, "/viz/nonesuch.js").status == 404
+            @test get_(port, "/viz/cesium/../../FloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/cesium/%2e%2e/%2e%2e/FloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/cesium/..%5C..%5CFloodModel.jl").status in (403, 404)
+            @test get_(port, "/viz/viewer-common/config.json").status == 404
+            @test get_(port, "/viz/viewer-common/config.example.json").status == 200
+            @test get_(port, "/viz/cesium/nonesuch.js").status == 404
             @test get_(port, "/api/info"; headers = ["Host" => "evil.example:$port"]).status == 403
             @test get_(port, "/api/info"; headers = ["Host" => "localhost:$port"]).status == 200
             @test HTTP.post("http://127.0.0.1:$port/api/info"; status_exception = false).status == 405
@@ -240,5 +249,26 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         finally
             VS.stop(vis)
         end
+    end
+
+    @testset "viewer choice" begin
+        port = free_port()
+        vis = VS.start(; port, viewer = "giro3d")
+        try
+            r = HTTP.get("http://127.0.0.1:$port/"; redirect = false, status_exception = false)
+            @test r.status == 302 && HTTP.header(r, "Location") == "/viz/giro3d/index.html"
+            @test json_(port, "/api/info")["viewer"] == "giro3d"
+            # the Giro3D page pins its packages in an import map, and the
+            # engine's version constant matches the pinned Giro3D
+            html = String(get_(port, "/viz/giro3d/index.html").body)
+            @test occursin("\"importmap\"", html)
+            pinned = match(r"@giro3d/giro3d@([0-9.]+)/", html)
+            eng = String(get_(port, "/viz/giro3d/js/engine.js").body)
+            @test pinned !== nothing && occursin("GIRO3D_VERSION = '$(pinned[1])'", eng)
+            @test occursin("three@0.180.0", html)
+        finally
+            VS.stop(vis)
+        end
+        @test_throws ErrorException VS.start(; port = free_port(), viewer = "nonesuch")
     end
 end

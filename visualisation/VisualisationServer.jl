@@ -1,15 +1,18 @@
 # VisualisationServer.jl
 # ----------------------
-# HTTP + WebSocket server for the web globe viewer (visualisation/cesium/),
-# for a running simulation (`--vis cesium`) or a recorded one (replay of an
-# HDF5 output, visualisation/cesium_replay.jl). Plain HTTP.jl, no framework.
+# HTTP + WebSocket server for the web globe viewers — visualisation/cesium/
+# (CesiumJS) and visualisation/giro3d/ (Giro3D), which share
+# visualisation/viewer-common/ — for a running simulation (`--vis cesium`,
+# `--vis giro3d`) or a recorded one (replay of an HDF5 output,
+# visualisation/web_replay.jl). Plain HTTP.jl, no framework.
 #
 # The protocol (version 2, docs/DATA_FORMATS.md §6) is independent of the
 # rendering engine: a binary mesh once, then per-frame Float32 arrays fetched
 # on demand, one variable at a time, plus a WebSocket for notifications.
 #
-#   GET /                          → redirect to /viz/index.html
-#   GET /viz/<path>                → static viewer files (no "..", no absolute paths)
+#   GET /                          → redirect to /viz/<viewer>/index.html
+#   GET /viz/<dir>/<path>          → static files of the viewers (<dir>: cesium,
+#                                    giro3d, viewer-common; no "..", no absolute paths)
 #   GET /api/config                → viewer configuration (ion token, Cesium URL, …)
 #   GET /api/info                  → run description, protocol version, state
 #   GET /api/mesh                  → binary mesh (see `encode_mesh`); 204 until set
@@ -216,11 +219,16 @@ end
 
 _envnum(name, default) = something(tryparse(Float64, get(ENV, name, "")), default)
 
-"""
-    start(; port = 8080, host = "127.0.0.1", viz_dir, info = Dict(), config = Dict(),
-          min_interval = 1.0, frame_budget_mb = 1024) → VisServer
+"The web viewers (directories of `visualisation/`), and the directory they share."
+const VIEWERS = ("cesium", "giro3d")
+const _STATIC_DIRS = (VIEWERS..., "viewer-common")
 
-Start the server without blocking. `min_interval` (s, wall clock) thins live
+"""
+    start(; port = 8080, host = "127.0.0.1", viewer = "cesium", viz_dir, info = Dict(),
+          config = Dict(), min_interval = 1.0, frame_budget_mb = 1024) → VisServer
+
+Start the server without blocking. `viewer` (`cesium` or `giro3d`) is the one
+`/` opens; both are served from `viz_dir` (`visualisation/`). `min_interval` (s, wall clock) thins live
 frames (`wants_frame`); `frame_budget_mb` bounds the live frames kept in
 memory. Their defaults can be set with the environment variables
 `FLOODA5_VIS_INTERVAL` and `FLOODA5_VIS_BUDGET_MB`. `info` describes the run
@@ -231,13 +239,15 @@ starts one by default), so the viewer stays responsive while the time loop
 keeps the default threads busy.
 """
 function start(; port::Int = 8080, host::AbstractString = "127.0.0.1",
-               viz_dir::AbstractString = joinpath(@__DIR__, "cesium"),
+               viewer::AbstractString = "cesium",
+               viz_dir::AbstractString = @__DIR__,
                info::AbstractDict = Dict{String,Any}(), config::AbstractDict = Dict{String,Any}(),
                min_interval::Real = _envnum("FLOODA5_VIS_INTERVAL", 1.0),
                frame_budget_mb::Real = _envnum("FLOODA5_VIS_BUDGET_MB", 1024))
+    viewer in VIEWERS || error("VisServer: viewer must be one of $(join(VIEWERS, ", ")) (got $viewer)")
     s = VisServer(String(host), port, String(viz_dir), ReentrantLock(), nothing,
                   LiveFrames(round(Int, frame_budget_mb * 2^20)), false,
-                  Dict{String,Any}(String(k) => v for (k, v) in info),
+                  merge(Dict{String,Any}(String(k) => v for (k, v) in info), Dict{String,Any}("viewer" => viewer)),
                   Dict{String,Any}(String(k) => v for (k, v) in config),
                   Channel{String}[], Float64(min_interval), -Inf,
                   Dict{Tuple{Int,String},Vector{Float32}}(), Tuple{Int,String}[], 48,
@@ -400,7 +410,7 @@ end
 """
     viewer_config(s) → Dict
 
-`/api/config`: `visualisation/cesium/config.json` (git-ignored) if present,
+`/api/config`: `visualisation/viewer-common/config.json` (git-ignored) if present,
 then the server's `config`, then the environment: `FLOODA5_CESIUM_ION_TOKEN`
 (Cesium ion access token: Google Photorealistic 3D Tiles, Cesium World
 Terrain), `FLOODA5_GOOGLE_TILES_KEY` (Google Map Tiles API key, the other
@@ -410,7 +420,7 @@ build, e.g. a local copy for offline use).
 function viewer_config(s::VisServer)
     c = Dict{String,Any}("protocol" => PROTOCOL, "cesium_url" => DEFAULT_CESIUM_URL,
                          "ion_token" => "", "google_key" => "")
-    f = joinpath(s.viz_dir, "config.json")
+    f = joinpath(s.viz_dir, "viewer-common", "config.json")
     if isfile(f)
         try
             for (k, v) in JSON3.read(read(f, String), Dict{String,Any})
@@ -518,7 +528,7 @@ function _route(s::VisServer, req::HTTP.Request)
     uri = HTTP.URI(req.target)
     path = HTTP.unescapeuri(uri.path)
     parts = filter(!isempty, split(path, '/'))
-    isempty(parts) && return HTTP.Response(302, ["Location" => "/viz/index.html" *
+    isempty(parts) && return HTTP.Response(302, ["Location" => "/viz/$(s.info["viewer"])/index.html" *
                                                  (isempty(uri.query) ? "" : "?" * uri.query)], "")
     if parts[1] == "viz"
         return _static(s, parts[2:end])
@@ -581,7 +591,7 @@ function _cell(s::VisServer, i, q)
 end
 
 function _static(s::VisServer, parts)
-    isempty(parts) && return _text(404, "Not found")
+    (length(parts) >= 2 && parts[1] in _STATIC_DIRS) || return _text(404, "Not found")
     for p in parts
         (p in (".", "..") || occursin('\\', p) || occursin(':', p) || startswith(p, ".")) &&
             return _text(403, "Forbidden")

@@ -1,0 +1,279 @@
+// engine.js — the Giro3D engine for the globe viewer (the interface:
+// viewer-common/js/app.js). Giro3D 2.0.7 on three.js r180, loaded without a
+// build step through the import map in ../index.html.
+//
+// Basemaps: Google Photorealistic 3D Tiles (a Tiles3D entity with the Cesium
+// ion or Google auth plugin of 3d-tiles-renderer), Terrarium terrain + OSM on
+// a Giro3D Globe, OSM, none.
+
+import * as THREE from 'three';
+import Instance from '@giro3d/giro3d/core/Instance.js';
+import CoordinateSystem from '@giro3d/giro3d/core/geographic/CoordinateSystem.js';
+import Ellipsoid from '@giro3d/giro3d/core/geographic/Ellipsoid.js';
+import Globe from '@giro3d/giro3d/entities/Globe.js';
+import Tiles3D from '@giro3d/giro3d/entities/Tiles3D.js';
+import ColorLayer from '@giro3d/giro3d/core/layer/ColorLayer.js';
+import ElevationLayer from '@giro3d/giro3d/core/layer/ElevationLayer.js';
+import TiledImageSource from '@giro3d/giro3d/sources/TiledImageSource.js';
+import GlobeControls from '@giro3d/giro3d/controls/GlobeControls.js';
+import OSM from 'ol/source/OSM.js';
+import XYZ from 'ol/source/XYZ.js';
+import { CesiumIonAuthPlugin, GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
+import { TerrariumFormat, TERRARIUM_URL, TERRARIUM_MAX_ZOOM, sampleTerrarium } from './terrarium.js';
+import { SurfaceMesh } from './water.js';
+import { ecefToGeodetic } from '../../viewer-common/js/geometry.js';
+
+export const GIRO3D_VERSION = '2.0.7';         // keep in step with ../index.html
+const GOOGLE_ION_ASSET = '2275207';
+const ELL = Ellipsoid.WGS84;
+const DEG = Math.PI / 180;
+
+export class Giro3DEngine {
+  constructor() {
+    this.name = `Giro3D ${GIRO3D_VERSION} (three.js r${THREE.REVISION})`;
+    this.instance = null;
+    this.globe = null;
+    this.tiles = null;
+    this.layers = [];
+    this.basemap = null;
+    this.webgl2 = null;
+  }
+
+  async init(container, cfg, log) {
+    this.cfg = cfg; this.log = log;
+    const instance = new Instance({ target: container, crs: CoordinateSystem.epsg4978, backgroundColor: '#0b1116' });
+    this.instance = instance;
+    this.canvas = instance.renderer.domElement;
+    this.webgl2 = instance.renderer.capabilities.isWebGL2 !== false &&
+                  typeof WebGL2RenderingContext !== 'undefined' &&
+                  instance.renderer.getContext() instanceof WebGL2RenderingContext;
+    if (!this.webgl2) throw new Error('This viewer needs WebGL 2.');
+    this.globe = new Globe({ backgroundColor: '#1b2731' });
+    await instance.add(this.globe);
+    const camera = instance.view.camera;
+    camera.up.set(0, 0, 1);
+    camera.position.set(2.5e7, 0, 0);
+    camera.lookAt(0, 0, 0);
+    this.controls = new GlobeControls({
+      scene: instance.scene, camera, domElement: instance.domElement, enableDamping: true,
+    });
+    this.controls.addEventListener('change', () => instance.notifyChange(camera));
+    const loop = () => {
+      this.controls.update();
+      const alt = ecefToGeodetic(camera.position.x, camera.position.y, camera.position.z).h;
+      instance.view.minNearPlane = Math.min(Math.max(alt / 200, 0.5), 500);
+      if (this.tiles) instance.notifyChange(this.tiles);    // keep tiles streaming
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+
+  basemaps(cfg) {
+    const google = !!(cfg.ion_token || cfg.google_key);
+    return [
+      { value: 'google3d', label: 'Google Photorealistic 3D', available: google },
+      { value: 'terrain', label: 'Terrarium terrain + OSM', available: true },
+      { value: 'osm', label: 'OpenStreetMap (flat)', available: true },
+      { value: 'none', label: 'None', available: true },
+    ];
+  }
+
+  defaultBasemap(cfg) { return cfg.ion_token || cfg.google_key ? 'google3d' : 'osm'; }
+
+  photoreal(name) { return name === 'google3d'; }
+
+  async setBasemap(name) {
+    const inst = this.instance, cfg = this.cfg;
+    if (name === 'google3d' && !(cfg.ion_token || cfg.google_key)) name = 'osm';
+    if (this.tiles) { inst.remove(this.tiles); this.tiles = null; }
+    for (const l of this.layers) this.globe.removeLayer(l, { disposeLayer: true });
+    this.layers = [];
+    this.globe.visible = name !== 'google3d';
+    if (name === 'google3d') {
+      const tiles = new Tiles3D({ enableFetchPlugin: false });
+      tiles.tiles.registerPlugin(cfg.google_key
+        ? new GoogleCloudAuthPlugin({ apiToken: cfg.google_key, autoRefreshToken: true })
+        : new CesiumIonAuthPlugin({ apiToken: cfg.ion_token, assetId: GOOGLE_ION_ASSET, autoRefreshToken: true }));
+      await inst.add(tiles);
+      this.tiles = tiles;
+    } else if (name === 'terrain') {
+      await this._addLayer(new ElevationLayer({
+        // full resolution: coarser terrain smooths river channels away, and
+        // the depth test then hides the water in them
+        name: 'terrarium', resolutionFactor: 1,
+        source: new TiledImageSource({
+          retries: 1, format: new TerrariumFormat(),
+          source: new XYZ({ url: TERRARIUM_URL, projection: 'EPSG:3857', crossOrigin: 'anonymous',
+                            maxZoom: TERRARIUM_MAX_ZOOM }),
+        }),
+      }));
+      await this._addLayer(this._osm());
+    } else if (name === 'osm') {
+      await this._addLayer(this._osm());
+    }
+    this.basemap = name;
+    inst.notifyChange();
+    return name;
+  }
+
+  async _addLayer(layer) {
+    await this.globe.addLayer(layer);
+    this.layers.push(layer);
+  }
+
+  _osm() {
+    return new ColorLayer({ name: 'osm', source: new TiledImageSource({ source: new OSM() }) });
+  }
+
+  credits() {
+    const parts = [];
+    if (this.tiles) {
+      // Google's terms: "Google Maps" (the logo where possible) and the data
+      // providers of the displayed tiles, kept apart from other credits.
+      const data = new Set();
+      try {
+        for (const a of this.tiles.tiles.getAttributions([])) {
+          if (a.type === 'string') String(a.value).split(/[;,]/).map(s => s.trim()).filter(Boolean).forEach(s => data.add(s));
+        }
+      } catch { /* not loaded yet */ }
+      data.delete('Google');
+      parts.push(`<span class="gmaps" aria-label="Google Maps">Google Maps</span>` +
+                 (data.size ? ` ${escapeHtml(Array.from(data).sort().join(', '))}` : ''));
+      if (!this.cfg.google_key) parts.push('Data via <a href="https://cesium.com/ion" target="_blank" rel="noopener">Cesium ion</a>');
+    }
+    if (this.basemap === 'osm' || this.basemap === 'terrain') {
+      parts.push('© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors');
+    }
+    if (this.basemap === 'terrain') parts.push('Terrain: Mapzen / Tilezen (AWS Open Data)');
+    return parts.join(' · ');
+  }
+
+  createSurface(mesh, opts) { return SurfaceMesh.create(this.instance, mesh, opts); }
+
+  /** Local east, north, up unit vectors at (lon, lat). */
+  _enu(lon, lat) {
+    const up = new THREE.Vector3(Math.cos(lat * DEG) * Math.cos(lon * DEG), Math.cos(lat * DEG) * Math.sin(lon * DEG),
+                                 Math.sin(lat * DEG));
+    const east = new THREE.Vector3(-Math.sin(lon * DEG), Math.cos(lon * DEG), 0);
+    const north = new THREE.Vector3().crossVectors(up, east);
+    return { east, north, up };
+  }
+
+  _place(pos, target, up) {
+    const cam = this.instance.view.camera;
+    cam.position.copy(pos);
+    cam.up.copy(up);
+    cam.lookAt(target);
+    cam.updateMatrixWorld(true);
+    this.controls.resetState?.();
+    this.instance.notifyChange(cam);
+  }
+
+  flyToBounds([w, s, e, n], h) {
+    const lon = (w + e) / 2, lat = (s + n) / 2;
+    const dx = (e - w) * DEG * 6371000 * Math.cos(lat * DEG), dy = (n - s) * DEG * 6371000;
+    const r = Math.hypot(dx, dy) / 2, dist = Math.max(r * 2.2, 500), pitch = 40 * DEG;
+    const target = ELL.toCartesian(lat, lon, h);
+    const { north, up } = this._enu(lon, lat);
+    const pos = target.clone().addScaledVector(north, -dist * Math.cos(pitch)).addScaledVector(up, dist * Math.sin(pitch));
+    this._place(pos, target, up);
+  }
+
+  flyTo(lon, lat, height, headingDeg = 0, pitchDeg = -35) {
+    const pos = ELL.toCartesian(lat, lon, height);
+    const { east, north, up } = this._enu(lon, lat);
+    const hd = headingDeg * DEG, p = pitchDeg * DEG;
+    const dir = east.clone().multiplyScalar(Math.sin(hd)).addScaledVector(north, Math.cos(hd))
+      .multiplyScalar(Math.cos(p)).addScaledVector(up, Math.sin(p));
+    this._place(pos, pos.clone().addScaledVector(dir, 1000), up);
+  }
+
+  // (not ELL.toGeodetic: wrong by ~130 m in height in Giro3D 2.0.7 — geometry.js)
+  _toLonLat(p) { return ecefToGeodetic(p.x, p.y, p.z); }
+
+  pickLonLat(x, y) {
+    const where = [this.tiles || this.globe];
+    const hits = this.instance.pickObjectsAt(new THREE.Vector2(x, y), { where, limit: 1 });
+    if (hits.length && hits[0].point) return this._toLonLat(hits[0].point);
+    // nothing under the cursor: intersect the ellipsoid
+    const cam = this.instance.view.camera, rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
+    const q = rayEllipsoid(ray.ray);
+    return q ? this._toLonLat(q) : null;
+  }
+
+  /**
+   * Basemap heights at points. Terrain: read from the Terrarium tiles. 3D
+   * tiles: vertical rays onto the loaded tiles — so first look straight down
+   * over the points and wait until the tiles for that view have loaded (coarse
+   * tiles sag below the surface: a 70 km tile by about 90 m), then put the
+   * camera back.
+   */
+  async sampleBasemapHeights(points) {
+    if (this.basemap === 'terrain') return sampleTerrarium(points);
+    const out = new Float64Array(points.length).fill(NaN);
+    if (!this.tiles || !points.length) return out;
+    const cam = this.instance.view.camera;
+    const saved = { pos: cam.position.clone(), quat: cam.quaternion.clone(), up: cam.up.clone() };
+    let w = Infinity, e = -Infinity, s = Infinity, n = -Infinity;
+    for (const p of points) { w = Math.min(w, p.lon); e = Math.max(e, p.lon); s = Math.min(s, p.lat); n = Math.max(n, p.lat); }
+    const lon = (w + e) / 2, lat = (s + n) / 2;
+    const span = Math.max((e - w) * DEG * 6371000 * Math.cos(lat * DEG), (n - s) * DEG * 6371000);
+    const { north, up } = this._enu(lon, lat);
+    const target = ELL.toCartesian(lat, lon, 0);
+    this._place(target.clone().addScaledVector(up, Math.max(span * 1.1, 1500)), target, north);
+    try {
+      await this._waitTiles(60000);
+      const group = this.tiles.tiles.group, rc = new THREE.Raycaster();
+      rc.firstHitOnly = true;
+      points.forEach((p, k) => {
+        const { up: u } = this._enu(p.lon, p.lat);
+        rc.set(ELL.toCartesian(p.lat, p.lon, 3000), u.clone().negate());
+        rc.far = 6000;
+        const hit = rc.intersectObject(group, true)[0];
+        if (hit) out[k] = this._toLonLat(hit.point).h;
+      });
+    } finally {
+      cam.position.copy(saved.pos); cam.quaternion.copy(saved.quat); cam.up.copy(saved.up);
+      cam.updateMatrixWorld(true);
+      this.controls.resetState?.();
+      this.instance.notifyChange(cam);
+    }
+    return out;
+  }
+
+  /** Resolve when the basemap has stopped loading (at least 1.5 s, at most ms). */
+  async _waitTiles(ms) {
+    const t0 = performance.now();
+    let quiet = 0;
+    while (performance.now() - t0 < ms) {
+      await new Promise(r => setTimeout(r, 250));
+      this.instance.notifyChange(this.tiles || this.globe);
+      quiet = this.tilesLoaded() ? quiet + 250 : 0;
+      if (quiet >= 1500) return true;
+    }
+    return false;
+  }
+
+  tilesLoaded() {
+    const e = this.tiles || this.globe;
+    return e ? !e.loading : true;
+  }
+}
+
+/** First intersection of a ray with the WGS84 ellipsoid (or null). */
+function rayEllipsoid(ray) {
+  const a = 6378137.0, b = 6356752.314245;
+  const o = ray.origin, d = ray.direction;
+  const ox = o.x / a, oy = o.y / a, oz = o.z / b, dx = d.x / a, dy = d.y / a, dz = d.z / b;
+  const A = dx * dx + dy * dy + dz * dz, B = 2 * (ox * dx + oy * dy + oz * dz), C = ox * ox + oy * oy + oz * oz - 1;
+  const disc = B * B - 4 * A * C;
+  if (disc < 0) return null;
+  const t = (-B - Math.sqrt(disc)) / (2 * A);
+  return t > 0 ? o.clone().addScaledVector(d, t) : null;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}

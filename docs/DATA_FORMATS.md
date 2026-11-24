@@ -465,9 +465,11 @@ AOIs are not currently supported.
 
 ## 6. Web viewer protocol (version 2, since 0.8.3)
 
-`visualisation/VisualisationServer.jl` serves the globe viewer
-(`visualisation/cesium/`) over HTTP and a WebSocket, for a running simulation
-(`--vis cesium`) or a recorded one (`visualisation/cesium_replay.jl`). The
+`visualisation/VisualisationServer.jl` serves the globe viewers — CesiumJS
+(`visualisation/cesium/`) and Giro3D (`visualisation/giro3d/`), which share
+`visualisation/viewer-common/` (0.8.4) — over HTTP and a WebSocket, for a
+running simulation (`--vis cesium|giro3d`) or a recorded one
+(`visualisation/web_replay.jl`). The
 protocol does not depend on the rendering engine: a binary mesh once, then one
 variable of one frame at a time, as raw Float32, on demand. The server listens
 on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
@@ -478,10 +480,10 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 
 | Endpoint | Response | Description |
 |---|---|---|
-| `GET /` | 302 | → `/viz/index.html` |
-| `GET /viz/{path}` | file | Viewer files (`..`, hidden files and `config.json` refused) |
+| `GET /` | 302 | → `/viz/{viewer}/index.html` (query kept), `viewer` = the server's (`cesium` default, `giro3d`) |
+| `GET /viz/{dir}/{path}` | file | Viewer files; `dir` is `cesium`, `giro3d` or `viewer-common` (`..`, hidden files and `config.json` refused) |
 | `GET /api/config` | JSON | `{protocol, cesium_url, ion_token, google_key, …}` — §7 |
-| `GET /api/info` | JSON | `{protocol, mode: "live"\|"replay", complete, frames, vars, mesh_ready, n_cells, label, flow_model, …}` |
+| `GET /api/info` | JSON | `{protocol, viewer, mode: "live"\|"replay", complete, frames, vars, mesh_ready, n_cells, label, flow_model, …}` |
 | `GET /api/mesh` | binary | The mesh (below); 204 until it is set |
 | `GET /api/frames` | JSON | `{complete, frames: [{id, t}, …]}` in time order |
 | `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
@@ -513,7 +515,7 @@ Little-endian; every section 4-byte aligned.
 | … | Float32 × n_cells | `base`: depth datum (m) — `sgs_z_min` for SGS runs, else the elevation |
 
 Cell order: a live run's simulation order (the frames use the same order);
-a replay's file order. The fixture `visualisation/cesium/test/fixtures/mesh_small.bin`
+a replay's file order. The fixture `visualisation/viewer-common/test/fixtures/mesh_small.bin`
 is written by `test/test_vis_server.jl` (`FLOODA5_UPDATE_FIXTURES=1`) and decoded
 by the JavaScript tests, so both sides follow this table.
 
@@ -533,9 +535,9 @@ Messages carry no data: the client fetches what it displays.
 
 ## 7. Web viewer configuration
 
-`GET /api/config` merges, in order: `visualisation/cesium/config.json`
+`GET /api/config` merges, in order: `visualisation/viewer-common/config.json`
 (optional, git-ignored; template `config.example.json`), the server's own
-settings (e.g. `cesium_replay.jl --offset`), then the environment.
+settings (e.g. `web_replay.jl --offset`), then the environment.
 
 | Key | Environment | Default | Description |
 |---|---|---|---|

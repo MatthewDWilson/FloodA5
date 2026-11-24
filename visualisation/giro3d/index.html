@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FloodA5 Globe Viewer (Giro3D)</title>
+  <link rel="stylesheet" href="../viewer-common/css/viewer.css">
+  <!-- Giro3D, three.js and OpenLayers are loaded as ES modules from esm.sh, no
+       build step. Every version is pinned here; "*" makes esm.sh leave a
+       package's own imports to this map, so the page has one copy of three.js.
+       Keep GIRO3D_VERSION in js/engine.js in step. The controls come from
+       ../viewer-common/js/ui.js. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.180.0",
+      "three/": "https://esm.sh/three@0.180.0/",
+      "ol": "https://esm.sh/ol@10.8.0?deps=proj4@2.19.10",
+      "ol/": "https://esm.sh/ol@10.8.0&deps=proj4@2.19.10/",
+      "proj4": "https://esm.sh/proj4@2.19.10",
+      "proj4/": "https://esm.sh/proj4@2.19.10/",
+      "3d-tiles-renderer": "https://esm.sh/*3d-tiles-renderer@0.4.22",
+      "3d-tiles-renderer/": "https://esm.sh/*3d-tiles-renderer@0.4.22/",
+      "@giro3d/giro3d/": "https://esm.sh/*@giro3d/giro3d@2.0.7/",
+      "earcut": "https://esm.sh/earcut@2.2.4",
+      "lru-cache": "https://esm.sh/lru-cache@10.4.3",
+      "wkt-parser": "https://esm.sh/wkt-parser@1.5.2",
+      "geotiff": "https://esm.sh/geotiff@3.0.2",
+      "copc": "https://esm.sh/copc@0.0.8",
+      "chart.js": "https://esm.sh/chart.js@3.9.1",
+      "lil-gui": "https://esm.sh/lil-gui@0.17.0"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="viewer"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -299,12 +299,14 @@ Scripts and one static directory:
 | `MakieVisualiser.jl` | GLMakie native desktop window. Module `MakieVisualiser`: `start`/`push_frame!` (live, `--vis makie`) and `replay` (an output file, same window plus frame and speed sliders). |
 | `replay_data.jl` | Module `FloodA5Replay`: the Makie-free half of replay (below). |
 | `replay.jl` | Replay command line (`replay.jl RUN.h5`, also `FloodModel.jl --replay`). |
-| `VisualisationServer.jl` | Server for the globe viewer (plain HTTP.jl, protocol 2: DATA_FORMATS.md §6). Module `VisualisationServer`: `start`, `set_mesh!`, `wants_frame`/`push_frame!` (live; frames thinned by wall-clock time within a memory budget), `set_replay!` (frames read on demand), `notify_complete!`, `stop`. Runs on the interactive thread pool; the time loop yields once per step with `--vis cesium` (in Julia 1.12 the main task is on interactive thread 1). Always loaded (light), also under `FLOODA5_NO_VIS=1`. |
-| `cesium_replay.jl` | Replay an output file in the globe viewer (`cesium_replay.jl RUN.h5`, also `FloodModel.jl --replay RUN.h5 --vis cesium`). |
+| `VisualisationServer.jl` | Server for the globe viewers (plain HTTP.jl, protocol 2: DATA_FORMATS.md §6). Module `VisualisationServer`: `start(; viewer)`, `set_mesh!`, `wants_frame`/`push_frame!` (live; frames thinned by wall-clock time within a memory budget), `set_replay!` (frames read on demand), `notify_complete!`, `stop`. Serves `cesium/`, `giro3d/` and `viewer-common/` (only those). Runs on the interactive thread pool; the time loop yields once per step with `--vis cesium|giro3d` (in Julia 1.12 the main task is on interactive thread 1). Always loaded (light), also under `FLOODA5_NO_VIS=1`. |
+| `web_replay.jl` | Replay an output file in a globe viewer (`web_replay.jl RUN.h5 [--viewer giro3d]`, also `FloodModel.jl --replay RUN.h5 --vis cesium|giro3d`). |
 | `view_h5_output.jl` | Standalone post-processing viewer for HDF5 output (map, cell time series, `--animate` PNG frames). |
 | `FloodViewer.jl` | Simpler standalone GLMakie viewer for HDF5 output. |
 | `visualise_mesh.jl` | Publication-quality mesh and SGS figures (wire-frame, cross-section, hypsometric curve). |
-| `cesium/` | Globe viewer (CesiumJS 1.147, loaded at run time; no build step). `js/protocol.js`, `js/geometry.js`, `js/colormaps.js`: pure modules, unit-tested with `node --test` (`cesium/test/`). `js/water.js`: the water and bed surfaces — one glTF model per surface built in the browser, each cell on its own vertices; per-cell values in float textures read by a custom shader that moves vertices along the ellipsoid normal (no geometry rebuild per frame). `js/main.js`: the app. `tools/smoke.mjs`: headless-browser check (local, not CI). |
+| `viewer-common/` | What the globe viewers share (no build step; docs/GLOBE_VIEWERS.md). `js/app.js`: the viewer — controls, live and replay, playback, colour range, statistics, hover read-out, offset estimate — driving an *engine* (interface at the top of the file). `js/ui.js`: the controls' markup. `js/surface.js`: the surface model (modes, style) and the GLSL both engines' shaders use. `js/protocol.js`, `js/geometry.js` (incl. a correct ECEF→geodetic), `js/colormaps.js`: pure modules. `test/`: `node --test` (CI). `tools/smoke.mjs`: headless-browser check (local, not CI; `--profile`, `--netlog`). `css/`, `config.example.json`. |
+| `cesium/` | The CesiumJS 1.147 engine (loaded at run time from cesium.com): `js/engine.js` (viewer, basemaps, camera, picking, `sampleHeightMostDetailed`), `js/water.js` (one glTF model per surface built in the browser, each cell on its own vertices; per-cell values in float textures read by a `CustomShader` that moves vertices along the ellipsoid normal: no geometry rebuild per frame). |
+| `giro3d/` | The Giro3D 2.0.7 / three.js r180 engine (ES modules from esm.sh through the import map in `index.html`): `js/engine.js` (Instance, Globe, Tiles3D with the Cesium ion or Google auth plugin of 3d-tiles-renderer, globe controls, GPU picking, raycast height sampling), `js/water.js` (three.js mesh + `ShaderMaterial`, same model as CesiumJS), `js/terrarium.js` (Terrarium elevation tiles). |
 
 **Replay (`replay_data.jl` + `MakieVisualiser.replay`).** `FloodA5Replay`
 (pure Julia, on `analysis/` `FA`) opens an output file: a mesh adaptor with
@@ -566,10 +568,11 @@ correction can be added without touching the others:
 
 1. Add the variable to `FlowState` and compute it in the step function.
 2. Add the dataset to `_write_frame!` in `FloodModel.jl`.
-3. For the globe viewer: add it to `_web_vis_frame` (FloodModel.jl, live) and
-   `_CESIUM_REPLAY_VARS` (`visualisation/cesium_replay.jl`), and an entry in
-   `VARS` in `visualisation/cesium/js/main.js` (label, unit, colour map; the
-   surface is coloured by the variable's values through `COLOR_MODE.texture`):
+3. For the globe viewers: add it to `_web_vis_frame` (FloodModel.jl, live) and
+   `_WEB_REPLAY_VARS` (`visualisation/web_replay.jl`), and an entry in
+   `VARS` in `visualisation/viewer-common/js/app.js` (label, unit, colour map;
+   the surface is coloured by the variable's values through
+   `COLOR_MODE.texture`; both engines pick it up):
 
 ```javascript
 const VARS = {

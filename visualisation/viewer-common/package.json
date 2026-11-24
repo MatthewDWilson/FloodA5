@@ -1,0 +1,9 @@
+{
+  "name": "flooda5-viewer-common",
+  "private": true,
+  "description": "FloodA5 web globe viewers (CesiumJS, Giro3D): the shared, engine-independent code and its tests. No build step and no npm dependencies: the engines are loaded at run time.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
