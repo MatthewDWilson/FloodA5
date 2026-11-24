@@ -263,13 +263,27 @@ end
 _norm_arg(a) = Sys.iswindows() ? replace(lowercase(String(a)), '/' => '\\') : String(a)
 _same_argv(a, b) = length(a) == length(b) && all(_norm_arg(x) == _norm_arg(y) for (x, y) in zip(a, b))
 
+# Jobs run in the repository root, so a run's recorded `cwd` is the checkout
+# that made it. Its paths under that checkout ({repo} paths) are taken as this
+# checkout's: a run made in another worktree of the repository (CLAUDE.md:
+# long runs in a `git worktree`) is the same job. Paths under the case root
+# (`FLOODA5_CASES_DIR`, which may lie inside that checkout) stay as they are.
+function _rebase_argv(argv, cwd)
+    sep = Sys.iswindows() ? "\\" : "/"
+    from = _norm_arg(rstrip(String(cwd), ['/', '\\']))
+    (isempty(from) || from == _norm_arg(REPO)) && return argv
+    root = _norm_arg(rstrip(case_root(), ['/', '\\'])) * sep
+    rebase(a) = (n = _norm_arg(a); startswith(n, from * sep) && !startswith(n, root))
+    return [rebase(a) ? REPO * String(a)[ncodeunits(from)+1:end] : String(a) for a in argv]
+end
+
 function job_status(c::Case, j::Job)
     p = job_output(c, j)
     isfile(p) || return :missing
     try
         FO.format_version(p) >= 2 || return :changed
         ri = FO.run_info(p)
-        _same_argv(ri["argv"], job_argv(c, j)) || return :changed
+        _same_argv(_rebase_argv(ri["argv"], get(ri, "cwd", "")), job_argv(c, j)) || return :changed
         get(get(ri, "summary", Dict()), "completed", false) == true || return :failed
         return :done
     catch
@@ -538,9 +552,23 @@ sgs_strip_tables(dir, mesh) = _ss_tables(dir, mesh)
 const SGS_STRIP_REACH = _SS_REACH
 const SGS_STRIP_N = _SS_N
 
+"The meshes of the `mesh_families_*` cases, in table order, and their target √(mean cell area) (m)."
+const MESH_FAMILIES = _MF_ALL
+const MESH_FAMILIES_DX = _MF_L
+"The meshes `mesh_families_carlisle` runs itself (A5 comes from `carlisle_peak`)."
+const MESH_FAMILIES_CARLISLE = _MF_CARL_FAMS
+"`mesh_families_carlisle`'s checkerboard bound: the largest fraction of fully wet cells that may be local level extrema."
+const CHECKERBOARD_EXTREMA = _MF_CARL_EXTREMA
+"Start of the rising limb (s) on which `mesh_families_carlisle` checks that storage never falls."
+const CARLISLE_RISE = _MF_CARL_RISE
+"The window (s) of `carlisle_peak`'s comparisons: 49.5 h to the Eden peak at 55.5 h."
+const CARLISLE_PEAK_WINDOW = _CARL_PEAK_WINDOW
+
 export python_command, python_env, planar_params, planar_point, PLANAR_SLOPE_BAND,
        EMBANKMENT_WET_DEPTH, embankment_xrange, log_mass_balance, channel_series_table,
        sgs_strip_params, sgs_strip_analytic, sgs_strip_zf, sgs_strip_zrel, sgs_strip_conveyance,
-       sgs_strip_storage, sgs_strip_profile, sgs_strip_tables, SGS_STRIP_REACH, SGS_STRIP_N
+       sgs_strip_storage, sgs_strip_profile, sgs_strip_tables, SGS_STRIP_REACH, SGS_STRIP_N,
+       MESH_FAMILIES, MESH_FAMILIES_DX, MESH_FAMILIES_CARLISLE, CHECKERBOARD_EXTREMA, CARLISLE_RISE,
+       CARLISLE_PEAK_WINDOW
 
 end # module

@@ -2,15 +2,18 @@
 
 2026-11-17; updated 2026-11-24. Branch `wp3c-dggs-meshes`, built on 0.6.0 and
 rebased onto 0.7.0 after the SGS conveyance merge; **Phase A released as 0.7.1**;
-**Phase B (branch `wp3d-dggs-phaseb`) as 0.8.1**.
+**Phase B (branch `wp3d-dggs-phaseb`) as 0.8.1**; **Phase C (branch
+`wp3e-mesh-notebook`) as 0.8.2**.
 Continues WP3 of `FloodA5_Review_and_ForwardPlan_2026-10.md` ("Remaining:
 H3/IGEO7 meshes") and Phase 2 of `FloodA5_Generalisation_BenchmarkingPlan.md`
 (multi-DGGS). The same text is in the FloodA5 repository
 (`docs/notes/MeshFamilies_DGGS_Plan_2026-11.md`) and in `projectinstructions/`
 (`FloodA5_MeshFamilies_DGGS_Plan_2026-11.md`).
 
-**Status (2026-11-24).** Phases A (§3) and B (§4) done; next Phase C, the
-notebook (§5). Phase B's results are in `docs/TEST_CASES.md` §8.
+**Status (2026-11-24).** Phases A (§3), B (§4) and C (§5) done. Results:
+`docs/TEST_CASES.md` §8 and `notebooks/06_mesh_families.ipynb`, whose §8
+(the SGS checkerboard per mesh) is the check for the SGS hydraulics work
+that comes next.
 
 ## 1. Where things stood
 
@@ -175,6 +178,15 @@ list). It moves every DEM sample, so baselines recorded before it would be
 recorded twice.
 
 ## 5. Phase C: notebook `notebooks/06_mesh_families.ipynb`
+
+**Done (0.8.2).** As planned below, with a section added at the user's
+request: §8 of the notebook, the SGS checkerboard per mesh, to re-run after
+SGS work (`RERUN_SGS = true`). Cartesian at 22.2 m was added to
+`mesh_families_carlisle` for it, and showed that SGS checkerboards on the
+Cartesian grid too. Hierarchy: A5's children do not tile the parent (pya5:
+the four children of a res-17 cell at Carlisle differ from it by 64% of its
+area). Cost: from the Carlisle runs' wall times (indicative; the runs shared
+a machine).
 
 1. Why swappable meshes; the mesh contract (`docs/MESHES.md`).
 2. Gallery: one AOI at matched mean cell area, one panel per family.

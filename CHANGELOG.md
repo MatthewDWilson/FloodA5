@@ -33,6 +33,47 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-11-24
+
+DGGS mesh families, Phase C (WP3 part 3, branch `wp3e-mesh-notebook`; PATCH:
+default results unchanged, no solver change).
+
+- Notebook `notebooks/06_mesh_families.ipynb`: the eleven meshes of the
+  mesh-family cases — what they are and look like, their geometry as the
+  solver sees it (`FA.mesh_quality`), isotropy, directional bias, orientation
+  in a one-cell channel, Carlisle against the 5 m references, cost,
+  advantages and disadvantages — and §8, the SGS checkerboard per mesh:
+  provenance of the runs, per-mesh verdicts, the extrema through the event,
+  residual maps, storage on the rising limb. `RERUN_SGS = true` runs the
+  Carlisle SGS simulations again, as the check after SGS work.
+- `mesh_families_carlisle` also runs Cartesian at 22.2 m, local-inertial
+  and SGS (`carlisle_peak`'s is 20 m and local-inertial only); expected
+  values re-recorded (the other runs' values unchanged).
+- Finding: **SGS checkerboards on the Cartesian grid too** (41% of the wet
+  cells local level extrema at the Eden peak, from about 46 h; the stored
+  volume then runs away to 1.06 of the 5 m SWE benchmark). The open SGS
+  finding of 0.8.1 is therefore not about non-A5 meshes: SGS is smooth only
+  on A5, ISEA3H and jittered Voronoi (TEST_CASES §8; notebook 06 §8).
+- `FA.wse_residual`: per cell, the water level minus its neighbours' mean and
+  the local-extremum flag, which `FA.noise_metrics` aggregates (for maps).
+- `FP.cellmap`/`cellmap!`: any per-cell values, or the cells alone (with
+  outlines), on a subset of cells; `FP.cells_within(run, lon, lat, m)`
+  picks a window; `FP.fieldmap(r; var = values)` takes a vector.
+- Case runner: a run made in another checkout of the repository (a `git
+  worktree`) is the same job — paths under the recording checkout (its `cwd`)
+  are mapped onto this one before comparing commands, except those under the
+  case root. Before, every run looked changed from another worktree and was
+  run again.
+- `notebooks/nbtools.jl execute`: `FLOODA5_NB_KERNEL` picks the kernel (e.g.
+  one installed for a worktree).
+- `FC` public names for the notebook: `MESH_FAMILIES`, `MESH_FAMILIES_DX`,
+  `MESH_FAMILIES_CARLISLE`, `CHECKERBOARD_EXTREMA`, `CARLISLE_RISE`,
+  `CARLISLE_PEAK_WINDOW`.
+- Tests: `test/analysis/test_noise.jl` (`wse_residual` = `noise_metrics` per
+  cell), `test/test_plots.jl` (vector values, `cells_within`),
+  `test/test_cases.jl` C3 (worktree paths), `test/test_plots_render.jl`
+  (`cellmap`).
+
 ## [0.8.1] — 2026-11-24
 
 DGGS mesh families, Phase B (WP3 part 3, branch `wp3d-dggs-phaseb`; PATCH:

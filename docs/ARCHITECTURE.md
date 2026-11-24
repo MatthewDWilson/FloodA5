@@ -254,7 +254,8 @@ format-1 files, pass the mesh's GeoParquet (`load_run(p; parquet = …)`).
 - `shape.jl`: point-spread and planar-slope metrics (harmonics, sector
   ratios, hull circularity, front radius by bearing, N/S split, deflection,
   flow direction).
-- `noise.jl`: checkerboard and velocity-noise metrics.
+- `noise.jl`: checkerboard and velocity-noise metrics (`noise_metrics`;
+  per cell, for maps, `wse_residual`).
 - `channel.jl`: straight-channel series metrics.
 
 The analysis scripts in `test/` (`wp1_metrics.jl`, `diag_vs_reference.jl`,

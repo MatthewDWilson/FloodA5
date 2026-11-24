@@ -9,8 +9,10 @@
 #            checkerboard (1 for a perfect two-colour one on a square grid;
 #            pentagon meshes cannot be two-coloured, so less there).
 #   dv_rms   rms of |v_i − mean(v of neighbours)|, m/s (velocity noise).
+#
+# wse_residual gives r_i and the extremum flag per cell, for maps.
 
-export noise_metrics, noise_series, noise_summary
+export noise_metrics, noise_series, noise_summary, wse_residual
 
 # Neighbours of cell i: a max_nb × n matrix (0 = none) or a vector of lists.
 _nbrs(nb::AbstractMatrix{<:Integer}, i) = (j for j in view(nb, :, i) if j != 0)
@@ -84,6 +86,52 @@ function noise_metrics(r::Run, k::Integer = nframes(r); sgs::Bool = r.flow_model
     w = (sgs ? r.mesh.static["sgs_z_min"] : r.mesh.elevation) .+ h    # as `wse`
     return noise_metrics(w, h, field(r, "vel_u", k), field(r, "vel_v", k), r.mesh.neighbours;
                          hmin, rmin)
+end
+
+"""
+    wse_residual(wse, h, neighbours; hmin = 0.05, rmin = 2e-3) -> (r, extremum)
+    wse_residual(r::Run, k = nframes(r); sgs = (r.flow_model == "sgs"), hmin, rmin)
+
+Per cell, what `noise_metrics` aggregates: `r[i]` = WSEᵢ − mean(WSE of its
+neighbours) (m) on the fully wet interior cells, NaN elsewhere, and
+`extremum[i]`, whether cell i is a strict local WSE extremum with |rᵢ| >
+`rmin` (a checkerboard cell). sqrt(mean(r²)) over the finite r is
+`noise_metrics`' r_rms (in m) and the fraction of extrema among them its
+`extrema`. For maps of the checkerboard.
+"""
+function wse_residual(wse::AbstractVector, h::AbstractVector, nb; hmin::Real = 0.05, rmin::Real = 2e-3)
+    n = length(h)
+    length(wse) == n == _ncells(nb) ||
+        error("wse_residual: wse, h and neighbours must cover the same $n cells")
+    r = fill(NaN, n); ext = falses(n)
+    wn = Float64[]
+    for i in 1:n
+        (h[i] > hmin && isfinite(wse[i])) || continue
+        empty!(wn)
+        ok = true
+        for j in _nbrs(nb, i)
+            if !(h[j] > hmin && isfinite(wse[j]))
+                ok = false; break
+            end
+            push!(wn, wse[j])
+        end
+        (ok && length(wn) >= 3) || continue
+        wi = wse[i]
+        r[i] = wi - mean(wn)
+        ext[i] = abs(r[i]) > rmin && (all(<(wi), wn) || all(>(wi), wn))
+    end
+    return (r = r, extremum = ext)
+end
+
+function wse_residual(r::Run, k::Integer = nframes(r); sgs::Bool = r.flow_model == "sgs",
+                      hmin::Real = 0.05, rmin::Real = 2e-3)
+    size(r.mesh.neighbours, 1) > 0 ||
+        error("$(r.label): wse_residual needs neighbour lists (format 1: pass the mesh's parquet)")
+    sgs && !haskey(r.mesh.static, "sgs_z_min") &&
+        error("$(r.label): SGS WSE needs sgs_z_min (format 1: pass the mesh's parquet)")
+    h = depth(r, k)
+    w = (sgs ? r.mesh.static["sgs_z_min"] : r.mesh.elevation) .+ h    # as `noise_metrics`
+    return wse_residual(w, h, r.mesh.neighbours; hmin, rmin)
 end
 
 """

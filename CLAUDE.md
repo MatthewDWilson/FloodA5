@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-24): 0.8.1 — the default engine is
+(`VERSIONING.md`). Status (2026-11-24): 0.8.2 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -32,7 +32,10 @@ limit (`--sgs-critical`), the 5 m SWE run is the Carlisle benchmark
 (HYDRAULICS §15.14). SGS = the elevation representation; hydraulic
 formulations on it are to be pluggable. 0.8.1: DGGS mesh families
 (Phase B): `--meshgen-dggs`, mesh metadata kept into the output, the
-benchmarks on eleven mesh families (`docs/TEST_CASES.md` §8).
+benchmarks on eleven mesh families (`docs/TEST_CASES.md` §8). 0.8.2:
+notebook 06 (mesh families; §8 = the SGS checkerboard per mesh — re-run it
+with `RERUN_SGS = true` after SGS changes: SGS checkerboards on Cartesian
+too, smooth only on A5, ISEA3H, jittered Voronoi).
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.14 SGS). SGS meshes
@@ -85,8 +88,11 @@ without `_orient_collinear!`-style signs.
   migrate with `julia setup.jl --migrate-meshes`. To test against another pya5
   without touching that env, put a venv's `site-packages` first on `PYTHONPATH`.
 - Long runs / parallel work: use `git worktree` so code edits can't change jobs
-  that have not started yet. On Windows, stopping a background shell can leave
-  its `julia.exe`/`xargs` children running — check and stop them explicitly.
+  that have not started yet. Case runs made in one worktree are reused from
+  another (the runner maps repository paths); the runner does not see code
+  changes — rerun with `--fresh` (or a notebook's rerun flag) after them.
+  On Windows, stopping a background shell can leave its `julia.exe`/`xargs`
+  children running — check and stop them explicitly.
 
 ## Julia gotchas that have bitten this project
 1. `@printf` needs a literal format string — no `"a" * "b"`; put dynamic text

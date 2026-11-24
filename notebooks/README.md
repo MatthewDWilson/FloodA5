@@ -9,6 +9,7 @@ Worked, reproducible accounts of the test cases, in this order:
 | `03_carlisle.ipynb` | `carlisle_peak`, `carlisle` | Carlisle against the full shallow-water reference: the 6 h before the Eden peak (river inflow only), and the recorded first-6 h test window (with its 10 mm/h test rain, and without) |
 | `04_sgs_strip.ipynb` | `sgs_strip` | The sub-grid (SGS) model on a synthetic strip with a sub-cell channel, against analytic normal flow, storage and arrival times and a 2.5 m reference: the storage-measurement question, why SGS held water back until 0.6.0 (edge flow areas frozen above each cell's highest DEM sample; legacy donor cap), what 0.7.0 changed (face tables, 2-D conveyance, positivity, time step, flow-path geometry), the result against the 0.6.0 record, and 0.8.0 (DEM at pixel centres, critical-flow limit) |
 | `05_performance.ipynb` | — (`benchmarks/`) | Performance on this machine and the others with results: step throughput on CPU threads, GPU Float64 and GPU Float32, thread scaling, Carlisle wall times, and the accuracy of GPU and Float32 runs against the CPU Float64 run. Runs the benchmarks the machine has no results for and saves them to `benchmarks/results/` |
+| `06_mesh_families.ipynb` | `mesh_families_point_spread`, `mesh_families_planar_slope`, `mesh_families_channel`, `mesh_families_carlisle` | Eleven meshes at ~22 m — Cartesian, rotated Cartesian, hexagons, centroidal and jittered Voronoi, A5, H3, IGEO7, ISEA3H, HEALPix, rHEALPix: what they are and look like, their geometry as the solver sees it, isotropy, directional bias, orientation in a narrow channel, Carlisle against the 5 m references, cost, advantages and disadvantages; and the SGS checkerboard per mesh (§8), to re-run after SGS work (`RERUN_SGS = true`) |
 
 Each notebook describes every simulation and shows the exact commands (from
 the case registry, so text and commands cannot drift apart). It runs the
@@ -59,6 +60,20 @@ The first run of a notebook makes its case runs: planar about 35 min (three case
 channel about 15 min, SGS strip about 40 min, Carlisle about 45 min (`carlisle`) plus 1.5 h (`carlisle_peak`:
 the event to the Eden peak, two SWE runs of ~85 min) on 16 cores. Later runs reuse
 them (`test/case_runs/`, git-ignored) and take a minute or two.
+
+`06_mesh_families.ipynb` makes the three standard mesh-family cases (about
+an hour on 3 × 4 threads) and the Carlisle one (about 10 h; it needs
+`carlisle_peak` and `carlisle_peak_fine` from `03_carlisle.ipynb` first).
+With `RERUN_SGS = true` it runs the eleven Carlisle SGS simulations again
+(about 3 h), for checking a change to the SGS code: the case runner reuses a
+run whose command is unchanged, whatever code made it, and §8.1 shows which
+code made each run.
+
+To run a notebook against another checkout (a `git worktree`), install a
+kernel for it (as above, with that checkout's `--project` and a new
+`specname`) and pass it to `execute` with `FLOODA5_NB_KERNEL=<specname>`.
+Runs made in another checkout of the repository are reused: the case runner
+maps their repository paths onto this one.
 
 `05_performance.ipynb` is different: its first run on a machine runs the
 benchmark suite (about an hour and a half; use an idle machine and the full

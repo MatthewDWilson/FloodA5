@@ -46,6 +46,20 @@
     mh = FA.noise_metrics(10.0 .+ a .* half, hc, zero_v, zero_v, nb)
     @test 0.4 < mh.extrema < 0.6
 
+    # Per cell (wse_residual): the same cells, r_rms and extrema as noise_metrics
+    for (wv, hv) in ((w, h), (10.0 .+ a .* col, hc), (10.0 .+ a .* half, hc), (10.0 .+ 5e-4 .* col, hc))
+        mm = FA.noise_metrics(wv, hv, zero_v, zero_v, nb)
+        res = FA.wse_residual(wv, hv, nb)
+        fin = filter(isfinite, res.r)
+        @test length(fin) == mm.n
+        @test 1e3 * sqrt(sum(abs2, fin) / length(fin)) ≈ mm.r_rms rtol = 1e-12
+        @test count(res.extremum) / mm.n == mm.extrema
+        @test !any(res.extremum[i] for i in 1:n if !isfinite(res.r[i]))
+        @test isequal(FA.wse_residual(wv, hv, lists), res)
+    end
+    @test all(isnan, FA.wse_residual(w, zeros(n), nb).r)
+    @test_throws ErrorException FA.wse_residual(w[1:end-1], hc, nb)
+
     # Constant velocity → dv_rms 0; a velocity checkerboard → dv_rms = 2|Δv|
     @test FA.noise_metrics(w, hc, fill(0.7, n), fill(-0.2, n), nb).dv_rms ≈ 0 atol = 1e-12
     @test FA.noise_metrics(w, hc, 0.1 .* col, zero_v, nb).dv_rms ≈ 0.2 rtol = 1e-9
@@ -69,6 +83,10 @@
     @test mk.n > 0 && isequal(mk, FA.noise_metrics(hk, hk, uk, vk, nb; hmin))
     # SGS: WSE from sgs_z_min (= the bed here: same metrics)
     @test isequal(FA.noise_metrics(rf, k; hmin, sgs = true), mk)
+    rk = FA.wse_residual(rf, k; hmin)
+    @test isequal(rk, FA.wse_residual(hk, hk, nb; hmin))
+    @test count(isfinite, rk.r) == mk.n && count(rk.extremum) / mk.n == mk.extrema
+    @test_throws ErrorException FA.wse_residual(r, k; sgs = true)
     @test_throws ErrorException FA.noise_metrics(r, k; sgs = true)   # no sgs_z_min
     s = FA.noise_series(rf; every = 4, hmin)
     @test [e.k for e in s] == [kk for kk in 1:k if kk % 4 == 0 || kk == k]

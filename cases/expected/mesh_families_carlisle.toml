@@ -1,5 +1,79 @@
 # Expected metrics for case "mesh_families_carlisle" — written by `julia --project=. cases/run.jl baseline mesh_families_carlisle`.
 # Tolerances are in cases/registry (Case.rtol / Case.atol).
+[cart_li]
+cell_size_m = 22.199992636116235
+input_error_rel = -9.012647474520254e-6
+li5_csi_w0 = 0.793520450872685
+li5_csi_w1 = 0.8333271394145567
+li5_csi_wmid = 0.8226789161218547
+li5_level_median_w0 = 0.26671584665812276
+li5_level_median_w1 = 0.2918375575294494
+li5_level_median_wmid = 0.2908279515541894
+li5_level_rms_w0 = 0.4042851942552716
+li5_level_rms_w1 = 0.40433151891859814
+li5_level_rms_wmid = 0.4095080492784759
+li5_storage_ratio_w0 = 1.1414504077166905
+li5_storage_ratio_w1 = 1.1098628359865423
+li5_storage_ratio_wmid = 1.118275123866614
+mass_balance_rel = 1.8906610366532604e-14
+max_depth_peak_m = 7.242499822012872
+n_cells = 30456.0
+noise_dv_rms_w1 = 0.23897798400939244
+noise_extrema_w1 = 0.0008544921875
+noise_r_rms_w1_mm = 60.18692926661608
+storage_drop_rel = 0.0
+storage_w1_m3 = 8.445455114369271e6
+swe5_csi_w0 = 0.815420687615609
+swe5_csi_w1 = 0.8491405659609893
+swe5_csi_wmid = 0.8304542415565945
+swe5_level_median_w0 = -0.05383713936318468
+swe5_level_median_w1 = -0.08189305378404832
+swe5_level_median_wmid = -0.05788007599644551
+swe5_level_rms_w0 = 0.2829955809080812
+swe5_level_rms_w1 = 0.27412838856320093
+swe5_level_rms_wmid = 0.2815400766779718
+swe5_storage_ratio_w0 = 0.9562851634149014
+swe5_storage_ratio_w1 = 0.9354230088042702
+swe5_storage_ratio_wmid = 0.9490417775786892
+t_end = 199800.0
+
+[cart_sgs]
+cell_size_m = 22.199992636116235
+input_error_rel = -4.920948416066701e-6
+li5_csi_w0 = 0.8752383066137162
+li5_csi_w1 = 0.868145631768221
+li5_csi_wmid = 0.865912098164082
+li5_level_median_w0 = 0.37144154202550794
+li5_level_median_w1 = 0.5380500832348947
+li5_level_median_wmid = 0.48796461916986367
+li5_level_rms_w0 = 0.6582842513164276
+li5_level_rms_w1 = 0.7226049848302097
+li5_level_rms_wmid = 0.7056989327221918
+li5_storage_ratio_w0 = 1.1263498231281932
+li5_storage_ratio_w1 = 1.2625935287299717
+li5_storage_ratio_wmid = 1.2048758589381714
+mass_balance_rel = 6.617286552097229e-14
+max_depth_peak_m = 11.150137678640299
+n_cells = 30456.0
+noise_dv_rms_w1 = 0.45922901016325585
+noise_extrema_w1 = 0.40810920945395274
+noise_r_rms_w1_mm = 413.6173805262153
+storage_drop_rel = 0.03140247970623988
+storage_w1_m3 = 9.609817504966281e6
+swe5_csi_w0 = 0.8877096318721225
+swe5_csi_w1 = 0.8953110957270095
+swe5_csi_wmid = 0.8804260733397522
+swe5_level_median_w0 = 0.10971170464519275
+swe5_level_median_w1 = 0.22991021006522594
+swe5_level_median_wmid = 0.17220631875181702
+swe5_level_rms_w0 = 0.5839444071972835
+swe5_level_rms_w1 = 0.4527061598590644
+swe5_level_rms_wmid = 0.5134419813279982
+swe5_storage_ratio_w0 = 0.9436341845346558
+swe5_storage_ratio_w1 = 1.0641486490459544
+swe5_storage_ratio_wmid = 1.0225368538777622
+t_end = 199800.0
+
 [h3_li]
 cell_size_m = 16.414202259769056
 input_error_rel = -7.380403532386996e-6
@@ -371,11 +445,11 @@ swe5_storage_ratio_wmid = 0.7046896273444492
 t_end = 199800.0
 
 [meta]
-flooda5_version = "0.8.0"
-git_commit = "4a9d4132ed0a5192dadcc53f9e3a501d61ceff0b"
+flooda5_version = "0.8.1"
+git_commit = "2168cc9b19437fe894c8875d9e6562123483fe4b"
 git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-23T17:53:22Z"
+recorded_utc = "2026-11-23T20:47:24Z"
 
 ["peak:a5_li"]
 cell_size_m = 22.19470972086804

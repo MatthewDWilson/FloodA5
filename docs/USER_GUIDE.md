@@ -585,6 +585,11 @@ FP.storage_plot([li, swe])                       # storage against time
 FP.mass_balance_plot(li)                         # Σ volume, dS/dt, summary check
 FP.timeseries([li, swe], [(lon = -2.925, lat = 54.897, label = "floodplain")])
 save("maps.png", FP.fieldmaps([li, swe], [7200.0]); px_per_unit = 2)
+
+# any per-cell values, on a window of cells; or a mesh drawn by its outlines
+res = FA.wse_residual(li, FA.nframes(li))       # η − mean of neighbours (a checkerboard measure)
+FP.cellmap(li, res.r; cells = FP.cells_within(li, -2.912, 54.898, 500), origin = (-2.912, 54.898))
+FP.cellmap(li.mesh; outline = true, cells = FP.cells_within(li, -2.912, 54.898, 150))
 ```
 
 - Each function returning a `Figure` has a `…!(fig[i, j], …)` form for
@@ -594,6 +599,9 @@ save("maps.png", FP.fieldmaps([li, swe], [7200.0]); px_per_unit = 2)
   style to figures you lay out yourself.
 - Maps draw the mesh polygons: `coords = :lonlat` (degrees, drawn to scale)
   or `:local` (metres about `origin = :centre`, `:source` or `(lon, lat)`).
+  `fieldmap` takes a vector of per-cell values as `var`; `cellmap` draws any
+  values (diverging colours by default) on a subset of cells
+  (`FP.cells_within(run, lon, lat, halfwidth_m)`), or the cells alone.
   Cells with depth ≤ `dry_threshold` (0.01 m) show the `basemap`
   (`:elevation` greys, `:grey`, `:none`). Colour ranges default to the
   rounded 98th percentile of the wet values (symmetric for differences).
