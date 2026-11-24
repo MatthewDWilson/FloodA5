@@ -537,15 +537,21 @@ Messages carry no data: the client fetches what it displays.
 
 `GET /api/config` merges, in order: `visualisation/viewer-common/config.json`
 (optional, git-ignored; template `config.example.json`), the server's own
-settings (e.g. `web_replay.jl --offset`), then the environment.
+settings (e.g. `web_replay.jl --offset`), then the keys (environment or key
+file, below) and `FLOODA5_CESIUM_URL`.
 
-| Key | Environment | Default | Description |
+| Key | Environment / key file | Default | Description |
 |---|---|---|---|
 | `ion_token` (`cesium_ion_token` in config.json) | `FLOODA5_CESIUM_ION_TOKEN` | `""` | Cesium ion token: Google Photorealistic 3D Tiles, Cesium World Terrain |
 | `google_key` | `FLOODA5_GOOGLE_TILES_KEY` | `""` | Google Map Tiles API key (the other route to the Google tiles) |
 | `cesium_url` | `FLOODA5_CESIUM_URL` | the CesiumJS 1.147 release on cesium.com | Base URL of a CesiumJS build (`…/Build/Cesium/`; a local copy for offline use) |
 | `default_basemap` | — | `google3d` with a token, else `osm` | `google3d` / `terrain` / `osm` / `none` (the page's `?basemap=` overrides) |
 | `vertical_offset` | — | 0 | Default offset (m) from model heights to ellipsoidal heights; the viewer remembers its own per domain |
+
+The two keys are looked up (`io/FloodA5Keys.jl`, since 0.8.5) in the
+environment variable of that name, then in JSON key files: the file named by
+`FLOODA5_KEYS`, `keys.json` in the repository root, `~/.flooda5/keys.json`
+(template `keys.example.json`; `keys.json` is git-ignored and never served).
 
 Server tuning (environment only): `FLOODA5_VIS_INTERVAL` (s of wall-clock
 time between kept live frames, default 1), `FLOODA5_VIS_BUDGET_MB` (memory

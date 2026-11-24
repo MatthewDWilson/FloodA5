@@ -339,8 +339,9 @@ globe, on two engines with the same controls (CesiumJS and Giro3D; compared in
 docs/GLOBE_VIEWERS.md). The water surface is drawn at its height, so over
 Google Photorealistic 3D Tiles buildings and trees stand out of the flood.
 Live during a run, or a replay of an output file; scales to meshes of 500k+
-cells. Google tiles need a free Cesium ion token in
-`FLOODA5_CESIUM_ION_TOKEN` (docs/USER_GUIDE.md §6.2).
+cells. Google tiles need a free Cesium ion token, as
+`FLOODA5_CESIUM_ION_TOKEN` in a git-ignored `keys.json` (template
+`keys.example.json`) or the environment (docs/USER_GUIDE.md §6.2).
 
 ```bash
 julia --project=. visualisation/web_replay.jl sim.h5 --open [--viewer giro3d]   # or FloodModel.jl --replay sim.h5 --vis cesium|giro3d

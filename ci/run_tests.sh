@@ -41,6 +41,7 @@ TESTS=(
   test/test_analysis.jl
   test/test_replay.jl
   test/test_vis_server.jl
+  test/test_keys.jl
   test/test_vis_live.jl
   test/test_plots.jl
   test/test_cases.jl

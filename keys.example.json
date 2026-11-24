@@ -1,0 +1,6 @@
+{
+  "_comment": "Template. Copy to keys.json in this directory (git-ignored) or to ~/.flooda5/keys.json (per user, shared by every clone and worktree), and fill in your keys. Never commit keys.json. Environment variables of the same names take precedence; FLOODA5_KEYS can name another file. See docs/USER_GUIDE.md §6.2.",
+
+  "FLOODA5_CESIUM_ION_TOKEN": "",
+  "FLOODA5_GOOGLE_TILES_KEY": ""
+}

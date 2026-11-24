@@ -33,6 +33,25 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-11-25
+
+Access keys from a key file (branch `maint-keys`; PATCH: no solver change).
+
+- `io/FloodA5Keys.jl` (`flooda5_key`, `key_source`): a key such as
+  `FLOODA5_CESIUM_ION_TOKEN` or `FLOODA5_GOOGLE_TILES_KEY` is taken from the
+  environment variable of that name, then from JSON key files: the file
+  named by `FLOODA5_KEYS`, `keys.json` in the repository root, and
+  `~/.flooda5/keys.json` (one per user, shared by every clone and worktree).
+  Template `keys.example.json`; `keys.json` is git-ignored everywhere and
+  never served by the viewers' server. Same on every OS, and unlike a
+  `setx` variable it does not depend on the environment a long-running
+  VS Code was started with.
+- The viewers' server uses it and logs where the Cesium ion token came from
+  (never its value), or that there is none.
+- `test/test_keys.jl` (CI): lookup order, placeholders, a malformed file,
+  the template, the server's `/api/config`, `keys.json` not served and
+  git-ignored.
+
 ## [0.8.4] — 2026-11-25
 
 The globe viewer on a second engine, Giro3D (branch `wpv-giro3d`, on 0.8.3;
