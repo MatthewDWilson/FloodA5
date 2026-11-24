@@ -33,6 +33,64 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-11-24
+
+The web globe viewer, rebuilt (branch `wpv-cesium`; PATCH: no solver change,
+default results unchanged).
+
+- **Globe viewer** (`--vis cesium`; visualisation/cesium/, CesiumJS 1.147,
+  was 1.114): the water is one surface for the whole mesh, each cell flat at
+  its water level (`datum + depth`: the cell elevation, or `sgs_z_min` for
+  SGS), translucent and depth-tested — over Google Photorealistic 3D Tiles,
+  buildings and trees stand out of the flood. A frame is one float-texture
+  upload read by a custom shader (no per-cell entities, no geometry rebuild):
+  the frame-update flash is gone, and a 582,012-cell mesh loads and changes
+  frame in tens of milliseconds in the browser. Colour by depth, water
+  level, speed or wetted fraction; per-frame or fixed range; depth ×
+  exaggeration mode; the mesh's bed as a surface for the flat basemaps;
+  hover read-out; time-based playback; LIVE follows a running simulation.
+  Basemaps: Google Photorealistic 3D, Cesium World Terrain + OSM, OSM,
+  none; no Bing imagery (it was loaded unseen before, against Cesium ion's
+  terms when combined with Google tiles or OSM).
+- **Vertical offset** from model heights (the DEM's datum) to ellipsoidal
+  heights, with an *Estimate* from the basemap's heights: Carlisle (Google
+  tiles) 52.2 m, 10th–50th percentile 52.0–52.6 m over 302 cells; remembered
+  per domain in the browser.
+- **Replay of output files in the globe viewer**:
+  `visualisation/cesium_replay.jl RUN.h5` or `FloodModel.jl --replay RUN.h5
+  --vis cesium` (frames read from the file on demand).
+- **Server** (`visualisation/VisualisationServer.jl`) rewritten on plain
+  HTTP.jl; **Oxygen.jl dropped** from the project. Protocol 2
+  (docs/DATA_FORMATS.md §6): binary mesh, Float32 frames on demand, stable
+  frame ids; a client that connects or reloads after the run learns that it
+  is complete (before, it stayed "live"); the page's port follows
+  `--vis-port` (it was fixed to 8080); requests must be addressed to
+  localhost (DNS-rebinding guard; the ion token is served to the page);
+  static paths are checked.
+- ⚠ **Live frames thinned by wall-clock time** (default one per second,
+  `FLOODA5_VIS_INTERVAL`) within a memory budget (1 GB,
+  `FLOODA5_VIS_BUDGET_MB`; when full, every second frame is dropped). Before,
+  every time step was stored in memory for the whole run (tens of GB on long
+  runs) and, on the GPU backend, the device state was copied to the host
+  every step. The end state is always sent. Diagnostics only: no result
+  changes.
+- With `--vis cesium` the time loop yields once per step: in Julia 1.12 the
+  main task runs on interactive thread 1, the pool the server uses, and
+  requests otherwise waited for the run (measured: 22 s per request on
+  Carlisle; after: 0.09 s; solver speed unchanged, 44.4 steps/s).
+- **A bare `--vis` now opens the GLMakie viewer** (it was the CesiumJS one).
+- `FLOODA5_NO_VIS=1` stubs only GLMakie: the globe viewer works headless.
+  `FLOODA5_VIS_LINGER=S` stops serving S s after a run (scripted runs).
+- Cesium ion token from `FLOODA5_CESIUM_ION_TOKEN` (never in the
+  repository); `visualisation/cesium/config.json` is now git-ignored.
+- Tests: `test/test_vis_server.jl` (protocol, thinning, budget, late
+  clients, shutdown, Host guard, paths), `test/test_vis_live.jl` (a live run
+  followed over the WebSocket against its HDF5 output; replay; bare `--vis`),
+  and the viewer's JavaScript (`cd visualisation/cesium && node --test test/*.test.js`,
+  run by `ci/run_tests.sh`); a shared binary fixture keeps the Julia
+  encoder and the JavaScript decoder in step. `ci/Project.toml` gains HTTP
+  (1.x). Browser check (local): `visualisation/cesium/tools/smoke.mjs`.
+
 ## [0.8.2] — 2026-11-24
 
 DGGS mesh families, Phase C (WP3 part 3, branch `wp3e-mesh-notebook`; PATCH:

@@ -44,31 +44,22 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.8.2"
+const FLOODA5_VERSION = "0.8.3"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
 if !isdefined(Main, :A5Grid)
     include(joinpath(@__DIR__, "mesh", "A5Grid.jl"))
 end
-# FLOODA5_NO_VIS=1 (WP0, 2026-10): skip loading the visualisation stack
-# (GLMakie, Oxygen/HTTP) and define no-op stubs instead. Used by CI and by
-# headless / AI-assisted test runs: GLMakie needs an OpenGL context and adds
-# a large load-time cost that no simulation or unit test needs. Any attempt
-# to actually start a visualiser with the stubs raises a clear error.
-# The stubs mirror the ones test/test_edge_geometry.jl already hand-defines.
+# FLOODA5_NO_VIS=1 (WP0, 2026-10): skip loading GLMakie and define no-op
+# stubs instead. Used by CI and by headless / AI-assisted test runs: GLMakie
+# needs an OpenGL context and adds a large load-time cost that no simulation
+# or unit test needs. Any attempt to start the Makie viewer with the stubs
+# raises a clear error. The web viewer's server (VisualisationServer, plain
+# HTTP.jl since 0.8.3) is light and always loaded, so `--vis cesium` works
+# headless too. Test harnesses may predefine either module (see
+# test/test_edge_geometry.jl).
 if get(ENV, "FLOODA5_NO_VIS", "") == "1"
-    if !isdefined(Main, :VisualisationServer)
-        @eval module VisualisationServer
-            struct VisServer end
-            start(args...; kwargs...) =
-                error("Visualisation is disabled (FLOODA5_NO_VIS=1). Unset it to use --vis cesium.")
-            stop(_)              = nothing
-            push_frame!(args...) = nothing
-            set_mesh!(args...)   = nothing
-            notify_complete!(_)  = nothing
-        end
-    end
     if !isdefined(Main, :MakieVisualiser)
         @eval module MakieVisualiser
             start(args...; kwargs...) =
@@ -3555,6 +3546,31 @@ function _find_nearest_cell(mesh::A5Mesh, lon::Float64, lat::Float64)
     return best_i, mesh.cells[best_i].id, dist_m
 end
 
+# ---------------------------------------------------------------------------
+# Web globe viewer (--vis cesium; visualisation/VisualisationServer.jl)
+# ---------------------------------------------------------------------------
+
+"""
+    _web_vis_mesh(mesh, flow_method) → VisualisationServer.MeshPayload
+
+The mesh for the web viewer, in the mesh's (simulation) cell order, with the
+depth datum of `flow_method` (water level = datum + depth).
+"""
+function _web_vis_mesh(mesh::A5Mesh, flow_method::Symbol)
+    elev = Float64.(get(mesh.static_vars, "elevation", [c.elevation for c in mesh.cells]))
+    return VisualisationServer.encode_mesh(
+        [c.boundary for c in mesh.cells], [c.id for c in mesh.cells], elev,
+        VisualisationServer.depth_datum(flow_method, elev, mesh.static_vars);
+        lon = [c.center_lon for c in mesh.cells], lat = [c.center_lat for c in mesh.cells])
+end
+
+"Frame variables for the web viewer: names as in the output file, simulation cell order."
+_web_vis_frame(state::FlowState) = Dict("water_depth" => state.water_depth,
+                                        "velocity"    => state.velocity,
+                                        "vel_u"       => state.vel_u,
+                                        "vel_v"       => state.vel_v,
+                                        "saturation"  => saturation_fraction(state))
+
 """
     run_simulation!(state, mesh, sim_duration, dt_max, vis, vis_mode, output,
                     method, rainfall_rate, all_sources, default_bc_type)
@@ -3728,26 +3744,31 @@ function run_simulation!(state            :: FlowState,
         step == 5 && timing !== nothing && (dev !== nothing && synchronize!(dev.be);
                                             timing.first_steps = time() - t_wall0)
         LIMITER_STATS[] && _lstats_step!(t)                 # D1b (--limiter-stats)
+        # Visualiser frame due? The web viewer thins frames by wall-clock time
+        # (0.8.3), so its copies and the device sync happen only for frames
+        # it keeps. (Velocities are diagnostics: computing them less often
+        # changes no result.)
+        vis_due = vis !== nothing &&
+            (vis_mode === :cesium ? VisualisationServer.wants_frame(vis) : step % VIS_INTERVAL == 0)
+
         # WP5: bring the host state up to date where it is read below
-        dev !== nothing && ((vis !== nothing && step % VIS_INTERVAL == 0) ||
-                            _should_write_frame(output, t) || step % 50 == 0) &&
+        dev !== nothing && (vis_due || _should_write_frame(output, t) || step % 50 == 0) &&
             _device_sync!(dev, state)
 
         # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
-        ((vis !== nothing && step % VIS_INTERVAL == 0) || _should_write_frame(output, t)) &&
+        (vis_due || _should_write_frame(output, t)) &&
             (use_swe ? _swe_velocity!(state) : _compute_velocity!(state))
 
         # Visualiser push
-        if vis !== nothing && step % VIS_INTERVAL == 0
-            sat = saturation_fraction(state)
+        # The web viewer's server runs on the interactive thread pool, and in
+        # Julia 1.12 this (main) task runs on interactive thread 1: yield once
+        # per step so that its requests are served between steps.
+        vis_mode === :cesium && yield()
+        if vis_due
             if vis_mode === :cesium
-                VisualisationServer.push_frame!(vis, t, Dict(
-                    "depth"      => Float32.(state.water_depth),
-                    "saturation" => Float32.(sat),
-                    "volume"     => Float32.(state.volume),
-                    "velocity"   => Float32.(state.velocity),
-                ))
+                VisualisationServer.push_frame!(vis, t, _web_vis_frame(state))
             elseif vis_mode === :makie
+                sat = saturation_fraction(state)
                 _vis_vol_added = total_cumulative_input(merged_sources,
                                                          rainfall_rate,
                                                          state.cell_area, t)
@@ -3818,6 +3839,12 @@ function run_simulation!(state            :: FlowState,
     end
     output.enabled &&
         @info "HDF5 output: $(output.frame_count) frames → $(output.path)"
+
+    # The web viewer thins frames by wall-clock time: always give it the end state
+    if vis !== nothing && vis_mode === :cesium
+        use_swe ? _swe_velocity!(state) : _compute_velocity!(state)
+        VisualisationServer.push_frame!(vis, t, _web_vis_frame(state))
+    end
 
     # Record step count for the timing summary
     timing !== nothing && (timing.n_steps = step)
@@ -4176,16 +4203,21 @@ function run_flood_model(;
     tl = TimingLog()
     t_total = time()
 
-    # 1. Start Cesium server early
+    # 1. Start the web viewer's server early (docs/USER_GUIDE.md §6.2)
     vis      = if vis_mode === :cesium
         VisualisationServer.start(port = vis_port,
-                                  viz_dir = joinpath(@__DIR__, "visualisation", "cesium"))
+                                  viz_dir = joinpath(@__DIR__, "visualisation", "cesium"),
+                                  info = Dict("label" => output_path === nothing ? "live run" :
+                                                         basename(output_path),
+                                              "flow_model" => string(flow_method),
+                                              "sim_duration" => sim_duration,
+                                              "flooda5_version" => FLOODA5_VERSION))
     else
         nothing
     end
     sgs_diag = nothing   # SGS hypsometric diagnostic window; assigned later if applicable
     vis_mode === :cesium &&
-        @info "Cesium viewer: open http://localhost:$vis_port in your browser"
+        @info "Globe viewer: open http://localhost:$vis_port in your browser"
 
     # 2. Acquire mesh
     mesh = if mesh_source[1] === :generate
@@ -4407,13 +4439,15 @@ function run_flood_model(;
         @info "Cells in spatial (Morton) order for the simulation; output in file order"
     end
 
-    # 6. Hand mesh to Cesium visualiser.
+    # 6. Hand the mesh (in simulation order) to the web viewer.
     # Makie is deferred to step 7b so source cell indices can be highlighted.
     if vis_mode === :cesium
-        @info "Pushing mesh to Cesium server ($(length(mesh)) cells)..."
-        VisualisationServer.set_mesh!(vis, mesh_to_geojson_string(mesh),
-                                    [c.id for c in mesh.cells])
-        @info "Mesh pushed — viewer ready"
+        try
+            VisualisationServer.set_mesh!(vis, _web_vis_mesh(mesh, flow_method))
+            @info "Globe viewer: mesh ready ($(length(mesh)) cells)"
+        catch e   # the viewer must never stop a run
+            @warn "Globe viewer: cannot encode the mesh; the run continues without it" exception = e
+        end
     end
 
     # 7. Initialise flow model
@@ -4713,10 +4747,20 @@ function run_flood_model(;
         t0_vis = time()
         try
             if vis_mode === :cesium
-                @info "Simulation complete. Cesium viewer at http://localhost:$vis_port"
-                @info "Press Ctrl-C to stop."
-                while !istaskdone(vis.task)
-                    sleep(1)
+                # FLOODA5_VIS_LINGER=S: keep serving S seconds, then stop
+                # (scripted runs, tests); otherwise until Ctrl-C.
+                linger = tryparse(Float64, get(ENV, "FLOODA5_VIS_LINGER", ""))
+                @info "Simulation complete. Globe viewer at http://localhost:$vis_port"
+                if linger === nothing
+                    @info "Press Ctrl-C to stop."
+                    while !istaskdone(vis.task)
+                        sleep(1)
+                    end
+                else
+                    t_end = time() + linger
+                    while !istaskdone(vis.task) && time() < t_end
+                        sleep(0.1)
+                    end
                 end
             elseif vis_mode === :makie
                 @info "Simulation complete. Close the Makie window or press Ctrl-C."
@@ -5168,8 +5212,11 @@ Boundary condition options:
 Visualisation options:
   --vis [MODE]       Enable visualisation (off by default).
                      Available modes: $modes_str
-                     Omitting MODE defaults to 'cesium'.
-  --vis-port PORT    Port for the Cesium HTTP server (default: 8080).
+                     Omitting MODE gives 'makie' (the GLMakie window).
+                     'cesium': the web globe viewer (CesiumJS) at
+                     http://localhost:PORT, with Google 3D tiles when
+                     FLOODA5_CESIUM_ION_TOKEN is set (docs/USER_GUIDE.md §6.2).
+  --vis-port PORT    Port for the globe viewer's server (default: 8080).
 
 Output options:
   --output FILE      Write HDF5 simulation output (default: off). The file
@@ -5194,6 +5241,8 @@ Output options:
                      volume|velocity|ring, --from T, --paused, --png OUT.png,
                      --mesh FILE.parquet (format-1 files only). Same as
                      visualisation/replay.jl FILE.h5 [options].
+                     With --vis cesium [--vis-port P]: in the web globe
+                     viewer instead (visualisation/cesium_replay.jl).
 
 Examples:
   # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation
@@ -5468,6 +5517,18 @@ function main(args=String[])
     # handled before any other flag and never reaches a run record.
     rp = findfirst(==("--replay"), args)
     if rp !== nothing
+        # --replay FILE.h5 --vis cesium [--vis-port P]: the web globe viewer
+        vi = findfirst(==("--vis"), args)
+        if vi !== nothing && get(args, vi + 1, "") == "cesium"
+            isdefined(Main, :cesium_replay_main) ||
+                Base.include(Main, joinpath(@__DIR__, "visualisation", "cesium_replay.jl"))
+            rest = String.(deleteat!(copy(args), sort([rp, vi, vi + 1])))
+            return Base.invokelatest(Main.cesium_replay_main, rest)
+        end
+        vi === nothing || get(args, vi + 1, "") == "makie" ||
+            error("--replay: --vis must be makie (default) or cesium")
+        vi === nothing || (args = deleteat!(copy(args), [vi, vi + 1]))
+        rp = findfirst(==("--replay"), args)
         isdefined(MakieVisualiser, :replay) ||
             error("--replay needs the GLMakie viewer: unset FLOODA5_NO_VIS")
         isdefined(Main, :replay_main) ||
@@ -5506,7 +5567,7 @@ function main(args=String[])
             vis_mode = Symbol(next)
             deleteat!(args, [vis_idx, vis_idx + 1])
         else
-            vis_mode = :cesium
+            vis_mode = :makie        # bare --vis (0.8.3: was cesium)
             deleteat!(args, vis_idx)
         end
     end

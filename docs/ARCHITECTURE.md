@@ -299,11 +299,12 @@ Scripts and one static directory:
 | `MakieVisualiser.jl` | GLMakie native desktop window. Module `MakieVisualiser`: `start`/`push_frame!` (live, `--vis makie`) and `replay` (an output file, same window plus frame and speed sliders). |
 | `replay_data.jl` | Module `FloodA5Replay`: the Makie-free half of replay (below). |
 | `replay.jl` | Replay command line (`replay.jl RUN.h5`, also `FloodModel.jl --replay`). |
-| `VisualisationServer.jl` | Oxygen.jl HTTP + WebSocket server. Module `VisualisationServer`. |
+| `VisualisationServer.jl` | Server for the globe viewer (plain HTTP.jl, protocol 2: DATA_FORMATS.md §6). Module `VisualisationServer`: `start`, `set_mesh!`, `wants_frame`/`push_frame!` (live; frames thinned by wall-clock time within a memory budget), `set_replay!` (frames read on demand), `notify_complete!`, `stop`. Runs on the interactive thread pool; the time loop yields once per step with `--vis cesium` (in Julia 1.12 the main task is on interactive thread 1). Always loaded (light), also under `FLOODA5_NO_VIS=1`. |
+| `cesium_replay.jl` | Replay an output file in the globe viewer (`cesium_replay.jl RUN.h5`, also `FloodModel.jl --replay RUN.h5 --vis cesium`). |
 | `view_h5_output.jl` | Standalone post-processing viewer for HDF5 output (map, cell time series, `--animate` PNG frames). |
 | `FloodViewer.jl` | Simpler standalone GLMakie viewer for HDF5 output. |
 | `visualise_mesh.jl` | Publication-quality mesh and SGS figures (wire-frame, cross-section, hypsometric curve). |
-| `cesium/` | CesiumJS static files (`index.html`, `config.example.json`). |
+| `cesium/` | Globe viewer (CesiumJS 1.147, loaded at run time; no build step). `js/protocol.js`, `js/geometry.js`, `js/colormaps.js`: pure modules, unit-tested with `node --test` (`cesium/test/`). `js/water.js`: the water and bed surfaces — one glTF model per surface built in the browser, each cell on its own vertices; per-cell values in float textures read by a custom shader that moves vertices along the ellipsoid normal (no geometry rebuild per frame). `js/main.js`: the app. `tools/smoke.mjs`: headless-browser check (local, not CI). |
 
 **Replay (`replay_data.jl` + `MakieVisualiser.replay`).** `FloodA5Replay`
 (pure Julia, on `analysis/` `FA`) opens an output file: a mesh adaptor with
@@ -565,20 +566,20 @@ correction can be added without touching the others:
 
 1. Add the variable to `FlowState` and compute it in the step function.
 2. Add the dataset to `_write_frame!` in `FloodModel.jl`.
-3. Add the variable to `VAR_DEFS` in `visualisation/cesium/index.html`:
+3. For the globe viewer: add it to `_web_vis_frame` (FloodModel.jl, live) and
+   `_CESIUM_REPLAY_VARS` (`visualisation/cesium_replay.jl`), and an entry in
+   `VARS` in `visualisation/cesium/js/main.js` (label, unit, colour map; the
+   surface is coloured by the variable's values through `COLOR_MODE.texture`):
 
 ```javascript
-const VAR_DEFS = {
-    depth:      { colormap: "turbo",  fixedMax: null },
-    saturation: { colormap: "blues",  fixedMax: 1.0  },
-    // add new variable here
-    myvar:      { colormap: "plasma", fixedMax: null },
+const VARS = {
+  // …
+  myvar: { label: 'My variable', unit: 'm', source: 'myvar', cmode: COLOR_MODE.texture,
+           colormap: 'viridis', fixed: null },
 };
 ```
 
-Unknown variables sent by the server are handled by a fallback in the CesiumJS
-viewer, so new variables will appear in the dropdown automatically. Explicit
-entries in `VAR_DEFS` allow you to set a specific colormap and fixed maximum.
+The viewer offers only the variables the server reports (`/api/info` `vars`).
 
 ---
 

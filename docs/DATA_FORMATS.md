@@ -463,75 +463,89 @@ AOIs are not currently supported.
 
 ---
 
-## 6. CesiumJS Binary Wire Protocol
+## 6. Web viewer protocol (version 2, since 0.8.3)
 
-The visualisation server serves the CesiumJS viewer via HTTP and WebSocket. The
-key design principle is **one variable fetched at a time** — only the actively
-displayed variable crosses the wire, scaling to 1M+ cells.
+`visualisation/VisualisationServer.jl` serves the globe viewer
+(`visualisation/cesium/`) over HTTP and a WebSocket, for a running simulation
+(`--vis cesium`) or a recorded one (`visualisation/cesium_replay.jl`). The
+protocol does not depend on the rendering engine: a binary mesh once, then one
+variable of one frame at a time, as raw Float32, on demand. The server listens
+on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
+`127.0.0.1` or `[::1]` (403). Version 1 (GeoJSON mesh, `/frames/count`, …,
+≤ 0.8.2) is gone.
 
 ### HTTP endpoints
 
 | Endpoint | Response | Description |
 |---|---|---|
-| `GET /viz/{file}` | `text/html` / JSON | Static files: `index.html`, `config.json` |
-| `GET /mesh` | JSON | GeoJSON FeatureCollection + `cell_order` array |
-| `GET /frames/count` | JSON | `{count: N, vars: [...]}` |
-| `GET /frames/{idx}` | JSON | `{t: 123.0, vars: [...]}` — metadata only |
-| `GET /frames/{idx}/{varname}` | `application/octet-stream` | Raw Float32 LE array, n_cells × 4 bytes |
-| `GET /status` | JSON | Server diagnostics |
+| `GET /` | 302 | → `/viz/index.html` |
+| `GET /viz/{path}` | file | Viewer files (`..`, hidden files and `config.json` refused) |
+| `GET /api/config` | JSON | `{protocol, cesium_url, ion_token, google_key, …}` — §7 |
+| `GET /api/info` | JSON | `{protocol, mode: "live"\|"replay", complete, frames, vars, mesh_ready, n_cells, label, flow_model, …}` |
+| `GET /api/mesh` | binary | The mesh (below); 204 until it is set |
+| `GET /api/frames` | JSON | `{complete, frames: [{id, t}, …]}` in time order |
+| `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
+| `GET /api/cell/{i}?frame={id}` | JSON | Cell `i` (0-based): `{id, lon, lat, elevation, base, values: {var: v}}` |
+| `WS /api/live` | JSON messages | Notifications (below) |
 
-### Binary frame format
+Frame variables use the output file's names: `water_depth`, `velocity`,
+`vel_u`, `vel_v`, `saturation` (a replay serves those present in the file).
+Water level = `base + water_depth`. Frame ids are stable; live frames thinned
+by the memory budget disappear from `/api/frames` (a `reindex` message says
+so). Non-finite values in JSON are `null`.
 
-`GET /frames/{idx}/{varname}` returns a raw binary body:
+### Binary mesh (`/api/mesh`)
 
-- Encoding: little-endian `float32`
-- Length: exactly `n_cells × 4` bytes
-- Ordering: matches the `cell_order` array from `/mesh` — index `i` in the Float32
-  array corresponds to the cell at `cell_order[i]`
+Little-endian; every section 4-byte aligned.
 
-**JavaScript (receive):**
-```javascript
-const resp = await fetch(`/frames/${idx}/depth`);
-const buf  = await resp.arrayBuffer();
-const vals = new Float32Array(buf);   // vals[i] = depth of cell_order[i]
-```
+| Offset | Type | Content |
+|---|---|---|
+| 0 | 4 bytes | `"FA5M"` |
+| 4 | UInt32 | version (1) |
+| 8 | UInt32 | `n_cells` |
+| 12 | UInt32 | `n_vertices` (ring vertices; the closing repeat is dropped) |
+| 16 | Float64 | `origin_lon` (degrees; bounding-box centre) |
+| 24 | Float64 | `origin_lat` |
+| 32 | UInt32 × (n_cells+1) | `offsets`: cell i has vertices `offsets[i] … offsets[i+1]-1` |
+| … | Float32 × n_vertices | `dlon` = vertex lon − origin_lon (degrees) |
+| … | Float32 × n_vertices | `dlat` = vertex lat − origin_lat |
+| … | Float32 × n_cells | `elevation` (m; NaN where unknown) |
+| … | Float32 × n_cells | `base`: depth datum (m) — `sgs_z_min` for SGS runs, else the elevation |
+
+Cell order: a live run's simulation order (the frames use the same order);
+a replay's file order. The fixture `visualisation/cesium/test/fixtures/mesh_small.bin`
+is written by `test/test_vis_server.jl` (`FLOODA5_UPDATE_FIXTURES=1`) and decoded
+by the JavaScript tests, so both sides follow this table.
 
 ### WebSocket messages
 
-The WebSocket endpoint (`WS /live`) pushes notifications from the server.
-
-| `type` field | Payload | Sent when |
+| `type` | Payload | Sent |
 |---|---|---|
-| `"mesh"` | `{type, data: GeoJSON, cell_order: [...]}` | On connect |
-| `"framecount"` | `{type, count: N, vars: [...]}` | On connect (after mesh) |
-| `"newframe"` | `{type, idx: N, t: 123.0, vars: [...]}` | Each new frame |
-| `"simcomplete"` | `{type, frames: N}` | Simulation end |
+| `hello` | `{protocol, mode, complete, frames, mesh_ready}` | First, on connect (a client that connects after the run ended learns it here) |
+| `mesh` | `{n_cells}` | The mesh was set or replaced |
+| `frame` | `{id, t, frames}` | A live frame was stored |
+| `reindex` | — | The frame list changed other than by appending: re-read `/api/frames` |
+| `complete` | `{frames}` | The run ended (no more frames) |
 
-`newframe` carries only metadata — the client fetches binary data on demand based
-on the currently displayed variable.
+Messages carry no data: the client fetches what it displays.
 
 ---
 
-## 7. Cesium Viewer Configuration
+## 7. Web viewer configuration
 
-```json
-{
-  "cesium_ion_token": "YOUR_TOKEN_FROM_ion.cesium.com",
-  "home_lon": 0.0,
-  "home_lat": 0.0,
-  "home_alt": 25000,
-  "default_basemap": "google3d"
-}
-```
+`GET /api/config` merges, in order: `visualisation/cesium/config.json`
+(optional, git-ignored; template `config.example.json`), the server's own
+settings (e.g. `cesium_replay.jl --offset`), then the environment.
 
-| Key | Default | Description |
-|---|---|---|
-| `cesium_ion_token` | `""` | Cesium Ion token for Google 3D Photorealistic Tiles. Falls back to OSM if absent. |
-| `home_lon` | 0.0 | Camera home longitude |
-| `home_lat` | 0.0 | Camera home latitude |
-| `home_alt` | 25000 | Camera home altitude (metres) |
-| `default_basemap` | `"google3d"` | `"google3d"` / `"osm"` / `"none"` |
+| Key | Environment | Default | Description |
+|---|---|---|---|
+| `ion_token` (`cesium_ion_token` in config.json) | `FLOODA5_CESIUM_ION_TOKEN` | `""` | Cesium ion token: Google Photorealistic 3D Tiles, Cesium World Terrain |
+| `google_key` | `FLOODA5_GOOGLE_TILES_KEY` | `""` | Google Map Tiles API key (the other route to the Google tiles) |
+| `cesium_url` | `FLOODA5_CESIUM_URL` | the CesiumJS 1.147 release on cesium.com | Base URL of a CesiumJS build (`…/Build/Cesium/`; a local copy for offline use) |
+| `default_basemap` | — | `google3d` with a token, else `osm` | `google3d` / `terrain` / `osm` / `none` (the page's `?basemap=` overrides) |
+| `vertical_offset` | — | 0 | Default offset (m) from model heights to ellipsoidal heights; the viewer remembers its own per domain |
 
-Copy `visualisation/cesium/config.example.json` to `visualisation/cesium/config.json`
-and add `config.json` to `.gitignore`. The viewer validates the token at startup and
-falls back gracefully if it is missing.
+Server tuning (environment only): `FLOODA5_VIS_INTERVAL` (s of wall-clock
+time between kept live frames, default 1), `FLOODA5_VIS_BUDGET_MB` (memory
+for live frames, default 1024), `FLOODA5_VIS_LINGER` (stop serving this many
+seconds after a run instead of waiting for Ctrl-C).

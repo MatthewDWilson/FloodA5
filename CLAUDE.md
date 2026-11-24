@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-24): 0.8.2 — the default engine is
+(`VERSIONING.md`). Status (2026-11-24): 0.8.3 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -35,7 +35,10 @@ formulations on it are to be pluggable. 0.8.1: DGGS mesh families
 benchmarks on eleven mesh families (`docs/TEST_CASES.md` §8). 0.8.2:
 notebook 06 (mesh families; §8 = the SGS checkerboard per mesh — re-run it
 with `RERUN_SGS = true` after SGS changes: SGS checkerboards on Cartesian
-too, smooth only on A5, ISEA3H, jittered Voronoi).
+too, smooth only on A5, ISEA3H, jittered Voronoi). 0.8.3: the web globe
+viewer rebuilt (`--vis cesium`, `visualisation/cesium_replay.jl`; USER_GUIDE
+§6.2, DATA_FORMATS §6; Oxygen dropped, server on HTTP.jl; a bare `--vis` is
+Makie). Next for it: a Giro3D version for comparison.
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
 (§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.14 SGS). SGS meshes
@@ -47,7 +50,9 @@ without `_orient_collinear!`-style signs.
 - Always run from the repo root with `--project=.` (full stack) or
   `--project=ci` (minimal headless stack, fast to load).
 - Set `FLOODA5_NO_VIS=1` for anything that doesn't need a visualiser — it
-  stubs GLMakie/Oxygen and cuts load time substantially.
+  stubs GLMakie and cuts load time substantially. The globe viewer's server
+  (`--vis cesium`, plain HTTP.jl) still works; viewer JS tests: `cd visualisation/cesium && node
+  --test test/*.test.js`, browser check: `visualisation/cesium/tools/smoke.mjs`.
 - Unit/regression suite (same as CI):
   `bash ci/run_tests.sh .`  (Git Bash) — or run single files:
   `julia --project=. test/test_wp0_regressions.jl`
