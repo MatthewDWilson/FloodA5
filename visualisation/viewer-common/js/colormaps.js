@@ -5,8 +5,9 @@
 const MAPS = {
   // water depth: pale cyan → deep blue
   depth: [[0, 198, 235, 255], [0.25, 110, 190, 240], [0.5, 40, 130, 220], [0.75, 20, 70, 170], [1, 10, 25, 100]],
-  // sediment-laden water: light brown → dark brown
-  sediment: [[0, 236, 218, 180], [0.25, 214, 184, 132], [0.5, 184, 143, 88], [0.75, 143, 101, 55], [1, 96, 62, 30]],
+  // brown flood water: a narrow range around the colour of open brown floodwater in
+  // aerial photographs (≈ rgb(112, 100, 92)), lighter where shallow
+  brown: [[0, 152, 138, 120], [0.5, 114, 101, 90], [1, 80, 68, 60]],
   // perceptually uniform, readable with colour-vision deficiencies
   cividis: [[0, 0, 34, 78], [0.25, 61, 78, 110], [0.5, 124, 123, 120], [0.75, 188, 175, 111], [1, 255, 234, 70]],
   // perceptually uniform, for water level / general use
@@ -28,7 +29,7 @@ export const COLORMAP_NAMES = Object.keys(MAPS);
 
 /** Names shown in the palette menu. */
 export const COLORMAP_LABELS = {
-  depth: 'Water (blue)', sediment: 'Sediment (brown)', viridis: 'Viridis', cividis: 'Cividis',
+  depth: 'Water (blue)', brown: 'Brown flood water', viridis: 'Viridis', cividis: 'Cividis',
   magma: 'Magma', turbo: 'Turbo', blues: 'Blues', greys: 'Greys', terrain: 'Terrain',
 };
 

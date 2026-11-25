@@ -17,9 +17,12 @@ test('colour maps', () => {
   assert.deepEqual(colorAt('nonesuch', 0), colorAt('viridis', 0));
 });
 
-test('palette menu: every map has a label; sediment runs light to dark brown', () => {
+test('palette menu: every map has a label; brown flood water is a narrow brown range', () => {
   for (const name of COLORMAP_NAMES) assert.ok(COLORMAP_LABELS[name], name);
-  const [r0, g0, b0] = colorAt('sediment', 0), [r1, g1, b1] = colorAt('sediment', 1);
+  const [r0, g0, b0] = colorAt('brown', 0), [r1, g1, b1] = colorAt('brown', 1);
   assert.ok(r0 > g0 && g0 > b0 && r1 > g1 && g1 > b1);          // brown hues
-  assert.ok(r0 + g0 + b0 > 2 * (r1 + g1 + b1));                  // light → dark
+  assert.ok(r0 + g0 + b0 > 1.5 * (r1 + g1 + b1));                // light → dark …
+  assert.ok(r0 + g0 + b0 < 2.5 * (r1 + g1 + b1));                // … but narrow
+  const mid = colorAt('brown', 0.5);                            // the photographs' water
+  [112, 100, 92].forEach((c, k) => assert.ok(Math.abs(mid[k] - c) <= 6, `mid ${mid}`));
 });

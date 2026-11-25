@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.8.6"
+const FLOODA5_VERSION = "0.8.7"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -3917,6 +3917,30 @@ function _run_mesh_source(mesh_source::Tuple, mesh_file, mesh_modified::Bool,
 end
 
 """
+    _vis_run_record(run, inputs, mesh, mesh_path, state, output_path) → Dict
+
+What the web viewer's *Run* tab shows for a run in progress (`/api/run`):
+`FO.run_record` of the record the output file gets, with the inputs listed
+(paths and sizes; the checksums are computed only for the output file) and
+the mesh's metadata, cell count and area range. `mesh` is the mesh the run
+uses; `mesh_path` its GeoParquet file, if it has one (`_run_mesh_source`).
+"""
+function _vis_run_record(run::AbstractDict, inputs, mesh, mesh_path, state, output_path)
+    info = Dict{String,Any}(run)
+    info["flooda5_version"] = FLOODA5_VERSION
+    info["inputs"] = [Dict{String,Any}("role" => i.role, "flag" => i.flag, "argv_value" => i.argv_value,
+                                       "original_path" => abspath(i.path),
+                                       "size" => isfile(i.path) ? filesize(i.path) : -1)
+                      for i in inputs]
+    mesh_path isa AbstractString && isfile(mesh_path) &&
+        (info["mesh_source"] = Dict{String,Any}("original_path" => abspath(mesh_path)))
+    output_path === nothing || (info["output"] = abspath(output_path))
+    m = Dict{String,Any}(mesh.meta)
+    m["id_scheme"] = mesh.id_scheme
+    return FO.run_record(info; mesh = m, n_cells = length(mesh.cells), cell_area = state.cell_area)
+end
+
+"""
     _run_inputs(friction, inflow_specs, bci, bdy, bc_file) → Vector{NamedTuple}
 
 The input files a run read (other than the mesh and DEM, which the embedded
@@ -4652,7 +4676,8 @@ function run_flood_model(;
         enabled  = output_path !== nothing,
         perm     = cell_perm,
     )
-    if sim_output.enabled
+    # (the web viewer shows the same record: its Run tab, /api/run)
+    if sim_output.enabled || vis !== nothing
         # 0.4.0: everything needed to reproduce the run goes into the file
         options = Dict{String,Any}(
             "flow_model" => flow_method, "scheme" => scheme,
@@ -4688,12 +4713,19 @@ function run_flood_model(;
             "threads" => Threads.nthreads(),
             "cell_order" => string(cell_order), "flow_model" => string(flow_method),
             "started_utc" => FO._nowutc()))
-        _write_mesh_metadata!(sim_output, mesh_file;
+        run_inputs = _run_inputs(friction_source, inflow_specs, inflow_bci_path,
+                                 inflow_bdy_path, bc_file_path)
+        sim_output.enabled && _write_mesh_metadata!(sim_output, mesh_file;
             state       = flow_state,
             run         = run,
-            inputs      = _run_inputs(friction_source, inflow_specs, inflow_bci_path,
-                                      inflow_bdy_path, bc_file_path),
+            inputs      = run_inputs,
             mesh_source = _run_mesh_source(mesh_source, mesh_file, mesh_modified, embed_mesh))
+        if vis !== nothing
+            mesh_path = (mesh_source[1] === :load && !mesh_modified) ? mesh_source[2] :
+                        _mesh_save_path(mesh_source)
+            VisualisationServer.set_run!(vis, _vis_run_record(run, run_inputs, mesh_file, mesh_path,
+                                                              flow_state, output_path))
+        end
     end
 
     # 9. Simulation loop

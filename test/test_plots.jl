@@ -237,3 +237,26 @@ end
     @test FP.run_styles([cli]; style = :series)[1].color == FP.SERIES[1]
     @test_throws ErrorException FP.run_styles(fill(a5li, 9); style = :series)
 end
+
+@testset "P9 — captions (run and variable, from FO.run_record and io/variables.toml)" begin
+    @test FP.CAPTIONS[] == true
+    info = Dict{String,Any}("flooda5_version" => "0.8.7", "git_commit" => "0123456789abcdef", "git_dirty" => true)
+    r = fake_run(label = "carlisle_a5.h5", flow_model = "swe", info = info)
+    @test FP.run_caption(r) == "carlisle_a5 · SWE · A5 mesh, 16 cells, mean 100 m² · FloodA5 0.8.7 (0123456, modified)"
+    c = fake_run(scheme = "cartesian", flow_model = "", info = Dict{String,Any}())
+    @test FP.run_caption(c) == "fake · Cartesian mesh, 16 cells, mean 100 m²"
+    big = fake_run(n = 40)
+    @test occursin("1,600 cells", FP.run_caption(big))
+    @test startswith(FP.variable_caption(:depth), "Depth (m): Depth of water in the cell")
+    @test startswith(FP.variable_caption(:speed), "Speed (m/s): Magnitude")
+    @test startswith(FP.variable_caption(:wse), "Water surface (m): Elevation of the water surface")
+    @test FP.variable_caption(:volume) == "" && FP.variable_caption([1.0, 2.0]) == ""
+    fc = FP.figure_caption([r, c], :depth)
+    @test count(==('\n'), fc) == 2 && endswith(fc, FP.variable_caption(:depth))
+    @test FP.figure_caption(r) == FP.run_caption(r)
+    @test FP.wrap_text("aa bb cc dd", 5) == "aa bb\ncc dd"
+    @test FP.wrap_text("averylongword x", 4) == "averylongword\nx"
+    @test FP.wrap_text("", 10) == ""
+    w = FP.figure_caption([r, c], :depth; width = 50)
+    @test all(l -> length(l) <= 50, split(w, '\n')) && replace(w, '\n' => ' ') == replace(fc, '\n' => ' ')
+end

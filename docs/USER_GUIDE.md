@@ -538,7 +538,10 @@ depth-tested, so the photorealistic tiles (or terrain) hide it where the
 ground or a building is higher — wet cells partly under buildings show as
 water between them. *Depth × exaggeration* draws `bed + depth × N` instead
 (for flat basemaps). *Bed surface* draws the mesh elevations, coloured by
-height: the default on the flat basemaps, where there is no terrain.
+height: the default on the flat basemaps, where there is no terrain. It has
+its own colours: click its colour bar for a palette (default *terrain*),
+a range (*auto*: 1st–99th percentiles of the bed elevations, or *fixed*)
+and an opacity (below 1 the bed is translucent).
 *Cell borders* draws each cell's outline as a white hairline (off by
 default; faded out where cells are smaller than about 8 pixels). Hover over
 a cell for its depth, level, bed and id.
@@ -554,9 +557,18 @@ fraction. The range is, by default, fixed for the whole run: the 2nd to
 98th percentiles over the wet cells of up to 24 frames spread over the run
 (the server's `/api/ranges`; a live run's are updated as it goes). *frame*
 uses the 1st–99th percentiles of the frame shown, *fixed* your own limits.
-Click the colour bar to choose a palette: water (blue), sediment (light to
-dark brown, for sediment-laden water), viridis, cividis, magma, turbo, blues,
-greys. The choice is remembered per variable in the browser.
+Click the colour bar to choose a palette: water (blue), brown flood water
+(a narrow range around the colour of open brown floodwater in aerial
+photographs), viridis, cividis, magma, turbo, blues, greys. The choice is
+remembered per variable in the browser.
+
+**Run and About.** The panel's *Run* tab shows what the run records: the
+FloodA5 version and commit, flow model, backend, the command line (*copy*
+puts it on the clipboard), the mesh, frames, input files, all options and
+the end-of-run summary (a replay: from the file; a live run: the record its
+output file gets). *About* describes each variable and the colour range,
+vertical offset, wet threshold and depth bias. The descriptions are in
+`io/variables.toml`, which the static figures' captions (§6.5) also use.
 
 **Vertical offset.** Model heights are in the DEM's datum (usually mean sea
 level: a geoid); Google tiles and Cesium World Terrain use heights above the
@@ -719,6 +731,12 @@ FP.cellmap(li.mesh; outline = true, cells = FP.cells_within(li, -2.912, 54.898, 
 - Line plots style runs by mesh and solver when that identifies them (A5
   blue, Cartesian orange; local-inertial solid, SWE dashed, SGS dotted),
   otherwise by series colour (`style = :series`).
+- Captions (since 0.8.7): under each figure, one line per run (label, flow
+  model, mesh, FloodA5 version and commit, from the file's run record) and
+  the variable's definition (`io/variables.toml`, as the globe viewers'
+  *About* tab). `caption = false` leaves them out of one figure (for
+  export or publication); `FP.CAPTIONS[] = false` everywhere.
+  `FP.figure_caption(runs, var)` gives the text alone.
 - Speed: ~1 s per Carlisle-size map (30k cells) after the first call
   (~20 s of compilation); ~6 s for 5 × 10⁵ cells.
 

@@ -28,6 +28,7 @@ import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile } fr
 import { cssGradient, COLORMAP_NAMES, COLORMAP_LABELS } from './colormaps.js';
 import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
+import { renderRun, renderAbout, shellLine } from './info.js';
 
 // source: the frame variable read; stat: its name in /api/ranges; colormap: the default palette
 const VARS = {
@@ -37,8 +38,10 @@ const VARS = {
   saturation: { label: 'Wetted fraction', unit: '',    source: 'saturation',  stat: 'saturation',  cmode: COLOR_MODE.texture, colormap: 'blues',   fixed: [0, 1] },
 };
 
-/** Palettes offered for the water (the bed keeps 'terrain'). */
+/** Palettes offered for the water and for the bed (default 'terrain'). */
 const PALETTES = COLORMAP_NAMES.filter(n => n !== 'terrain');
+const BED_PALETTES = COLORMAP_NAMES;
+const BED_DEFAULT_PALETTE = 'terrain';
 
 /** localStorage, where available (private windows, blocked storage: no-ops). */
 const store = {
@@ -62,7 +65,7 @@ export function startViewer(engine) {
     current: -1, target: -1, live: true, complete: false, mode: null, wsDown: false,
     playing: false, playAcc: 0, simTime: 0, scrubbing: false, autoplay: false,
     varName: 'depth', range: { mode: 'run', min: 0, max: 1 }, runRanges: null, rangesAt: -Infinity,
-    offset: 0, offsetJob: 0,
+    offset: 0, offsetJob: 0, bedRange: { mode: 'auto', min: 0, max: 1 }, tab: 'layers', about: null, run: null,
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
   };
 
@@ -209,8 +212,8 @@ export function startViewer(engine) {
     const h0 = (finiteMedian(mesh.base) || 0) + app.offset;
     app.water = await engine.createSurface(mesh, { role: 'water', h0 });
     app.bed = await engine.createSurface(mesh, { role: 'bed', h0 });
-    const zmin = finiteQuantile(mesh.elevation, 0.01), zmax = finiteQuantile(mesh.elevation, 0.99);
-    app.bed.setStyle({ cmin: zmin, cmax: zmax, offset: app.offset });
+    app.bed.setStyle({ offset: app.offset });
+    applyBedStyle();
     app.water.setStyle({ offset: app.offset, alpha: +$('opacity').value,
                          minDepth: Math.max(+$('min-depth').value || 0, 0),
                          mode: +$('display-mode').value, exag: +$('exag').value });
@@ -238,6 +241,31 @@ export function startViewer(engine) {
     if (user) app.bedUser = on;
     $('show-bed').checked = on;
     if (app.bed) app.bed.show = on;
+  }
+
+  /** The bed's palette (chosen in its menu, else 'terrain'). */
+  function bedPalette() {
+    const p = store.get('flooda5.palette.bed');
+    return BED_PALETTES.includes(p) ? p : BED_DEFAULT_PALETTE;
+  }
+
+  /** Bed colours: palette, range (auto: 1st–99th percentiles of the elevations, or fixed), opacity. */
+  function applyBedStyle() {
+    const cmap = bedPalette(), r = app.bedRange;
+    if (r.mode !== 'fixed' && app.mesh) {
+      let lo = finiteQuantile(app.mesh.elevation, 0.01), hi = finiteQuantile(app.mesh.elevation, 0.99);
+      if (!Number.isFinite(lo)) lo = 0;
+      if (!(hi > lo)) hi = lo + 1;
+      r.min = lo; r.max = hi;
+    }
+    const alpha = Math.min(Math.max(+$('bed-opacity').value || 1, 0.1), 1);
+    app.bed?.setStyle({ colormap: cmap, cmin: r.min, cmax: r.max, alpha });
+    $('bed-legend').style.background = cssGradient(cmap);
+    $('bed-legend').title = `Bed colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
+    const fmt = x => (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1));
+    $('bed-min').textContent = fmt(r.min); $('bed-max').textContent = fmt(r.max);
+    $('bed-opacity-val').textContent = alpha.toFixed(2);
+    status.bed = { palette: cmap, min: r.min, max: r.max, alpha, mode: r.mode };
   }
 
   // -------------------------------------------------------------------------
@@ -460,29 +488,83 @@ export function startViewer(engine) {
     closePaletteMenu();
   }
 
-  function openPaletteMenu() {
-    const menu = $('palette-menu'), cur = paletteOf();
+  function setBedPalette(name) {
+    if (!BED_PALETTES.includes(name)) return;
+    store.set('flooda5.palette.bed', name);
+    applyBedStyle();
+    closePaletteMenu('bed');
+  }
+
+  const MENUS = {
+    water: { menu: 'palette-menu', button: 'legend-bar' },
+    bed: { menu: 'bed-palette-menu', button: 'bed-legend' },
+  };
+
+  function openPaletteMenu(target = 'water') {
+    const bed = target === 'bed', ids = MENUS[target];
+    const menu = $(ids.menu), cur = bed ? bedPalette() : paletteOf();
+    const dflt = bed ? BED_DEFAULT_PALETTE : VARS[app.varName].colormap;
     menu.innerHTML = '';
-    for (const name of PALETTES) {
+    for (const name of bed ? BED_PALETTES : PALETTES) {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'palette'; b.setAttribute('role', 'option');
       b.setAttribute('aria-selected', String(name === cur));
       b.dataset.palette = name;
       const sw = document.createElement('span'); sw.className = 'swatch'; sw.style.background = cssGradient(name);
       const lab = document.createElement('span');
-      lab.textContent = (COLORMAP_LABELS[name] || name) + (name === VARS[app.varName].colormap ? ' (default)' : '');
+      lab.textContent = (COLORMAP_LABELS[name] || name) + (name === dflt ? ' (default)' : '');
       b.append(sw, lab);
-      b.onclick = () => setPalette(name);
+      b.onclick = () => (bed ? setBedPalette(name) : setPalette(name));
       menu.appendChild(b);
     }
     menu.hidden = false;
-    $('legend-bar').setAttribute('aria-expanded', 'true');
+    $(ids.button).setAttribute('aria-expanded', 'true');
     menu.querySelector('[aria-selected="true"]')?.focus();
   }
 
-  function closePaletteMenu() {
-    $('palette-menu').hidden = true;
-    $('legend-bar').setAttribute('aria-expanded', 'false');
+  function closePaletteMenu(target = 'water') {
+    const ids = MENUS[target];
+    $(ids.menu).hidden = true;
+    $(ids.button).setAttribute('aria-expanded', 'false');
+  }
+
+  // -------------------------------------------------------------------------
+  // Panel tabs: Layers, Run, About
+  // -------------------------------------------------------------------------
+
+  const TABS = ['layers', 'run', 'about'];
+
+  async function showTab(name) {
+    if (!TABS.includes(name)) return;
+    app.tab = name; status.tab = name;
+    for (const t of TABS) {
+      $(`tab-${t}`).hidden = t !== name;
+      $(`tab-btn-${t}`).setAttribute('aria-selected', String(t === name));
+    }
+    $('panel').classList.toggle('wide', name !== 'layers');
+    try {
+      if (name === 'run') {
+        const rec = await fetchJson('/api/run');
+        app.run = rec; status.run = rec;
+        $('tab-run').innerHTML = renderRun(rec);
+      } else if (name === 'about') {
+        app.about ??= await fetchJson('/api/about');
+        $('tab-about').innerHTML = renderAbout(app.about, { engine: engine.name });
+      }
+    } catch (e) {
+      $(`tab-${name}`).innerHTML = '<p class="muted">Not available from this server.</p>';
+      log(`${name}: ${e.message || e}`, 'warn');
+    }
+  }
+
+  async function copyArgv() {
+    const text = `julia FloodModel.jl ${shellLine(app.run?.argv)}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      log('Command line copied.');
+    } catch {
+      log('Could not copy (clipboard not available): select the text instead.', 'warn');
+    }
   }
 
   function sampleWet(fn) {
@@ -772,6 +854,21 @@ export function startViewer(engine) {
       refreshRanges(true);
     };
     $('show-bed').onchange = () => setBed($('show-bed').checked);
+    $('bed-legend').onclick = () => ($('bed-palette-menu').hidden ? openPaletteMenu('bed') : closePaletteMenu('bed'));
+    $('bed-range-mode').onchange = () => {
+      app.bedRange.mode = $('bed-range-mode').value;
+      $('bed-range-fixed').hidden = app.bedRange.mode !== 'fixed';
+      $('bed-range-min').value = +app.bedRange.min.toFixed(2); $('bed-range-max').value = +app.bedRange.max.toFixed(2);
+      applyBedStyle();
+    };
+    const bedFixed = () => {
+      const a = +$('bed-range-min').value, b = +$('bed-range-max').value;
+      if (Number.isFinite(a) && Number.isFinite(b) && b > a) { app.bedRange.min = a; app.bedRange.max = b; applyBedStyle(); }
+    };
+    $('bed-range-min').onchange = bedFixed; $('bed-range-max').onchange = bedFixed;
+    $('bed-opacity').oninput = () => { applyBedStyle(); store.set('flooda5.bed.opacity', $('bed-opacity').value); };
+    for (const b of document.querySelectorAll('#panel .tab')) b.onclick = () => showTab(b.dataset.tab);
+    $('tab-run').addEventListener('click', e => { if (e.target.closest('[data-copy="argv"]')) copyArgv(); });
     $('show-borders').onchange = () => {
       const borders = $('show-borders').checked ? 1 : 0;
       app.water?.setStyle({ borders }); app.bed?.setStyle({ borders });
@@ -779,11 +876,15 @@ export function startViewer(engine) {
     };
     $('legend-bar').onclick = () => ($('palette-menu').hidden ? openPaletteMenu() : closePaletteMenu());
     document.addEventListener('pointerdown', e => {
-      if (!$('palette-menu').hidden && !e.target.closest('#palette-menu, #legend-bar')) closePaletteMenu();
+      for (const [target, ids] of Object.entries(MENUS)) {
+        if (!$(ids.menu).hidden && !e.target.closest(`#${ids.menu}, #${ids.button}`)) closePaletteMenu(target);
+      }
     });
-    $('palette-menu').addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closePaletteMenu(); $('legend-bar').focus(); }
-    });
+    for (const [target, ids] of Object.entries(MENUS)) {
+      $(ids.menu).addEventListener('keydown', e => {
+        if (e.key === 'Escape') { closePaletteMenu(target); $(ids.button).focus(); }
+      });
+    }
     $('basemap').onchange = () => setBasemap($('basemap').value);
     $('offset').onchange = () => setOffset(+$('offset').value);
     $('calibrate').onclick = () => calibrateOffset();
@@ -803,7 +904,7 @@ export function startViewer(engine) {
     $('btn-live').onclick = () => setLive(!app.live);
     window.addEventListener('keydown', e => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
-          e.target.closest?.('#palette-menu, #legend-bar')) return;
+          e.target.closest?.('.palette-menu, .legend, .tabs')) return;
       if (e.key === ' ') { e.preventDefault(); app.playing ? stopPlay() : startPlay(); }
       else if (e.key === 'ArrowRight') { stopPlay(); step(1); }
       else if (e.key === 'ArrowLeft') { stopPlay(); step(-1); }
@@ -830,6 +931,15 @@ export function startViewer(engine) {
     setBed: on => setBed(on),
     setBorders: on => { $('show-borders').checked = !!on; $('show-borders').onchange(); },
     setPalette: name => setPalette(name),
+    setBedPalette: name => setBedPalette(name),
+    setBedStyle: ({ mode, min, max, alpha } = {}) => {
+      if (alpha !== undefined) $('bed-opacity').value = String(alpha);
+      if (mode === 'fixed' && Number.isFinite(min) && Number.isFinite(max) && max > min) {
+        app.bedRange = { mode, min, max }; $('bed-range-mode').value = 'fixed';
+      } else if (mode === 'auto') { app.bedRange.mode = 'auto'; $('bed-range-mode').value = 'auto'; }
+      applyBedStyle();
+    },
+    showTab: name => showTab(name),
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setDepthBias: f => app.water?.setStyle({ depthBias: f }),
     play: () => startPlay(),
@@ -849,6 +959,8 @@ export function startViewer(engine) {
   (async () => {
     wireControls();
     $('show-borders').checked = store.get('flooda5.borders') === '1';
+    const bo = +store.get('flooda5.bed.opacity');
+    if (bo >= 0.1 && bo <= 1) $('bed-opacity').value = String(bo);
     try {
       app.cfg = await fetchJson('/api/config');
       const q = new URLSearchParams(location.search);

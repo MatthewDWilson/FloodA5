@@ -33,6 +33,45 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.7] — 2026-11-25
+
+Globe viewers: Run and About tabs, bed colours, *brown flood water*; run
+and variable captions under the static plots (branch `wpv-run-about`;
+PATCH: no solver change, default results unchanged). Step 1 of the viewer
+plan (`projectinstructions/FloodA5_GlobeViewer_Plan_2026-11.md`, decisions
+of 2026-11-25).
+
+- The side panel has tabs: *Layers* (the controls), *Run* and *About*.
+  *Run* shows what the run records — FloodA5 version and commit (and
+  whether the tree was modified), flow model, backend, the command line
+  (with a copy button), the mesh (family, DGGS level, cells, cell areas,
+  file), frames, inputs with sizes and checksums, all options and the
+  end-of-run summary — for a replay from the file, for a live run from the
+  record its output file gets. *About* describes each variable (definition,
+  unit, how the viewer derives or draws it) and the colour range, vertical
+  offset, wet threshold and depth bias.
+- One source for those descriptions: `io/variables.toml`
+  (`FloodA5Output.variable_docs`); the run record for display:
+  `FloodA5Output.run_record` (`run_info` without the long texts, plus mesh
+  metadata, cell count and area range, frame times; JSON-safe). New
+  endpoints `/api/run` and `/api/about`, `VisualisationServer.set_run!`
+  (DATA_FORMATS §6).
+- Static plots (`FloodA5Plots`): a caption under each figure — one line per
+  run (label, flow model, mesh, FloodA5 version and commit) and the
+  variable's definition, from the same sources (`run_caption`,
+  `variable_caption`, `figure_caption`). Off for one figure with
+  `caption = false` (export, publication), everywhere with
+  `FP.CAPTIONS[] = false`.
+- Bed surface: its own section with a palette menu (default *terrain*), a
+  range (auto: 1st–99th percentiles of the bed, or fixed) and an opacity;
+  below 1 the bed is drawn translucent (CesiumJS: the shader is rebuilt
+  when that changes).
+- *Sediment* is now **brown flood water** (no sediment variable yet): a
+  narrow range around the colour of open brown floodwater in aerial
+  photographs, ≈ rgb(112, 100, 92) at the middle. A palette chosen as
+  *sediment* falls back to the default.
+- `VERSION` had been left at 0.8.5 in 0.8.6; it is in step again.
+
 ## [0.8.6] — 2026-11-25
 
 Globe viewers: fixes and small features from the first round of testing

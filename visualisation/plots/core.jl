@@ -598,3 +598,103 @@ function format_volume(v::Real)
     s = @sprintf("%.3g", v / f)
     return f == 1 ? s * " " * u : s * " × " * u
 end
+
+# ───────────────────────────── captions ────────────────────────────────────
+# What the run is and what the variable means, under a figure: from the same
+# sources as the globe viewers' Run and About tabs (FO.run_record,
+# io/variables.toml through FO.variable_docs).
+
+"""
+Captions under figures: on by default; `FP.CAPTIONS[] = false` turns them
+off everywhere, `caption = false` for one figure (export, publication).
+"""
+const CAPTIONS = Ref(true)
+
+# plot variables (var_spec) → io/variables.toml
+const _DOC_KEY = Dict(:depth => "water_depth", :wse => "level", :speed => "velocity",
+                      :elevation => "elevation", :saturation => "saturation")
+
+_thousands(n::Integer) = replace(string(n), r"(?<=\d)(?=(\d{3})+$)" => ",")
+
+"""
+    run_caption(run) -> String
+
+One line describing a run: its label, flow model, mesh (family, DGGS level,
+cells, mean cell area) and the FloodA5 version and commit that produced it
+(`FO.run_record` of the file; a run without a file uses its `info`).
+"""
+function run_caption(r::FA.Run)
+    rec = r.format >= 2 && isfile(r.path) ? FA.FO.run_record(r.path) : FA.FO.run_record(r.info)
+    parts = String[run_label(r)]
+    fm = isempty(r.flow_model) ? string(get(rec, "flow_model", "")) : r.flow_model
+    isempty(fm) || push!(parts, get(MODEL_LABEL, fm, fm))
+    m = get(rec, "mesh", Dict{String,Any}())
+    fam = string(get(m, "mesh_family", ""))
+    isempty(fam) && (f = mesh_family(r); fam = f == "a5" ? "A5" : f == "cart" ? "Cartesian" : "")
+    lev = get(m, "dggs_level", nothing)
+    mesh = isempty(fam) ? "" : fam * (lev === nothing ? "" : " level $lev")
+    n = length(r.mesh)
+    a = get(m, "cell_area_mean_m2", nothing)
+    a === nothing && !isempty(r.mesh.area) && (a = sum(filter(isfinite, r.mesh.area)) / max(n, 1))
+    cells = "$(_thousands(n)) cells" * (a isa Real && isfinite(a) ? @sprintf(", mean %.3g m²", a) : "")
+    push!(parts, isempty(mesh) ? cells : "$mesh mesh, $cells")
+    ver = string(get(rec, "flooda5_version", ""))
+    commit = string(get(rec, "git_commit", ""))
+    if !isempty(ver)
+        c = isempty(commit) || commit == "unknown" ? "" : " (" * first(commit, 7) *
+            (get(rec, "git_dirty", false) == true ? ", modified" : "") * ")"
+        push!(parts, "FloodA5 $ver$c")
+    end
+    return join(parts, " · ")
+end
+
+"""
+    variable_caption(var) -> String
+
+The variable's definition (`io/variables.toml`): "Depth (m): Depth of water
+in the cell, …"; "" for a variable without one (e.g. a vector of values).
+"""
+variable_caption(::AbstractVector) = ""
+function variable_caption(var)
+    key = get(_DOC_KEY, Symbol(var), String(Symbol(var)))
+    d = get(FA.FO.variable_docs()["variables"], key, nothing)
+    d === nothing && return ""
+    return var_label(var) * ": " * d["definition"]
+end
+
+"""
+    figure_caption(runs, var = nothing) -> String
+
+A figure's caption: one `run_caption` line per run, then the variable's
+definition (if any).
+"""
+function figure_caption(runs, var = nothing; width::Integer = typemax(Int))
+    rs = runs isa FA.Run ? [runs] : collect(runs)
+    lines = run_caption.(rs)
+    if var !== nothing
+        v = variable_caption(var)
+        isempty(v) || push!(lines, v)
+    end
+    return join((wrap_text(l, width) for l in lines), "\n")
+end
+
+"""
+    wrap_text(s, width) -> String
+
+`s` broken at spaces into lines of at most `width` characters (a longer
+word stays whole).
+"""
+function wrap_text(s::AbstractString, width::Integer)
+    out = String[]; line = ""
+    for w in split(s, ' '; keepempty = false)
+        if isempty(line)
+            line = String(w)
+        elseif length(line) + 1 + length(w) <= width
+            line *= " " * w
+        else
+            push!(out, line); line = String(w)
+        end
+    end
+    isempty(line) || push!(out, line)
+    return join(out, "\n")
+end

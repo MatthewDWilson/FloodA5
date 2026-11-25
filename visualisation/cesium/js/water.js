@@ -3,7 +3,10 @@
 //
 // One glTF model per surface, built in the browser; a new frame is one texture
 // upload (CesiumJS keeps the old texture until the new one is created, so
-// nothing flashes). Water is translucent and depth-tested. Needs WebGL 2.
+// nothing flashes). Water is translucent and depth-tested; the bed is opaque
+// unless its opacity is below 1 (CesiumJS fixes a custom shader's
+// translucency when it is created: the shader is rebuilt when that changes).
+// Needs WebGL 2.
 
 import { buildSurface, buildGlb, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
 import { colormapTable } from '../../viewer-common/js/colormaps.js';
@@ -35,6 +38,13 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
 }
 `;
 
+/** Style keys and their uniforms (surface.js defaultStyle). */
+const STYLE_UNIFORMS = [
+  ['u_offset', 'offset'], ['u_mode', 'mode'], ['u_cmode', 'cmode'], ['u_cmin', 'cmin'], ['u_cmax', 'cmax'],
+  ['u_alpha', 'alpha'], ['u_minDepth', 'minDepth'], ['u_exag', 'exag'], ['u_borders', 'borders'],
+  ['u_depthBias', 'depthBias'],
+];
+
 export class SurfaceLayer {
   /** @param {object} opts {role: 'water'|'bed', h0} */
   static async create(viewer, mesh, opts = {}) {
@@ -62,34 +72,20 @@ export class SurfaceLayer {
     const st = packStatic(this.mesh.elevation, this.mesh.base, this.n);
     const zero = packCellValues(new Float32Array(0), this.n);
     const U = C.UniformType, s = this.style;
-    this.shader = new C.CustomShader({
-      uniforms: {
-        u_depth: { type: U.SAMPLER_2D, value: floatTexture(zero) },
-        u_cvar: { type: U.SAMPLER_2D, value: floatTexture(zero) },
-        u_static: { type: U.SAMPLER_2D, value: floatTexture(st) },
-        u_cmap: { type: U.SAMPLER_2D, value: colormapTexture(s.colormap) },
-        u_texW: { type: U.FLOAT, value: zero.width },
-        u_staticW: { type: U.FLOAT, value: st.width },
-        u_centre: { type: U.VEC3, value: new C.Cartesian3(...surface.centre) },
-        u_h0: { type: U.FLOAT, value: this.h0 },
-        u_offset: { type: U.FLOAT, value: s.offset },
-        u_mode: { type: U.FLOAT, value: s.mode },
-        u_cmode: { type: U.FLOAT, value: s.cmode },
-        u_cmin: { type: U.FLOAT, value: s.cmin },
-        u_cmax: { type: U.FLOAT, value: s.cmax },
-        u_alpha: { type: U.FLOAT, value: s.alpha },
-        u_minDepth: { type: U.FLOAT, value: s.minDepth },
-        u_exag: { type: U.FLOAT, value: s.exag },
-        u_borders: { type: U.FLOAT, value: s.borders },
-        u_depthBias: { type: U.FLOAT, value: s.depthBias },
-      },
-      varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT, v_fa5Edge: C.VaryingType.FLOAT },
-      lightingModel: C.LightingModel.UNLIT,
-      translucencyMode: this.role === 'bed' ? C.CustomShaderTranslucencyMode.OPAQUE
-                                            : C.CustomShaderTranslucencyMode.TRANSLUCENT,
-      vertexShaderText: VERTEX,
-      fragmentShaderText: FRAGMENT,
-    });
+    // current uniform values (type, value): kept to rebuild the shader
+    this._uni = {
+      u_depth: [U.SAMPLER_2D, floatTexture(zero)],
+      u_cvar: [U.SAMPLER_2D, floatTexture(zero)],
+      u_static: [U.SAMPLER_2D, floatTexture(st)],
+      u_cmap: [U.SAMPLER_2D, colormapTexture(s.colormap)],
+      u_texW: [U.FLOAT, zero.width],
+      u_staticW: [U.FLOAT, st.width],
+      u_centre: [U.VEC3, new C.Cartesian3(...surface.centre)],
+      u_h0: [U.FLOAT, this.h0],
+    };
+    for (const [name, key] of STYLE_UNIFORMS) this._uni[name] = [U.FLOAT, s[key]];
+    this.translucent = this._wantsTranslucent();
+    this.shader = this._makeShader();
     try {
       this.model = await C.Model.fromGltfAsync({
         url,
@@ -116,31 +112,55 @@ export class SurfaceLayer {
     });
   }
 
+  _wantsTranslucent() { return this.role !== 'bed' || this.style.alpha < 1; }
+
+  _makeShader() {
+    const C = window.Cesium, uniforms = {};
+    for (const [name, [type, value]] of Object.entries(this._uni)) uniforms[name] = { type, value };
+    return new C.CustomShader({
+      uniforms,
+      varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT, v_fa5Edge: C.VaryingType.FLOAT },
+      lightingModel: C.LightingModel.UNLIT,
+      translucencyMode: this.translucent ? C.CustomShaderTranslucencyMode.TRANSLUCENT
+                                         : C.CustomShaderTranslucencyMode.OPAQUE,
+      vertexShaderText: VERTEX,
+      fragmentShaderText: FRAGMENT,
+    });
+  }
+
+  _set(name, value) {
+    this._uni[name][1] = value;
+    this.shader.setUniform(name, value);
+  }
+
   /** Frame depths (Float32Array, mesh order). */
   setDepth(depth) {
     const p = packCellValues(depth, this.n, this._depthBuf);
     this._depthBuf = p.data;
-    this.shader.setUniform('u_depth', floatTexture(p));
+    this._set('u_depth', floatTexture(p));
   }
 
   /** Values for COLOR_MODE.texture (Float32Array, mesh order). */
   setColorValues(values) {
     const p = packCellValues(values, this.n, this._cvarBuf);
     this._cvarBuf = p.data;
-    this.shader.setUniform('u_cvar', floatTexture(p));
+    this._set('u_cvar', floatTexture(p));
   }
 
   /** Update any of: mode, cmode, cmin, cmax, alpha, minDepth, exag, offset, borders, colormap. */
   setStyle(s) {
     const old = this.style;
     this.style = { ...old, ...s };
-    const set = (name, key) => {
-      if (s[key] !== undefined && s[key] !== old[key]) this.shader.setUniform(name, this.style[key]);
-    };
-    set('u_mode', 'mode'); set('u_cmode', 'cmode'); set('u_cmin', 'cmin'); set('u_cmax', 'cmax');
-    set('u_alpha', 'alpha'); set('u_minDepth', 'minDepth'); set('u_exag', 'exag'); set('u_offset', 'offset');
-    set('u_borders', 'borders'); set('u_depthBias', 'depthBias');
-    if (s.colormap && s.colormap !== old.colormap) this.shader.setUniform('u_cmap', colormapTexture(s.colormap));
+    for (const [name, key] of STYLE_UNIFORMS) {
+      if (s[key] !== undefined && s[key] !== old[key]) this._set(name, this.style[key]);
+    }
+    if (s.colormap && s.colormap !== old.colormap) this._set('u_cmap', colormapTexture(s.colormap));
+    const tr = this._wantsTranslucent();
+    if (tr !== this.translucent && this.model) {
+      this.translucent = tr;
+      this.shader = this._makeShader();
+      this.model.customShader = this.shader;
+    }
   }
 
   set show(v) { if (this.model) this.model.show = v; }
