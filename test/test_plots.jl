@@ -250,6 +250,10 @@ end
     @test startswith(FP.variable_caption(:depth), "Depth (m): Depth of water in the cell")
     @test startswith(FP.variable_caption(:speed), "Speed (m/s): Magnitude")
     @test startswith(FP.variable_caption(:wse), "Water surface (m): Elevation of the water surface")
+    # hazard variables (analysis/hazard.jl): labels and captions
+    @test FP.var_label(:depth_velocity) == "Depth × velocity (m²/s)" && FP.var_spec(:hazard_rating).masked
+    @test startswith(FP.variable_caption(:hazard_rating), "Hazard rating (Defra): Flood hazard rating HR = d (v + 0.5) + DF")
+    @test occursin("Chen, Xia, Falconer", FP.variable_caption(:hazard_degree))
     @test FP.variable_caption(:volume) == "" && FP.variable_caption([1.0, 2.0]) == ""
     fc = FP.figure_caption([r, c], :depth)
     @test count(==('\n'), fc) == 2 && endswith(fc, FP.variable_caption(:depth))

@@ -30,8 +30,17 @@ export const UI_HTML = `
       <button id="legend-bar" class="legend" type="button" title="Colour palette: click to change"
               aria-haspopup="listbox" aria-expanded="false"></button>
       <div id="palette-menu" class="palette-menu" role="listbox" aria-label="Colour palette" hidden></div>
-      <div class="legend-labels"><span id="legend-min">0</span><span id="legend-unit"></span><span id="legend-max">1</span></div>
-      <div class="row">
+      <div id="legend-labels" class="legend-labels"><span id="legend-min">0</span><span id="legend-unit"></span><span id="legend-max">1</span></div>
+      <div id="legend-classes" class="legend-classes" hidden></div>
+      <div class="row" id="class-row" hidden>
+        <label for="show-classes">Classes</label>
+        <input id="show-classes" type="checkbox">
+      </div>
+      <div class="row" id="breaks-row" hidden>
+        <input id="breaks" type="text" aria-label="Class breaks" title="Class boundaries, increasing (e.g. 0.75, 1.25, 2)">
+        <button id="breaks-reset" class="btn" type="button" title="The default breaks">Reset</button>
+      </div>
+      <div class="row" id="range-row">
         <label for="range-mode">Range</label>
         <select id="range-mode" title="run: the 2nd–98th percentiles of the whole run (wet cells); frame: of the frame shown">
           <option value="run">run (2–98 %)</option>
@@ -44,6 +53,41 @@ export const UI_HTML = `
         <span>to</span>
         <input id="range-max" type="number" step="any" aria-label="Range maximum">
       </div>
+    </section>
+
+    <section id="hazard-section" hidden>
+      <details>
+        <summary><h2>Hazard parameters</h2></summary>
+        <div class="row">
+          <label for="hz-landuse" title="Defra hazard rating: the debris factor's land use (one for the whole run)">Land use</label>
+          <select id="hz-landuse"></select>
+        </div>
+        <div class="row">
+          <label for="hz-person" title="Hazard degree (Chen et al. 2019): the person">Person</label>
+          <select id="hz-person"></select>
+        </div>
+        <div class="row">
+          <label for="hz-mass">Mass</label>
+          <input id="hz-mass" type="number" min="1" max="300" step="0.1"><span class="val">kg</span>
+        </div>
+        <div class="row">
+          <label for="hz-height">Height</label>
+          <input id="hz-height" type="number" min="0.3" max="2.5" step="0.01"><span class="val">m</span>
+        </div>
+        <details class="sub">
+          <summary>Calibration (Chen et al.)</summary>
+          <div class="row"><label for="hz-theta">Tilt θ</label><input id="hz-theta" type="number" min="1" max="90" step="1"><span class="val">°</span></div>
+          <div class="row"><label for="hz-alpha">α</label><input id="hz-alpha" type="number" min="0.01" step="0.001"></div>
+          <div class="row"><label for="hz-beta">β</label><input id="hz-beta" type="number" min="0" step="0.001"></div>
+          <div class="row"><button id="hz-reset" class="btn" type="button" title="θ = 75°, α = 3.064, β = 0.303">Recommended</button></div>
+        </details>
+        <div class="row">
+          <label for="hz-flood_depth" title="Time of first flooding and duration of flooding">Flooded if depth ≥</label>
+          <input id="hz-flood_depth" type="number" min="0" step="0.01"><span class="val">m</span>
+        </div>
+        <p class="help">For the hazard variables and the statistics over the run;
+          kept in this browser. See About.</p>
+      </details>
     </section>
 
     <section>
@@ -135,7 +179,7 @@ export const UI_HTML = `
   </div>
 </aside>
 
-<footer id="playbar">
+<footer id="playbar" class="">
   <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Frame">
   <div class="controls">
     <button id="btn-start" class="btn" title="First frame">⏮</button>

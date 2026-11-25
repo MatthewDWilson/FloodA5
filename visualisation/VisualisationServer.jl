@@ -17,8 +17,13 @@
 #   GET /api/info                  → run description, protocol version, state
 #   GET /api/mesh                  → binary mesh (see `encode_mesh`); 204 until set
 #   GET /api/frames                → {complete, frames: [{id, t}]}
-#   GET /api/frames/{id}/{var}     → raw little-endian Float32[n_cells]
-#   GET /api/ranges?wet=0.05       → each variable's 2nd/98th percentiles over the run (`run_ranges`)
+#   GET /api/frames/{id}/{var}     → raw little-endian Float32[n_cells]; {var} may be a
+#                                    hazard variable (HAZARD_VARS), with its parameters
+#                                    in the query (`hazard_params`: landuse, mass, …)
+#   GET /api/ranges?wet=0.05       → each variable's 2nd/98th percentiles over the run (`run_ranges`;
+#                                    hazard variables too, with the hazard parameters)
+#   GET /api/stats/{name}?…        → a statistic over the run (STAT_VARS: max_water_depth,
+#                                    time_first_flooded, …), Float32[n_cells] (`run_stats`)
 #   GET /api/cell/{i}?frame={id}   → one cell (0-based index): id, centre, values
 #   GET /api/series/{i}?var=V      → one cell's values of V over the frames kept (`series_data`)
 #   GET /api/run                   → the run record (`set_run!`; {} until set)
@@ -56,6 +61,10 @@ import TOML
 # Access keys (Cesium ion token, Google key): environment, then key files
 include(joinpath(@__DIR__, "..", "io", "FloodA5Keys.jl"))
 using .FloodA5Keys: flooda5_key, key_source
+
+# Hazard variables and statistics over a run: the same pure functions as
+# FloodA5Analysis (FA.hazard_rating, FA.run_statistics, …)
+include(joinpath(@__DIR__, "..", "analysis", "hazard.jl"))
 
 # Call everything qualified (VisualisationServer.start, …): FloodModel.jl
 # also loads MakieVisualiser, which has its own start/stop/push_frame!.
@@ -229,8 +238,9 @@ mutable struct VisServer
     server        :: Any
     task          :: Union{Task,Nothing}
     shutdown      :: Base.Event
-    ranges        :: Dict{Tuple{Float64,Int,Int,Int},Any}   # run_ranges, by (wet, frames pushed, limits)
-    run           :: Dict{String,Any}                       # /api/run (`set_run!`)
+    ranges        :: Dict{Any,Any}          # run_ranges, by (wet, frames pushed, limits, hazard parameters)
+    run           :: Dict{String,Any}       # /api/run (`set_run!`)
+    stats         :: Dict{Any,Any}          # run_stats: (hazard parameters, frames pushed) → Task
 end
 
 _envnum(name, default) = something(tryparse(Float64, get(ENV, name, "")), default)
@@ -267,8 +277,8 @@ function start(; port::Int = 8080, host::AbstractString = "127.0.0.1",
                   Dict{String,Any}(String(k) => v for (k, v) in config),
                   Channel{String}[], Float64(min_interval), -Inf,
                   Dict{Tuple{Int,String},Vector{Float32}}(), Tuple{Int,String}[], 48,
-                  nothing, nothing, Base.Event(), Dict{Tuple{Float64,Int,Int,Int},Any}(),
-                  Dict{String,Any}())
+                  nothing, nothing, Base.Event(), Dict{Any,Any}(),
+                  Dict{String,Any}(), Dict{Any,Any}())
     _port_free(s.host, port) ||
         error("VisServer: port $port is already in use. Stop the other process or use --vis-port.")
     ready = Channel{Any}(1)
@@ -345,7 +355,7 @@ end
 function set_mesh!(s::VisServer, m::MeshPayload)
     lock(s.lock) do
         s.mesh = m
-        empty!(s.ranges)
+        empty!(s.ranges); empty!(s.stats)
         s.info["n_cells"] = m.n_cells
         _broadcast!(s, (type = "mesh", n_cells = m.n_cells))
     end
@@ -365,7 +375,7 @@ function set_replay!(s::VisServer, times::AbstractVector, vars::AbstractVector, 
     lock(s.lock) do
         s.frames = ReplayFrames(Float64.(times), String.(vars), read, series)
         s.complete = true
-        empty!(s.cache); empty!(s.cache_order); empty!(s.ranges)
+        empty!(s.cache); empty!(s.cache_order); empty!(s.ranges); empty!(s.stats)
         _broadcast!(s, (type = "reindex",))
         _broadcast!(s, (type = "complete", frames = length(times)))
     end
@@ -421,8 +431,42 @@ _frame_list(f::LiveFrames) = [(id = f.ids[i], t = f.t[i]) for i in eachindex(f.i
 _frame_list(f::ReplayFrames) = [(id = k, t = f.t[k]) for k in eachindex(f.t)]
 _vars(s) = s.frames isa ReplayFrames ? s.frames.vars : get(s.info, "vars", String[])
 
-# Frame data (Float32, mesh order), or nothing.
-function _frame_data(s::VisServer, id::Int, var::String)
+# ---------------------------------------------------------------------------
+# Derived (hazard) variables
+# ---------------------------------------------------------------------------
+
+"The frame variables the hazard variables are derived from."
+const DERIVED_INPUTS = ("water_depth", "velocity")
+
+"Whether `var` is a hazard variable derived from depth and velocity (`HAZARD_VARS`)."
+is_derived(var::AbstractString) = haskey(HAZARD_VARS, var)
+
+"""
+    derived_values(var, get, p::HazardParams) → Vector{Float32} or nothing
+
+Hazard variable `var` from its inputs: `get(name)` returns the input variable
+"water_depth" or "velocity" (or nothing). The inputs may be of any length —
+one frame's cells, or one cell's values over the frames — so a time series
+derives the same way as a frame.
+"""
+function derived_values(var::AbstractString, get::Function, p::HazardParams)
+    d = get("water_depth"); d === nothing && return nothing
+    v = get("velocity");    v === nothing && return nothing
+    return derive_hazard(var, d, v, p)
+end
+
+"Whether the run has the inputs of the hazard variables."
+_has_derived(s::VisServer) = all(in(_vars(s)), DERIVED_INPUTS)
+
+"Names of the hazard variables and statistics the run supports (for /api/info)."
+_derived_names(s::VisServer) = _has_derived(s) ? sort!(collect(keys(HAZARD_VARS))) : String[]
+_stat_names(s::VisServer) = _has_derived(s) ? collect(STAT_VARS) :
+    ("water_depth" in _vars(s) ? ["max_water_depth", "time_first_flooded", "flood_duration"] : String[])
+
+# Frame data (Float32, mesh order), or nothing. Hazard variables are derived
+# (not cached: elementwise, cheap) from the cached inputs.
+function _frame_data(s::VisServer, id::Int, var::String; params::HazardParams = HazardParams())
+    is_derived(var) && return derived_values(var, v -> _frame_data(s, id, v), params)
     f = s.frames
     if f isa LiveFrames
         return lock(s.lock) do
@@ -447,14 +491,27 @@ function _frame_data(s::VisServer, id::Int, var::String)
 end
 
 """
-    series_data(s, cell, var) → (ids, t, values) or nothing
+    series_data(s, cell, var; params = HazardParams()) → (ids, t, values) or nothing
 
 One cell's values of frame variable `var` over the frames kept (`cell`:
 1-based, mesh order): frame ids, times (s) and Float32 values. `nothing` if
 the variable is not served. A replay with a `series` reader reads the cell's
 row once; otherwise (live, or no reader) the values come from each frame.
+Hazard variables are derived from the depth and velocity series with
+`params` (`derived_values`, as for a frame).
 """
-function series_data(s::VisServer, cell::Int, var::String)
+function series_data(s::VisServer, cell::Int, var::String; params::HazardParams = HazardParams())
+    if is_derived(var)
+        base = Dict{String,Any}()
+        for v in DERIVED_INPUTS
+            r = series_data(s, cell, String(v))
+            r === nothing && return nothing
+            base[String(v)] = r
+        end
+        ids, t, _ = base["water_depth"]
+        vals = derived_values(var, v -> base[v][3], params)
+        return vals === nothing ? nothing : (ids, t, Vector{Float32}(vals))
+    end
     f = s.frames
     if f isa LiveFrames
         return lock(s.lock) do
@@ -494,7 +551,8 @@ frames spread evenly over the run (a live run: over its frames so far). Cells
 are subsampled evenly when frames × cells exceeds `max_values`. Cached until
 the mesh, the replay or the live frames change.
 """
-function run_ranges(s::VisServer; wet::Real = 0.05, max_frames::Int = 24, max_values::Int = 4_000_000)
+function run_ranges(s::VisServer; wet::Real = 0.05, max_frames::Int = 24, max_values::Int = 4_000_000,
+                    params::HazardParams = HazardParams())
     m = s.mesh
     m === nothing && return (wet = Float64(wet), frames = 0, of = 0, complete = false, vars = Dict{String,Any}())
     # what to scan (under the lock), read outside it
@@ -508,20 +566,29 @@ function run_ranges(s::VisServer; wet::Real = 0.05, max_frames::Int = 24, max_va
             (ks, (k, v) -> v in f.vars ? f.read(k, v) : nothing, 0, n, true)
         end
     end
-    key = (Float64(wet), stamp, max_frames, max_values)
+    key = (Float64(wet), stamp, max_frames, max_values, hazard_key(params))
     hit = lock(s.lock) do; get(s.ranges, key, nothing); end
     hit === nothing || return hit
     names = String[v for v in _vars(s)]
-    vals = Dict{String,Vector{Float32}}(v => Float32[] for v in names)
+    derived = _derived_names(s)
+    vals = Dict{String,Vector{Float32}}(v => Float32[] for v in [names; derived])
     vals["level"] = Float32[]
     stride = max(1, cld(m.n_cells * max(length(picks), 1), max_values))
     for p in picks
         d = getter(p, "water_depth")
         d === nothing && continue
         idx = [i for i in 1:stride:min(length(d), m.n_cells) if d[i] >= wet]
+        vel = nothing
         for v in names
             x = v == "water_depth" ? d : getter(p, v)
+            v == "velocity" && (vel = x)
             x === nothing || append!(vals[v], (x[i] for i in idx if isfinite(x[i])))
+        end
+        if !isempty(derived) && vel !== nothing
+            dw = Float32[d[i] for i in idx]; vw = Float32[vel[i] for i in idx]
+            for v in derived
+                append!(vals[v], filter(isfinite, derive_hazard(v, dw, vw, params)))
+            end
         end
         append!(vals["level"], (m.base[i] + d[i] for i in idx if isfinite(m.base[i] + d[i])))
     end
@@ -539,6 +606,52 @@ function run_ranges(s::VisServer; wet::Real = 0.05, max_frames::Int = 24, max_va
         s.ranges[key] = r
     end
     return r
+end
+
+# ---------------------------------------------------------------------------
+# Statistics over the run (static maps)
+# ---------------------------------------------------------------------------
+
+"""
+    run_stats(s, p::HazardParams) → Dict{String,Vector{Float32}}
+
+`run_statistics` (maxima of depth, velocity and the hazard variables, time of
+first flooding, duration of flooding) over every frame of the replay, or over
+the live frames kept so far — at the resolution of those frames. Computed
+once per parameter set and set of frames (concurrent requests share the
+work), off the server's thread.
+"""
+function run_stats(s::VisServer, p::HazardParams)
+    m = s.mesh
+    m === nothing && return Dict{String,Vector{Float32}}()
+    t = lock(s.lock) do
+        f = s.frames
+        stamp = f isa LiveFrames ? f.next : 0
+        key = (hazard_key(p), stamp)
+        task = get(s.stats, key, nothing)
+        if task === nothing
+            if f isa LiveFrames
+                times = copy(f.t)
+                data = [(get(d, "water_depth", nothing), get(d, "velocity", nothing)) for d in f.data]
+                frame = k -> data[k]
+            else
+                times = f.t; rd = f.read; hv = "velocity" in f.vars
+                frame = k -> (rd(k, "water_depth"), hv ? rd(k, "velocity") : nothing)
+            end
+            n = m.n_cells
+            task = Threads.@spawn run_statistics(times, frame, n, p)
+            filter!(kv -> kv[1][2] == stamp, s.stats)          # older live states are stale
+            length(s.stats) >= 4 && empty!(s.stats)              # a few parameter sets at most
+            s.stats[key] = task
+        end
+        task
+    end
+    try
+        return fetch(t)
+    catch
+        lock(s.lock) do; filter!(kv -> kv[2] !== t, s.stats); end
+        rethrow()
+    end
 end
 
 function _broadcast!(s::VisServer, msg)
@@ -700,22 +813,32 @@ function _route(s::VisServer, req::HTTP.Request)
             if length(parts) == 4
                 id = tryparse(Int, parts[3])
                 id === nothing && return _text(400, "Bad frame id")
-                v = _frame_data(s, id, String(parts[4]))
+                v = _frame_data(s, id, String(parts[4]); params = hazard_params(HTTP.queryparams(uri)))
                 v === nothing && return _text(404, "No frame $id variable $(parts[4])")
                 return _binary(collect(reinterpret(UInt8, htol.(v))))
             end
         end
         if a == "ranges" && length(parts) == 2
-            w = something(tryparse(Float64, get(HTTP.queryparams(uri), "wet", "")), 0.05)
+            q = HTTP.queryparams(uri)
+            w = something(tryparse(Float64, get(q, "wet", "")), 0.05)
             w = isfinite(w) ? max(w, 0.0) : 0.05
             # (scanning frames takes a moment: off the server's thread)
-            return _json(fetch(Threads.@spawn run_ranges(s; wet = w)))
+            return _json(fetch(Threads.@spawn run_ranges(s; wet = w, params = hazard_params(q))))
+        end
+        if a == "stats" && length(parts) == 3
+            name = String(parts[3])
+            name in STAT_VARS || return _text(404, "No statistic $name")
+            st = run_stats(s, hazard_params(HTTP.queryparams(uri)))
+            v = get(st, name, nothing)
+            v === nothing && return _text(404, "No statistic $name for this run")
+            return _binary(collect(reinterpret(UInt8, htol.(v))))
         end
         if a == "cell" && length(parts) == 3
             return _cell(s, tryparse(Int, parts[3]), HTTP.queryparams(uri))
         end
         if a == "series" && length(parts) == 3
-            return _series(s, tryparse(Int, parts[3]), get(HTTP.queryparams(uri), "var", "water_depth"))
+            q = HTTP.queryparams(uri)
+            return _series(s, tryparse(Int, parts[3]), get(q, "var", "water_depth"), hazard_params(q))
         end
     end
     return _text(404, "Not found")
@@ -729,6 +852,8 @@ function _info(s::VisServer)
         d["complete"] = s.complete
         d["frames"] = _nframes(s.frames)
         d["vars"] = _vars(s)
+        d["derived"] = _derived_names(s)
+        d["stats"] = _stat_names(s)
         d["mesh_ready"] = s.mesh !== nothing
         s.mesh === nothing || (d["n_cells"] = s.mesh.n_cells)
         return d
@@ -747,15 +872,20 @@ function _cell(s::VisServer, i, q)
             d = _frame_data(s, fid, v)
             d === nothing || (vals[v] = fl(d[k]))
         end
+        p = hazard_params(q)
+        for v in _derived_names(s)
+            d = derived_values(v, n -> (x = _frame_data(s, fid, n); x === nothing ? nothing : x[k:k]), p)
+            d === nothing || (vals[v] = fl(d[1]))
+        end
     end
     return _json((index = i, id = m.ids[k], lon = m.lon[k], lat = m.lat[k],
                   elevation = fl(m.elevation[k]), base = fl(m.base[k]), frame = fid, values = vals))
 end
 
-function _series(s::VisServer, i, var)
+function _series(s::VisServer, i, var, params::HazardParams = HazardParams())
     m = s.mesh
     (m === nothing || i === nothing || !(0 <= i < m.n_cells)) && return _text(404, "No such cell")
-    r = series_data(s, i + 1, String(var))
+    r = series_data(s, i + 1, String(var); params)
     r === nothing && return _text(404, "No variable $var")
     ids, t, vals = r
     return _json((index = i, id = m.ids[i + 1], var = var, frames = ids, t = t,

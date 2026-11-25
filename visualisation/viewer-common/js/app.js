@@ -31,14 +31,36 @@ import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
 import { renderRun, renderAbout, shellLine } from './info.js';
 import { TimePlot, SERIES_COLORS, MAX_SERIES, freeSlot, isClick, seriesValues, seriesCsv, nearestIndex } from './plot.js';
+import { CLASS_SETS, classify, classOf, classLabels, classedName, classColors, parseBreaks } from './classes.js';
+import { DEFAULT_HAZARD, LAND_USES, PERSON_PRESETS, normalizeHazard, hazardQuery, describeHazard } from './hazard.js';
 
-// source: the frame variable read; stat: its name in /api/ranges; colormap: the default palette
+// source: the variable read from the server; stat: its name in /api/ranges;
+// colormap: the default palette; kind: 'frame' (a frame variable), 'derived'
+// (a hazard variable the server derives from depth and speed, with the hazard
+// parameters) or 'static' (a statistic over the run, /api/stats: no time);
+// classes: its class set (classes.js), shown classed by default if
+// classedDefault, always if classedOnly; time: values are times (s).
+const T = COLOR_MODE.texture;
 const VARS = {
-  depth:      { label: 'Water depth',     unit: 'm',   source: 'water_depth', stat: 'water_depth', cmode: COLOR_MODE.depth,   colormap: 'depth',   fixed: null },
-  level:      { label: 'Water level',     unit: 'm',   source: 'water_depth', stat: 'level',       cmode: COLOR_MODE.level,   colormap: 'viridis', fixed: null },
-  speed:      { label: 'Speed',           unit: 'm/s', source: 'velocity',    stat: 'velocity',    cmode: COLOR_MODE.texture, colormap: 'magma',   fixed: null },
-  saturation: { label: 'Wetted fraction', unit: '',    source: 'saturation',  stat: 'saturation',  cmode: COLOR_MODE.texture, colormap: 'blues',   fixed: [0, 1] },
+  depth:      { label: 'Water depth',     unit: 'm',   source: 'water_depth', stat: 'water_depth', cmode: COLOR_MODE.depth, colormap: 'depth',   fixed: null, kind: 'frame', classes: 'depth' },
+  level:      { label: 'Water level',     unit: 'm',   source: 'water_depth', stat: 'level',       cmode: COLOR_MODE.level, colormap: 'viridis', fixed: null, kind: 'frame' },
+  speed:      { label: 'Speed',           unit: 'm/s', source: 'velocity',    stat: 'velocity',    cmode: T, colormap: 'magma',   fixed: null, kind: 'frame' },
+  saturation: { label: 'Wetted fraction', unit: '',    source: 'saturation',  stat: 'saturation',  cmode: T, colormap: 'blues',   fixed: [0, 1], kind: 'frame' },
+  dv:         { label: 'Depth × velocity', unit: 'm²/s', source: 'depth_velocity', stat: 'depth_velocity', cmode: T, colormap: 'magma', fixed: null, kind: 'derived', classes: 'depth_velocity' },
+  hr:         { label: 'Hazard rating (Defra)', unit: '', source: 'hazard_rating', stat: 'hazard_rating', cmode: T, colormap: 'turbo', fixed: null, kind: 'derived', classes: 'hazard_rating', classedDefault: true },
+  arr:        { label: 'Hazard class (ARR H1–H6)', unit: '', source: 'hazard_class_arr', stat: 'hazard_class_arr', cmode: T, colormap: 'turbo', fixed: null, kind: 'derived', classes: 'hazard_class_arr', classedOnly: true },
+  hd:         { label: 'Hazard degree (Chen et al.)', unit: '', source: 'hazard_degree', stat: 'hazard_degree', cmode: T, colormap: 'magma', fixed: [0, 1], kind: 'derived' },
+  max_depth:  { label: 'Maximum depth',   unit: 'm',   source: 'max_water_depth', cmode: T, colormap: 'depth', fixed: null, kind: 'static', classes: 'depth' },
+  max_speed:  { label: 'Maximum speed',   unit: 'm/s', source: 'max_velocity', cmode: T, colormap: 'magma', fixed: null, kind: 'static' },
+  max_dv:     { label: 'Maximum D·V',     unit: 'm²/s', source: 'max_depth_velocity', cmode: T, colormap: 'magma', fixed: null, kind: 'static', classes: 'depth_velocity' },
+  max_hr:     { label: 'Maximum hazard rating (Defra)', unit: '', source: 'max_hazard_rating', cmode: T, colormap: 'turbo', fixed: null, kind: 'static', classes: 'hazard_rating', classedDefault: true },
+  max_arr:    { label: 'Maximum hazard class (ARR)', unit: '', source: 'max_hazard_class_arr', cmode: T, colormap: 'turbo', fixed: null, kind: 'static', classes: 'hazard_class_arr', classedOnly: true },
+  max_hd:     { label: 'Maximum hazard degree (Chen et al.)', unit: '', source: 'max_hazard_degree', cmode: T, colormap: 'magma', fixed: [0, 1], kind: 'static' },
+  t_first:    { label: 'Time of first flooding', unit: 's', source: 'time_first_flooded', cmode: T, colormap: 'viridis', fixed: null, kind: 'static', time: true },
+  duration:   { label: 'Duration of flooding', unit: 's', source: 'flood_duration', cmode: T, colormap: 'viridis', fixed: null, kind: 'static', time: true },
 };
+const VAR_GROUPS = [['frame', 'Each frame'], ['derived', 'Hazard (each frame)'], ['static', 'Over the run (no time)']];
+const isStatic = name => VARS[name]?.kind === 'static';
 
 /** Palettes offered for the water and for the bed (default 'terrain'). */
 const PALETTES = COLORMAP_NAMES.filter(n => n !== 'terrain');
@@ -70,7 +92,13 @@ export function startViewer(engine) {
     offset: 0, offsetJob: 0, bedRange: { mode: 'auto', min: 0, max: 1 }, tab: 'layers', about: null, run: null,
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
     plot: { series: [], varName: null, dock: 'bottom', chart: null, timer: null, ctxCell: -1 }, chartLib: null,
+    hazard: loadHazard(), stats: new Map(), statsAt: -Infinity, classBuf: null,
   };
+
+  /** The hazard parameters saved in this browser (defaults otherwise). */
+  function loadHazard() {
+    try { return normalizeHazard(JSON.parse(store.get('flooda5.hazard') || '{}')); } catch { return normalizeHazard({}); }
+  }
 
   document.body.insertAdjacentHTML('beforeend', UI_HTML);
 
@@ -136,14 +164,18 @@ export function startViewer(engine) {
     return r.json();
   }
 
+  /** Is `name` (a server variable) a hazard variable, which needs the hazard parameters? */
+  const isDerivedSource = name => Object.values(VARS).some(v => v.kind === 'derived' && v.source === name);
+
   /** Frame variable data (cached; concurrent requests share one fetch). */
   async function getVar(id, name) {
-    const key = `${id}/${name}`;
+    const q = isDerivedSource(name) ? `?${hazardQuery(app.hazard)}` : '';
+    const key = `${id}/${name}${q}`;
     const hit = app.cache.get(key);
     if (hit) return hit;
     if (app.pending.has(key)) return app.pending.get(key);
     const p = (async () => {
-      const r = await fetchRetry(`/api/frames/${id}/${name}`);
+      const r = await fetchRetry(`/api/frames/${id}/${name}${q}`);
       if (!r.ok) {
         if (r.status === 404) return null;
         throw new Error(`frame ${id} ${name}: HTTP ${r.status}`);
@@ -153,6 +185,26 @@ export function startViewer(engine) {
       return a;
     })().finally(() => app.pending.delete(key));
     app.pending.set(key, p);
+    return p;
+  }
+
+  /**
+   * A statistic over the run (/api/stats/{name}, with the hazard parameters):
+   * cached for the parameters and, live, until frames arrive.
+   */
+  async function getStat(name) {
+    const key = `${name}?${hazardQuery(app.hazard)}`;
+    if (app.stats.has(key)) return app.stats.get(key);
+    const p = (async () => {
+      const r = await fetchRetry(`/api/stats/${key}`);
+      if (!r.ok) {
+        if (r.status === 404) return null;
+        throw new Error(`statistic ${name}: HTTP ${r.status}`);
+      }
+      return decodeFloat32(await r.arrayBuffer(), app.mesh.nCells);
+    })();
+    app.stats.set(key, p);
+    p.catch(() => app.stats.delete(key));
     return p;
   }
 
@@ -419,18 +471,29 @@ export function startViewer(engine) {
     return app.render.promise;
   }
 
+  /** The values the surface is coloured by: class indices when classed. */
+  function colorValues(raw) {
+    if (!raw || !classedNow()) return raw;
+    const b = breaksOf(VARS[app.varName].classes);
+    if (!app.classBuf || app.classBuf.length !== raw.length) app.classBuf = new Float32Array(raw.length);
+    return classify(raw, b, app.classBuf);
+  }
+
   async function renderFrame(i) {
     const f = app.frames.at(i);
     if (!f || !app.water) return;
     const v = VARS[app.varName];
     const t0 = performance.now();
-    const [depth, cv] = await Promise.all([
+    if (v.kind === 'static') return renderStatic(i, t0);
+    const [depth, cv0] = await Promise.all([
       getVar(f.id, 'water_depth'),
       v.cmode === COLOR_MODE.texture ? getVar(f.id, v.source) : Promise.resolve(null),
     ]);
     if (!depth) { log(`Frame ${f.id} has no water depth`, 'warn'); return; }
+    if (VARS[app.varName] !== v) return;                     // the variable changed meanwhile
+    const cv = cv0 ?? (classedNow() ? depth : null);        // classed depth: coloured by class
     app.water.setDepth(depth);
-    if (cv) app.water.setColorValues(cv);
+    if (cv) app.water.setColorValues(colorValues(cv));
     app.depth = depth; app.cvals = cv;
     app.current = i;
     status.shownFrame = f.id; status.renders++; status.lastRenderMs = performance.now() - t0;
@@ -441,9 +504,32 @@ export function startViewer(engine) {
     if (app.playing) prefetch(i + 1);
   }
 
+  /**
+   * A statistic over the run: the surface at each cell's maximum depth (cells
+   * without a value, e.g. never flooded, are left out), coloured by the
+   * statistic. Frame index i is kept for when a frame variable is chosen again.
+   */
+  async function renderStatic(i, t0) {
+    const v = VARS[app.varName];
+    const [hmax, cv] = await Promise.all([getStat('max_water_depth'), getStat(v.source)]);
+    if (VARS[app.varName] !== v) return;
+    if (!hmax || !cv) { log(`${v.label} is not available for this run`, 'warn'); return; }
+    const depth = new Float32Array(hmax.length);
+    for (let k = 0; k < depth.length; k++) depth[k] = Number.isFinite(cv[k]) ? hmax[k] : 0;
+    app.water.setDepth(depth);
+    app.water.setColorValues(colorValues(cv));
+    app.depth = depth; app.cvals = cv;
+    if (i >= 0) app.current = i;
+    status.shownFrame = null; status.static = v.source; status.renders++;
+    status.lastRenderMs = performance.now() - t0;
+    updateRange();
+    updateStats();
+    updateTimeline();
+  }
+
   function prefetch(i) {
     const f = app.frames.at(i);
-    if (!f) return;
+    if (!f || isStatic(app.varName)) return;
     getVar(f.id, 'water_depth').catch(() => {});
     const v = VARS[app.varName];
     if (v.cmode === COLOR_MODE.texture) getVar(f.id, v.source).catch(() => {});
@@ -454,20 +540,131 @@ export function startViewer(engine) {
   // -------------------------------------------------------------------------
 
   function availableVars() {
-    const have = new Set(app.info?.vars || []);
-    return Object.keys(VARS).filter(k => have.size === 0 || have.has(VARS[k].source));
+    const i = app.info || {};
+    const have = new Set([...(i.vars || []), ...(i.derived || []), ...(i.stats || [])]);
+    const known = (i.vars || []).length > 0;
+    return Object.keys(VARS).filter(k => (VARS[k].kind === 'frame' && !known) || have.has(VARS[k].source));
   }
 
   function populateVars() {
     const sel = $('var'), cur = sel.value || app.varName;
+    const avail = availableVars();
     sel.innerHTML = '';
-    for (const k of availableVars()) {
-      const o = document.createElement('option');
-      o.value = k; o.textContent = `${VARS[k].label}${VARS[k].unit ? ` (${VARS[k].unit})` : ''}`;
-      sel.appendChild(o);
+    for (const [kind, title] of VAR_GROUPS) {
+      const ks = avail.filter(k => VARS[k].kind === kind);
+      if (!ks.length) continue;
+      const g = document.createElement('optgroup');
+      g.label = title;
+      for (const k of ks) {
+        const o = document.createElement('option');
+        o.value = k; o.textContent = `${VARS[k].label}${VARS[k].unit && !VARS[k].time ? ` (${VARS[k].unit})` : ''}`;
+        g.appendChild(o);
+      }
+      sel.appendChild(g);
     }
-    sel.value = availableVars().includes(cur) ? cur : 'depth';
+    sel.value = avail.includes(cur) ? cur : 'depth';
     app.varName = sel.value;
+    $('hazard-section').hidden = !avail.some(k => VARS[k].kind !== 'frame');
+  }
+
+  // -------------------------------------------------------------------------
+  // Classes and hazard parameters
+  // -------------------------------------------------------------------------
+
+  /** Whether the variable shown is drawn in classes. */
+  function classedNow(name = app.varName) {
+    const v = VARS[name];
+    if (!v?.classes) return false;
+    if (v.classedOnly) return true;
+    const s = store.get(`flooda5.classed.${name}`);
+    return s === null ? !!v.classedDefault : s === '1';
+  }
+
+  /** The breaks of class set `set` (the user's, else its defaults). */
+  function breaksOf(set) {
+    const cs = CLASS_SETS[set];
+    if (!cs.editable) return cs.breaks;
+    return parseBreaks(store.get(`flooda5.breaks.${set}`)) || cs.breaks;
+  }
+
+  /** Classed legend: one swatch and label per class. */
+  function renderClassLegend() {
+    const v = VARS[app.varName], on = classedNow();
+    $('legend-classes').hidden = !on;
+    $('class-row').hidden = !v.classes || !!v.classedOnly;
+    $('show-classes').checked = on;
+    const editable = on && CLASS_SETS[v.classes].editable;
+    $('breaks-row').hidden = !editable;
+    if (!on) return;
+    const b = breaksOf(v.classes), labels = classLabels(v.classes, b), k = b.length + 1;
+    const cols = classColors(CLASS_SETS[v.classes].ramp, k);
+    const el = $('legend-classes');
+    el.innerHTML = '';
+    for (let i = k - 1; i >= 0; i--) {             // highest class first
+      const row = document.createElement('div');
+      row.className = 'class';
+      const sw = document.createElement('span'); sw.className = 'swatch';
+      sw.style.background = `rgb(${cols[i].join(',')})`;
+      const lab = document.createElement('span'); lab.textContent = labels[i];
+      row.append(sw, lab);
+      el.appendChild(row);
+    }
+    if (editable && document.activeElement !== $('breaks')) $('breaks').value = b.join(', ');
+  }
+
+  function setClassed(on) {
+    const v = VARS[app.varName];
+    if (!v.classes || v.classedOnly) return;
+    store.set(`flooda5.classed.${app.varName}`, on ? '1' : '0');
+    applyVar();
+    rerender();
+  }
+
+  function setBreaks(text) {
+    const v = VARS[app.varName];
+    if (!v.classes || !CLASS_SETS[v.classes].editable) return false;
+    const b = text === null ? CLASS_SETS[v.classes].breaks : parseBreaks(text);
+    if (!b) { log(`Breaks "${text}": give increasing numbers, e.g. 0.75, 1.25, 2`, 'warn'); return false; }
+    store.set(`flooda5.breaks.${v.classes}`, b.join(', '));
+    $('breaks').value = b.join(', ');
+    applyVar();
+    rerender();
+    return true;
+  }
+
+  /** Show the shown frame (or statistic) again, e.g. after a style or parameter change. */
+  function rerender() {
+    if (app.current >= 0 || isStatic(app.varName)) showFrame(Math.max(app.current, 0));
+  }
+
+  function populateHazard() {
+    const lu = $('hz-landuse');
+    lu.innerHTML = LAND_USES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+    $('hz-person').innerHTML = [...Object.entries(PERSON_PRESETS).map(([k, p]) => `<option value="${k}">${p.label}</option>`),
+                                '<option value="custom">your own</option>'].join('');
+    showHazard();
+  }
+
+  function showHazard() {
+    const h = app.hazard;
+    $('hz-landuse').value = h.landuse; $('hz-person').value = h.person;
+    for (const k of ['mass', 'height', 'theta', 'alpha', 'beta', 'flood_depth']) $(`hz-${k}`).value = String(h[k]);
+    $('hz-mass').disabled = $('hz-height').disabled = h.person !== 'custom';
+    status.hazard = { ...h };
+  }
+
+  /** Set hazard parameters (a partial object), save them and redraw what depends on them. */
+  function setHazard(p) {
+    const next = normalizeHazard({ ...app.hazard, ...p });
+    if (JSON.stringify(next) === JSON.stringify(app.hazard)) { showHazard(); return; }
+    app.hazard = next;
+    store.set('flooda5.hazard', JSON.stringify(next));
+    showHazard();
+    log(`Hazard parameters: ${describeHazard(next)}`);
+    app.stats.clear();
+    if (VARS[app.varName].kind !== 'frame') { refreshRanges(true); rerender(); }
+    else app.runRanges && refreshRanges(true);
+    if (app.plot.series.length && VARS[plotVar()].kind === 'derived') reloadSeries();
   }
 
   /** The palette of variable `name` (chosen in the palette menu, else its default). */
@@ -477,16 +674,25 @@ export function startViewer(engine) {
   }
 
   function applyVar() {
-    const v = VARS[app.varName], cmap = paletteOf();
+    const v = VARS[app.varName], classed = classedNow();
+    const cmap = classed ? classedName(v.classes, breaksOf(v.classes).length + 1) : paletteOf();
     $('legend-bar').style.background = cssGradient(cmap);
-    $('legend-bar').title = `Colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
-    $('legend-unit').textContent = v.unit;
-    app.water?.setStyle({ cmode: v.cmode, colormap: cmap });
-    status.palette = cmap;
+    $('legend-bar').title = classed ? `Classes: ${CLASS_SETS[v.classes].title}`
+                                    : `Colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
+    $('legend-bar').disabled = classed;
+    $('legend-unit').textContent = v.time ? 'time' : v.unit;
+    $('legend-labels').hidden = classed;
+    $('range-row').hidden = classed;
+    $('range-fixed').hidden = classed || app.range.mode !== 'fixed';
+    app.water?.setStyle({ cmode: classed ? COLOR_MODE.texture : v.cmode, colormap: cmap });
+    status.palette = cmap; status.classed = classed;
+    if (v.kind !== 'static') status.static = null;
+    renderClassLegend();
+    updateTimeline();
   }
 
   function setPalette(name) {
-    if (!PALETTES.includes(name)) return;
+    if (!PALETTES.includes(name) || classedNow()) return;
     store.set(`flooda5.palette.${app.varName}`, name);
     applyVar();
     closePaletteMenu();
@@ -590,7 +796,7 @@ export function startViewer(engine) {
     app.rangesAt = now;
     try {
       const th = Math.max(+$('min-depth').value || 0, 0);
-      const r = await fetchJson(`/api/ranges?wet=${th}`);
+      const r = await fetchJson(`/api/ranges?wet=${th}&${hazardQuery(app.hazard)}`);
       app.runRanges = r; status.ranges = r;
       if (app.range.mode === 'run') updateRange();
     } catch (e) {
@@ -600,8 +806,13 @@ export function startViewer(engine) {
 
   function updateRange() {
     const v = VARS[app.varName];
+    if (classedNow()) {                     // class indices 0 … k−1
+      const k = breaksOf(v.classes).length + 1;
+      app.water?.setStyle({ cmin: -0.5, cmax: k - 0.5 });
+      return;
+    }
     let lo, hi;
-    const run = app.runRanges?.vars?.[v.stat];
+    const run = v.stat ? app.runRanges?.vars?.[v.stat] : null;    // (a statistic: its own map is the run)
     if (v.fixed) [lo, hi] = v.fixed;
     else if (app.range.mode === 'fixed') { lo = app.range.min; hi = app.range.max; }
     else if (app.range.mode === 'run' && run && Number.isFinite(run.p02) && Number.isFinite(run.p98)) {
@@ -614,14 +825,15 @@ export function startViewer(engine) {
                  : app.varName === 'depth' ? sampleWet(i => d[i])
                  : cv ? sampleWet(i => cv[i]) : [];
       if (vals.length) {
-        lo = app.varName === 'level' ? finiteQuantile(vals, 0.01) : 0;
+        lo = app.varName === 'level' || v.time ? finiteQuantile(vals, 0.01) : 0;
         hi = finiteQuantile(vals, 0.99);
       } else { lo = 0; hi = 1; }
-      if (!(hi > lo)) hi = lo + (app.varName === 'level' ? 1 : 0.1);
+      if (!(hi > lo)) hi = lo + (app.varName === 'level' ? 1 : v.time ? 60 : 0.1);
       app.range.min = lo; app.range.max = hi;
     } else return;
     app.water.setStyle({ cmin: lo, cmax: hi });
-    const fmt = x => (Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 10 ? x.toFixed(1) : x.toFixed(2));
+    const fmt = v.time ? formatTime
+      : x => (Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 10 ? x.toFixed(1) : x.toFixed(2));
     $('legend-min').textContent = fmt(lo);
     $('legend-max').textContent = fmt(hi);
   }
@@ -635,7 +847,7 @@ export function startViewer(engine) {
     $('stat-wet').textContent = wet.toLocaleString();
     $('stat-max').textContent = `${max.toFixed(2)} m`;
     const f = app.frames.at(app.current);
-    $('stat-time').textContent = f ? formatTime(f.t) : '–';
+    $('stat-time').textContent = isStatic(app.varName) ? 'whole run' : f ? formatTime(f.t) : '–';
   }
 
   function updateTimeline() {
@@ -647,9 +859,15 @@ export function startViewer(engine) {
     if (at >= 0 && !app.scrubbing) tl.value = String(at);
     $('stat-frames').textContent = n.toLocaleString();
     const f = app.frames.at(app.current);
-    $('time-label').textContent = f ? `t = ${formatTime(f.t)}   frame ${app.current + 1} / ${n}` : `${n} frames`;
+    const stat = isStatic(app.varName);
+    $('time-label').textContent = stat
+      ? `over the run: ${n} frames${n ? `, ${formatTime(app.frames.at(0).t)} – ${formatTime(app.frames.last().t)}` : ''}`
+      : f ? `t = ${formatTime(f.t)}   frame ${app.current + 1} / ${n}` : `${n} frames`;
     const done = app.complete || app.mode === 'replay';
-    $('btn-live').disabled = done;
+    // a statistic has no time: no slider, no playback
+    for (const id of ['timeline', 'btn-start', 'btn-back', 'btn-play', 'btn-fwd', 'btn-end', 'speed']) $(id).disabled = stat;
+    $('playbar').classList.toggle('static', stat);
+    $('btn-live').disabled = done || stat;
     $('btn-live').classList.toggle('active', app.live && !done);
     $('btn-live').textContent = done ? '■ END' : '● LIVE';
   }
@@ -700,18 +918,22 @@ export function startViewer(engine) {
           status.frames = app.frames.length;
           if (app.info && !(app.info.vars || []).length) await refreshInfo();
           updateTimeline();
-          if (app.live && app.mesh) showFrame(app.frames.length - 1);
+          if (isStatic(app.varName)) refreshStatic();
+          else app.stats.clear();
+          if (!isStatic(app.varName) && app.live && app.mesh) showFrame(app.frames.length - 1);
           refreshRanges();
           schedulePlotRefresh();
         }
         break;
       case 'reindex':
+        app.stats.clear();
         await refreshFrames();
         schedulePlotRefresh(0);
         break;
       case 'complete':
         app.complete = true; status.complete = true;
         log(`Run complete: ${msg.frames} frames`);
+        app.stats.clear();
         await refreshFrames();
         refreshRanges(true);
         schedulePlotRefresh(0);
@@ -729,6 +951,15 @@ export function startViewer(engine) {
     if (!$('plot').hidden) populatePlotVars();
   }
 
+  /** A live run's statistics are recomputed as frames arrive: at most every 10 s. */
+  function refreshStatic() {
+    const now = performance.now();
+    if (now - app.statsAt < 10000) return;
+    app.statsAt = now;
+    app.stats.clear();
+    rerender();
+  }
+
   function setLive(on) {
     if (on && (app.complete || app.mode === 'replay')) on = false;
     app.live = on;
@@ -737,7 +968,7 @@ export function startViewer(engine) {
   }
 
   function startPlay() {
-    if (app.frames.length < 2) return;
+    if (app.frames.length < 2 || isStatic(app.varName)) return;
     setLive(false);
     if (app.target >= app.frames.length - 1) showFrame(0);
     app.playing = true; app.playAcc = 0;
@@ -813,7 +1044,15 @@ export function startViewer(engine) {
       ['Bed', `${f2(m.elevation[i])} m`],
     ];
     const v = VARS[app.varName];
-    if (v.cmode === COLOR_MODE.texture && app.cvals) rows.push([v.label, `${f2(app.cvals[i])} ${v.unit}`]);
+    if ((v.cmode === COLOR_MODE.texture || classedNow()) && app.cvals) {
+      const x = app.cvals[i];
+      let txt = v.time ? (Number.isFinite(x) ? formatTime(x) : 'never') : `${f2(x)} ${v.unit}`;
+      if (classedNow()) {
+        const c = classOf(x, breaksOf(v.classes));
+        if (c >= 0) txt += ` · ${classLabels(v.classes, breaksOf(v.classes))[c]}`;
+      }
+      rows.push([v.label, txt]);
+    }
     tip.innerHTML = rows.map(([k, val]) => `<div><span class="k">${k}</span> ${val}</div>`).join('');
     tip.style.left = `${cx + 14}px`; tip.style.top = `${cy + 10}px`;
     tip.hidden = false;
@@ -837,17 +1076,29 @@ export function startViewer(engine) {
     return app.chartLib;
   }
 
-  function plotVar() { return app.plot.varName || app.varName; }
+  function plotVar() {
+    const v = app.plot.varName || app.varName;
+    return isStatic(v) ? 'depth' : v;            // statistics have no time series
+  }
 
+  /** The plot's variables: those with a value per frame (frame and hazard variables, not statistics). */
   function populatePlotVars() {
     const sel = $('plot-var'), cur = plotVar();
+    const avail = availableVars().filter(k => !isStatic(k));
     sel.innerHTML = '';
-    for (const k of availableVars()) {
-      const o = document.createElement('option');
-      o.value = k; o.textContent = `${VARS[k].label}${VARS[k].unit ? ` (${VARS[k].unit})` : ''}`;
-      sel.appendChild(o);
+    for (const [kind, title] of VAR_GROUPS) {
+      const ks = avail.filter(k => VARS[k].kind === kind);
+      if (!ks.length) continue;
+      const g = document.createElement('optgroup');
+      g.label = title;
+      for (const k of ks) {
+        const o = document.createElement('option');
+        o.value = k; o.textContent = `${VARS[k].label}${VARS[k].unit ? ` (${VARS[k].unit})` : ''}`;
+        g.appendChild(o);
+      }
+      sel.appendChild(g);
     }
-    sel.value = availableVars().includes(cur) ? cur : 'depth';
+    sel.value = avail.includes(cur) ? cur : 'depth';
     app.plot.varName = sel.value;
   }
 
@@ -930,7 +1181,8 @@ export function startViewer(engine) {
 
   async function loadSeries(s) {
     const src = VARS[plotVar()].source;
-    const r = await fetchJson(`/api/series/${s.cell}?var=${encodeURIComponent(src)}`);
+    const q = isDerivedSource(src) ? `&${hazardQuery(app.hazard)}` : '';
+    const r = await fetchJson(`/api/series/${s.cell}?var=${encodeURIComponent(src)}${q}`);
     s.id = r.id; s.t = r.t; s.raw = r.values; s.source = src;
   }
 
@@ -1069,10 +1321,21 @@ export function startViewer(engine) {
   function wireControls() {
     $('panel-toggle').onclick = () => $('panel').classList.toggle('collapsed');
     $('var').onchange = () => {
+      const was = isStatic(app.varName);
       app.varName = $('var').value;
+      if (isStatic(app.varName)) { stopPlay(); setLive(false); }
       applyVar();
-      if (app.current >= 0) showFrame(app.current);
+      if (app.current >= 0 || isStatic(app.varName) || was) rerender();
     };
+    $('show-classes').onchange = () => setClassed($('show-classes').checked);
+    $('breaks').onchange = () => setBreaks($('breaks').value);
+    $('breaks-reset').onclick = () => setBreaks(null);
+    $('hz-landuse').onchange = () => setHazard({ landuse: $('hz-landuse').value });
+    $('hz-person').onchange = () => setHazard({ person: $('hz-person').value });
+    for (const k of ['mass', 'height', 'theta', 'alpha', 'beta', 'flood_depth']) {
+      $(`hz-${k}`).onchange = () => setHazard({ [k]: +$(`hz-${k}`).value });
+    }
+    $('hz-reset').onclick = () => setHazard({ theta: DEFAULT_HAZARD.theta, alpha: DEFAULT_HAZARD.alpha, beta: DEFAULT_HAZARD.beta });
     $('range-mode').onchange = () => {
       app.range.mode = $('range-mode').value;
       $('range-fixed').hidden = app.range.mode !== 'fixed';
@@ -1210,6 +1473,10 @@ export function startViewer(engine) {
                                                                x: parseFloat(el.style.left), y: parseFloat(el.style.top) })),
     rightClick: (x, y) => { const r = engine.canvas.getBoundingClientRect(); openCtxMenu(r.left + x, r.top + y, x, y); },
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
+    setHazard: p => setHazard(p || {}),
+    setClassed: on => setClassed(!!on),
+    setBreaks: text => setBreaks(text),
+    vars: () => availableVars(),
     setDepthBias: f => app.water?.setStyle({ depthBias: f }),
     play: () => startPlay(),
     tilesLoaded: () => engine.tilesLoaded(),
@@ -1227,6 +1494,7 @@ export function startViewer(engine) {
 
   (async () => {
     wireControls();
+    populateHazard();
     $('show-borders').checked = store.get('flooda5.borders') === '1';
     app.plot.dock = store.get('flooda5.plot.dock') === 'right' ? 'right' : 'bottom';
     const bo = +store.get('flooda5.bed.opacity');

@@ -1,5 +1,8 @@
 // colormaps.js — colour maps for the globe viewer, as 256-entry RGBA8 lookup
 // tables (uploaded as a texture) and CSS gradients for the legend. Pure.
+// Names 'cls:<set>:<k>' are classed (stepped) tables: classes.js.
+
+import { parseClassedName, classTable, classGradient } from './classes.js';
 
 // Control points [t, r, g, b] (0–1 / 0–255), interpolated linearly.
 const MAPS = {
@@ -46,6 +49,8 @@ export function colorAt(name, t) {
 
 /** 256 × 1 RGBA8 lookup table for map `name`. */
 export function colormapTable(name, n = 256) {
+  const cls = parseClassedName(name);
+  if (cls) return classTable(cls.set, cls.k, n);
   const out = new Uint8Array(4 * n);
   for (let i = 0; i < n; i++) {
     const [r, g, b] = colorAt(name, i / (n - 1));
@@ -56,6 +61,8 @@ export function colormapTable(name, n = 256) {
 
 /** CSS linear-gradient for a legend bar. */
 export function cssGradient(name, stops = 9) {
+  const cls = parseClassedName(name);
+  if (cls) return classGradient(cls.set, cls.k);
   const parts = [];
   for (let i = 0; i < stops; i++) {
     const t = i / (stops - 1);
