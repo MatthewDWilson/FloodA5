@@ -138,6 +138,18 @@ export class CesiumEngine {
     return { lon: C.Math.toDegrees(c.longitude), lat: C.Math.toDegrees(c.latitude) };
   }
 
+  /** Canvas pixels of (lon, lat, h), or null when behind the globe or the camera. */
+  project(lon, lat, h) {
+    const C = window.Cesium, scene = this.viewer.scene;
+    const p = C.Cartesian3.fromDegrees(lon, lat, h);
+    this._occluder ??= new C.EllipsoidalOccluder(C.Ellipsoid.WGS84);
+    this._occluder.cameraPosition = scene.camera.positionWC;
+    if (!this._occluder.isPointVisible(p)) return null;
+    const toWindow = C.SceneTransforms.worldToWindowCoordinates || C.SceneTransforms.wgs84ToWindowCoordinates;
+    const w = toWindow(scene, p);
+    return w && Number.isFinite(w.x) && Number.isFinite(w.y) ? { x: w.x, y: w.y } : null;
+  }
+
   async sampleBasemapHeights(points, surfaces) {
     const C = window.Cesium;
     const cartos = points.map(p => C.Cartographic.fromDegrees(p.lon, p.lat));

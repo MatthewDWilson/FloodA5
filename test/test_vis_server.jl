@@ -125,6 +125,18 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             cfg = json_(port, "/api/config")
             @test cfg["protocol"] == 2 && cfg["vertical_offset"] == 1.5
             @test endswith(cfg["cesium_url"], "/") && haskey(cfg, "ion_token")
+            @test occursin("chart.js@", cfg["chartjs_url"])
+
+            # a cell's series over the live frames (time-series plots)
+            sr = json_(port, "/api/series/1?var=water_depth")
+            @test sr["index"] == 1 && sr["id"] == "c2" && sr["var"] == "water_depth"
+            @test sr["frames"] == [id1, id2] && sr["t"] == [10.0, 20.0]
+            @test Float32.(sr["values"]) == Float32[0.5, 0.6]
+            @test Float32.(json_(port, "/api/series/2?var=velocity")["values"]) == Float32[0.2, 0.3]
+            @test json_(port, "/api/series/0")["var"] == "water_depth"           # the default variable
+            @test get_(port, "/api/series/1?var=nonesuch").status == 404
+            @test get_(port, "/api/series/3").status == 404
+            @test get_(port, "/api/series/x").status == 404
 
             # the run record (Run tab) and the variable descriptions (About tab)
             @test isempty(json_(port, "/api/run"))                       # none set yet
@@ -249,6 +261,10 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test reads[] == 1                       # cached
             @test get_(port, "/api/frames/4/water_depth").status == 404
             @test json_(port, "/api/info")["mode"] == "replay"
+            # series without a series reader: frame by frame (k, k+1, k+2 at cell 2 → k+1)
+            sr = json_(port, "/api/series/1?var=water_depth")
+            @test sr["frames"] == [1, 2, 3] && sr["t"] == [0.0, 60.0, 120.0] && sr["values"] == [2, 3, 4]
+            @test get_(port, "/api/series/1?var=velocity").status == 404
             # ranges over a replay: frames k = 1, 2, 3 hold k, k+1, k+2
             rr = json_(port, "/api/ranges")
             @test rr["complete"] == true && rr["frames"] == 3 && rr["wet"] == 0.05

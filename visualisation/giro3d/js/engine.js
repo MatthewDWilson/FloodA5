@@ -210,6 +210,17 @@ export class Giro3DEngine {
     return q ? this._toLonLat(q) : null;
   }
 
+  /** Canvas pixels of (lon, lat, h), or null when behind the globe or the camera. */
+  project(lon, lat, h) {
+    const cam = this.instance.view.camera, rect = this.canvas.getBoundingClientRect();
+    const p = ELL.toCartesian(lat, lon, h);
+    // below the horizon (a sphere through the point): hidden by the globe
+    if (cam.position.clone().sub(p).dot(p) < 0) return null;
+    const v = p.clone().project(cam);
+    if (!(v.z > -1 && v.z < 1)) return null;
+    return { x: (v.x + 1) / 2 * rect.width, y: (1 - v.y) / 2 * rect.height };
+  }
+
   /**
    * Basemap heights at points. Terrain: read from the Terrarium tiles. 3D
    * tiles: vertical rays onto the loaded tiles — so first look straight down

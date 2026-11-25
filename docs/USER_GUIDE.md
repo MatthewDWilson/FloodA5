@@ -570,6 +570,20 @@ output file gets). *About* describes each variable and the colour range,
 vertical offset, wet threshold and depth bias. The descriptions are in
 `io/variables.toml`, which the static figures' captions (§6.5) also use.
 
+**Time series at cells.** Right-click a cell on the map (a click — dragging
+with the right button still turns or zooms the view) and choose *Add cell N
+to plot*. A plot opens at the bottom of the window (⇆ docks it on the
+right instead); each further cell adds a line, up to eight, with a numbered
+marker of the same colour on the map. The plot has its own variable (depth,
+water level — drawn only where the cell is wet —, speed, wetted fraction)
+and shows the whole run, with a dashed line at the frame on the map; click
+the plot to go to that time. ✕ in the legend removes a line; *CSV*
+downloads the lines (time in seconds, one column per cell). In a live run
+the lines grow as frames arrive (the frames the viewer keeps: thinned in
+long runs). The plots use Chart.js, loaded from jsDelivr when the first
+plot opens; for offline use point `FLOODA5_CHARTJS_URL` at a local copy of
+`chart.umd.min.js` (from the `chart.js` package, served by any local web server).
+
 **Vertical offset.** Model heights are in the DEM's datum (usually mean sea
 level: a geoid); Google tiles and Cesium World Terrain use heights above the
 WGS84 ellipsoid. The *vertical offset* is added to every model height to

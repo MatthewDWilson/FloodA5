@@ -156,6 +156,23 @@ export const UI_HTML = `
   </div>
 </footer>
 
+<section id="plot" class="dock-bottom" aria-label="Time series" hidden>
+  <div class="plot-head">
+    <select id="plot-var" aria-label="Plotted variable"></select>
+    <div id="plot-legend" class="plot-legend"></div>
+    <button id="plot-csv" class="btn" type="button" title="Download the plotted series as CSV">CSV</button>
+    <button id="plot-dock" class="btn" type="button" title="Dock at the bottom or on the right">⇆</button>
+    <button id="plot-close" class="icon-btn" type="button" title="Close the plot (removes every line)">✕</button>
+  </div>
+  <div class="plot-body"><canvas id="plot-canvas"></canvas></div>
+  <p class="help plot-help">Right-click the map to add a cell; click the plot to go to that time.</p>
+</section>
+<div id="markers" aria-hidden="true"></div>
+<div id="ctx-menu" class="ctx-menu" role="menu" hidden>
+  <button id="ctx-add" type="button" role="menuitem">Add to plot</button>
+  <button id="ctx-remove" type="button" role="menuitem" hidden>Remove from plot</button>
+</div>
+
 <div id="credits"></div>
 <div id="tooltip" hidden></div>
 <div id="log"></div>

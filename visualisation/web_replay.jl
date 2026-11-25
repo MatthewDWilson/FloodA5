@@ -67,7 +67,8 @@ function web_replay_server(h5::AbstractString; port::Integer = 8080, viewer::Abs
         close(f); rethrow()
     end
     VS.set_mesh!(vis, payload)
-    VS.set_replay!(vis, run.t, vars, readvar)
+    readseries = (v, c) -> lock(() -> Float32.(FO.read_series(f, v, c)), iolock)
+    VS.set_replay!(vis, run.t, vars, readvar; series = readseries)
     rec = lock(() -> FO.run_record(f), iolock)
     rec["file"] = abspath(h5)
     rec["label"] = run.label
