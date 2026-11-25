@@ -33,6 +33,57 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.9] — 2026-11-25
+
+Hazard to people, statistics over the run and classed palettes in the globe
+viewers (branch `wpv-hazards`; PATCH: no solver change, results unchanged).
+Step 3 of the viewer plan (`projectinstructions/FloodA5_GlobeViewer_Plan_2026-11.md`).
+
+- `analysis/hazard.jl` (`FloodA5Analysis`; pure, also included by the
+  viewers' server so both use one implementation): `depth_velocity` (D·V);
+  `hazard_rating`, the Defra/EA HR = d (v + 0.5) + DF of FD2321/TR1 §3.5
+  with the debris factor of its Table 3.1 by land use (`pasture`,
+  `woodland`, `urban`), FD2320's precautionary 0.5 / 1 for any land use
+  (`fd2320`, the default) or none; `arr_hazard_class`, the Australian
+  combined hazard curves H1–H6 (AIDR Guideline 7-3 Table 2);
+  `chen_critical_velocity` and `hazard_degree`, HD = min(1, v / U_c) with
+  the incipient toppling velocity of Chen, Xia, Falconer & Guo (2019)
+  eq. (10) (person mass and height, θ, α, β; checked against their Fig. 6
+  and eq. (11) at θ = 90°); `derive_hazard` (elementwise, so a frame and a
+  cell's series derive alike); `run_statistics` — per-cell maxima of depth,
+  speed and each hazard, time of first flooding and duration of flooding
+  (depth ≥ `flood_depth`, default 0.1 m), at frame resolution; `HazardParams`
+  / `hazard_params`. On a run: `FA.hazard_field`, `FA.statistics_maps`.
+  Sources: FD2321/TR1 Table 3.1 and 3.2, FD2321/TR2 Table 3.1, and the
+  EA/HR Wallingford supplementary note of May 2008 (FD2320 thresholds
+  0.75 / 1.25 / 2.0; FD2321 used 2.5 for the last) were read from the
+  published PDFs; the ARR limits from AIDR Guideline 7-3 (2017). Reading of
+  FD2321's "d > 0.75 m and/or v > 2": the third debris row applies above
+  0.25 m when v > 2 m/s; shallower water keeps the first row.
+- Viewer server: hazard variables served as frame variables
+  (`/api/frames/{id}/hazard_rating?landuse=urban…`), in `/api/ranges` and
+  `/api/cell`; statistics at `/api/stats/{name}` (computed once per parameter
+  set off the server's thread; live runs: over the frames kept, recomputed
+  as frames arrive); `/api/info` lists `derived` and `stats`
+  (DATA_FORMATS §6). `/api/series` (0.8.8) gives hazard variables too,
+  derived from the cell's depth and speed series with the same parameters.
+- Viewers: the variable menu in groups (each frame / hazard / over the run);
+  *Hazard parameters* (land use, person preset or own mass and height,
+  Chen et al. calibration, flooded threshold), kept in the browser; a
+  statistic disables the time slider and playback and draws the water at
+  each cell's maximum depth. Classed palettes (`viewer-common/js/classes.js`)
+  with a class legend: depth bands, D·V (ARR limits), HR (FD2320 classes;
+  default for HR), ARR H1–H6 (always); editable breaks. The time-series
+  plot (0.8.8) offers the hazard variables (not the statistics) and
+  follows the hazard parameters.
+- `io/variables.toml`: the new variables and statistics (definitions,
+  classes, references, limitations — Chen et al. model toppling only, and
+  sit above some urban low-depth/high-velocity data; a land-use raster is a
+  later development), shown in *About* and in the static plots' captions;
+  `FloodA5Plots` maps accept `:depth_velocity`, `:hazard_rating`,
+  `:hazard_degree`, `:hazard_class_arr` (statistics: pass
+  `FA.statistics_maps(r)[name]` as the values).
+
 ## [0.8.8] — 2026-11-25
 
 Globe viewers: time series at cells (branch `wpv-series`; PATCH: no solver

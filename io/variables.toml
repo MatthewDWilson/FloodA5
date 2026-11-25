@@ -49,6 +49,82 @@ unit = "m"
 definition = "Ground elevation of the cell, sampled from the DEM at pixel centres (since 0.8.0), in the DEM's vertical datum."
 viewer = "Drawn as the bed surface (on by default on the flat basemaps) with its own palette, range and opacity."
 
+# --- Hazard to people (analysis/hazard.jl; derived from depth and speed) ---
+
+[variables.depth_velocity]
+label = "Depth × velocity"
+unit = "m²/s"
+definition = "Water depth times the cell's speed: a common measure of the hazard of floodwater to people, vehicles and buildings."
+notes = [
+  "Classes (optional): the D·V limits of the Australian combined hazard curves, 0.3, 0.6, 1.0 and 4.0 m²/s (AIDR Guideline 7-3, Table 2). The full H1–H6 classes also limit depth and velocity: see Hazard class (ARR).",
+]
+viewer = "Derived by the viewer's server from each frame's depth and speed."
+
+[variables.hazard_rating]
+label = "Hazard rating (Defra)"
+unit = ""
+definition = "Flood hazard rating HR = d (v + 0.5) + DF of Defra/Environment Agency R&D FD2321 (Flood Risks to People): d the depth (m), v the speed (m/s), DF a debris factor of 0, 0.5 or 1 by depth, velocity and land use."
+notes = [
+  "Debris factor: one land use for the whole run (Hazard parameters). The default is FD2320's precautionary factor for any land use (0.5 up to 0.25 m depth, 1 above); pasture/arable, woodland and urban follow FD2321/TR1 Table 3.1 (rows: up to 0.25 m; 0.25–0.75 m; over 0.75 m and/or over 2 m/s). A land-use raster sampled onto the mesh is a later development.",
+  "Classes (FD2320/TR2 Table 13.1, EA/HR Wallingford supplementary note, May 2008): below 0.75 low hazard (caution); 0.75–1.25 danger for some (children, the elderly, the infirm); 1.25–2.0 danger for most (the general public); above 2.0 danger for all (including the emergency services). FD2321/TR1 put the last threshold at 2.5. The breaks can be changed.",
+  "With DF > 0 even shallow water has HR ≥ DF: the method is precautionary.",
+]
+references = [
+  "HR Wallingford, FHRC Middlesex University, RPA (2006). Flood Risks to People Phase 2, FD2321/TR1 (methodology) and TR2 (guidance). Defra/Environment Agency.",
+  "Surendran, S., Gibbs, G., Wade, S., Udale-Clarke, H. (2008). Supplementary note on flood hazard ratings and thresholds for development planning and control purpose. Environment Agency / HR Wallingford.",
+]
+
+[variables.hazard_class_arr]
+label = "Hazard class (ARR H1–H6)"
+unit = ""
+definition = "Combined flood hazard curves of Australian Rainfall and Runoff: the lowest class whose limits on D·V, depth and velocity all hold. H1 (D·V ≤ 0.3 m²/s, d ≤ 0.3 m, v ≤ 2 m/s) generally safe; H2 (0.6, 0.5, 2) unsafe for small vehicles; H3 (0.6, 1.2, 2) unsafe for vehicles, children and the elderly; H4 (1.0, 2.0, 2) unsafe for vehicles and people; H5 (4.0, 4.0, 4.0) also buildings vulnerable to structural damage; H6 all building types vulnerable to failure."
+references = [
+  "AIDR (2017). Flood Hazard, Australian Disaster Resilience Handbook 7, Guideline 7-3, Tables 1 and 2 (after Smith et al. 2014).",
+  "Smith, G. P., Davey, E. K., Cox, R. J. (2014). Flood hazard. WRL Technical Report 2014/07, UNSW Water Research Laboratory.",
+]
+
+[variables.hazard_degree]
+label = "Hazard degree (Chen et al.)"
+unit = ""
+definition = "Hazard to a person standing in the flow, HD = min(1, v / Uc), from 0 (still) to 1 (the person is toppled): v the speed, Uc the incipient velocity for toppling of a person of the given mass and height in water of depth d (Chen, Xia, Falconer & Guo 2019, eq. 10 and 14)."
+notes = [
+  "Uc = α (d/hp)^β √( mp/(ρ d²) (γ cosθ + sinθ) − [a1 (d/hp)² + b1 d/hp] (a2 mp + b2) (γ cosθ/(d hp) + sinθ/d²) ), with body mass mp and height hp (Hazard parameters: adult 75.1 kg, 1.77 m; child 25.5 kg, 1.26 m; or your own), tilt θ = 75°, α = 3.064, β = 0.303 (the paper's recommended calibration), a1 = 0.735, b1 = 0.265, a2 = 1.015e-3 m³/kg, b2 = −4.927e-3 m³, γ = 10, ρ = 1000 kg/m³.",
+  "Only toppling (moment instability) is modelled, not sliding; buoyancy is included. Water as deep as the person (d ≥ hp) gives HD = 1. The curves lie above some urban data of low depth and high velocity (Russo et al. 2013; Martínez-Gomariz et al. 2016): in shallow fast flow the hazard may be underestimated.",
+]
+references = [
+  "Chen, Q., Xia, J., Falconer, R. A., Guo, P. (2019). Further improvement in a criterion for human stability in floodwaters. J. Flood Risk Management 12(3), e12486. doi:10.1111/jfr3.12486",
+  "Xia, J., Falconer, R. A., Wang, Y., Xiao, X. (2014). New criterion for the stability of a human body in floodwaters. J. Hydraulic Research 52(1), 93–104.",
+]
+
+# --- Statistics over the run (static maps; analysis/hazard.jl run_statistics) ---
+
+[variables.max_water_depth]
+label = "Maximum depth"
+unit = "m"
+definition = "The largest water depth of each cell over the run's output frames."
+viewer = "With any statistic shown, the time slider and playback are off; the water surface is drawn at its maximum depth over the run (cells never flooded are left out)."
+
+[variables.max_velocity]
+label = "Maximum speed"
+unit = "m/s"
+definition = "The largest speed of each cell over the run's output frames."
+
+[variables.max_hazard]
+label = "Maximum hazard"
+unit = ""
+definition = "The largest D·V, hazard rating, ARR hazard class or hazard degree of each cell over the run's output frames, each with the current hazard parameters."
+
+[variables.time_first_flooded]
+label = "Time of first flooding"
+unit = "s"
+definition = "Simulation time of the first output frame at which the cell's depth reaches the 'flooded if depth ≥' threshold (Hazard parameters, default 0.1 m). Cells never flooded have none."
+
+[variables.flood_duration]
+label = "Duration of flooding"
+unit = "s"
+definition = "Time during which the cell's depth is at or above the 'flooded if depth ≥' threshold: each output frame counts for the interval between the midpoints to its neighbours."
+
+
 [topics.colour_range]
 title = "Colour range"
 text = "By default each variable's colours span the 2nd to 98th percentiles of its values over the whole run (wet cells, up to 24 frames sampled), so a frame's colours mean the same as any other's. 'frame' uses the 1st–99th percentiles of the frame shown; 'fixed' takes the range typed in. The wetted fraction is always 0–1."
@@ -64,3 +140,11 @@ text = "Cells with less water than 'Wet if depth ≥' are not drawn and are left
 [topics.depth_bias]
 title = "Drawing water over 3D tiles"
 text = "When zoomed out, coarse 3D tiles can hide shallow water that lies below their simplified surfaces. Water further than about 1 km from the camera is drawn slightly nearer to it (a depth bias): its position on the screen does not change."
+
+[topics.statistics]
+title = "Statistics over the run"
+text = "The maximum, first-flooding and duration maps are computed from the output frames (for a live run, from the frames the viewer's server has kept), so they are at frame resolution: a peak between two frames is missed and times are rounded to the frame interval. The model does not record per-step maxima yet. With the sub-grid (SGS) model the depth is that of the cell's lowest part, so the depth-based hazards describe the deepest part of the cell, not its average."
+
+[topics.hazard_parameters]
+title = "Hazard parameters"
+text = "The land use (debris factor of the Defra hazard rating), the person (mass and height, and the calibration of Chen et al.) and the 'flooded if depth ≥' threshold are set under Hazard parameters in the Layers tab and kept in this browser. One land use applies to the whole domain; a land-use map is a later development. The hazard variables are derived from the depth and speed of each output frame by the viewer's server, with the same code (analysis/hazard.jl) as FloodA5Analysis and the static plots."

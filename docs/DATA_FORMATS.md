@@ -483,13 +483,14 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | `GET /` | 302 | → `/viz/{viewer}/index.html` (query kept), `viewer` = the server's (`cesium` default, `giro3d`) |
 | `GET /viz/{dir}/{path}` | file | Viewer files; `dir` is `cesium`, `giro3d` or `viewer-common` (`..`, hidden files and `config.json` refused) |
 | `GET /api/config` | JSON | `{protocol, cesium_url, ion_token, google_key, …}` — §7 |
-| `GET /api/info` | JSON | `{protocol, viewer, mode: "live"\|"replay", complete, frames, vars, mesh_ready, n_cells, label, flow_model, …}` |
+| `GET /api/info` | JSON | `{protocol, viewer, mode: "live"\|"replay", complete, frames, vars, derived, stats, mesh_ready, n_cells, label, flow_model, …}` (`derived`, `stats`: the hazard variables and statistics the run supports, since 0.8.9) |
 | `GET /api/mesh` | binary | The mesh (below); 204 until it is set |
 | `GET /api/frames` | JSON | `{complete, frames: [{id, t}, …]}` in time order |
-| `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
-| `GET /api/ranges?wet=0.05` | JSON | Colour ranges over the run (since 0.8.6): `{wet, frames, of, complete, vars: {var: {p02, p98, min, max, n}}}` — below |
+| `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent. `var` may be a hazard variable (since 0.8.9), with the hazard parameters in the query — below |
+| `GET /api/ranges?wet=0.05` | JSON | Colour ranges over the run (since 0.8.6): `{wet, frames, of, complete, vars: {var: {p02, p98, min, max, n}}}` — below; hazard variables too (with the hazard parameters, since 0.8.9) |
+| `GET /api/stats/{name}` | binary | A statistic over the run (since 0.8.9), Float32 LE in mesh order, with the hazard parameters in the query; 404 if the run lacks its inputs — below |
 | `GET /api/cell/{i}?frame={id}` | JSON | Cell `i` (0-based): `{id, lon, lat, elevation, base, values: {var: v}}` |
-| `GET /api/series/{i}?var=V` | JSON | Cell `i` (0-based) over the frames kept (since 0.8.8; `var` default `water_depth`): `{index, id, var, frames: [id], t: [s], values: [v or null]}`; 404 if the cell or variable is absent |
+| `GET /api/series/{i}?var=V` | JSON | Cell `i` (0-based) over the frames kept (since 0.8.8; `var` default `water_depth`; hazard variables since 0.8.9, with the hazard parameters in the query as for frames; not the statistics): `{index, id, var, frames: [id], t: [s], values: [v or null]}`; 404 if the cell or variable is absent |
 | `GET /api/run` | JSON | The run record (since 0.8.7; `{}` until set) — below |
 | `GET /api/about` | JSON | Variable descriptions (since 0.8.7): `io/variables.toml` as JSON, `{variables: {name: {label, unit, definition, notes?, viewer?, references?}}, topics: {name: {title, text}}}` |
 | `WS /api/live` | JSON messages | Notifications (below) |
@@ -507,6 +508,22 @@ maximum and count of the values in wet cells (`water_depth ≥ wet`, default
 cells are subsampled evenly beyond 4 million values. A live run's ranges
 cover the frames so far (`complete` false). Cached until the mesh or the
 frames change.
+
+Hazard variables and statistics (since 0.8.9; `analysis/hazard.jl`, the
+same functions as `FloodA5Analysis`). Derived from `water_depth` and
+`velocity` (both needed): `depth_velocity`, `hazard_rating` (Defra
+FD2321), `hazard_class_arr` (ARR H1–H6 as 1–6; 0 dry) and `hazard_degree`
+(Chen et al. 2019). Statistics (`run_statistics`, over every replay frame
+or the live frames kept): `max_water_depth`, `max_velocity`,
+`max_depth_velocity`, `max_hazard_rating`, `max_hazard_degree`,
+`max_hazard_class_arr`, `time_first_flooded` (s; NaN if never) and
+`flood_duration` (s); without velocity only the three depth statistics. The
+query parameters (`hazard_params`; missing or invalid ones take the
+defaults, numbers are clamped): `landuse` (`fd2320` default, `pasture`,
+`woodland`, `urban`, `none`), `mass` (kg, 75.1), `height` (m, 1.77),
+`theta` (°, 75), `alpha` (3.064), `beta` (0.303), `flood_depth` (m, 0.1).
+Statistics are computed once per parameter set and set of frames. `/api/cell`
+adds the hazard variables at `frame` (same query parameters).
 
 `/api/run` (`VisualisationServer.set_run!`, the viewer's *Run* tab):
 `FloodA5Output.run_record` — `run_info` (§2: version, git, environment,

@@ -29,6 +29,10 @@
 #                   comparison of coarse models, SGS included, with it
 #   mesh_quality.jl geometric quality of a mesh (valence, orthogonality,
 #                   skewness, area uniformity, face orientation)
+#   hazard.jl       hazard to people (D·V, Defra HR, ARR H1–H6, Chen et al.
+#                   2019 hazard degree) and per-cell statistics over a run;
+#                   pure, also included by the viewers' server
+#   hazard_run.jl   the same on a loaded Run
 #
 # Conventions: cell vectors are in the output file's cell order; frame k is
 # the 1-based frame index; times in seconds; distances in metres.
@@ -53,5 +57,11 @@ include("channel.jl")
 include("sgs_audit.jl")
 include("aggregate.jl")
 include("mesh_quality.jl")
+include("hazard.jl")
+export HazardParams, LAND_USES, LAND_USE_LABELS, PERSON_PRESETS, hazard_params, hazard_key,
+       debris_table, debris_factor, depth_velocity, hazard_rating, arr_hazard_class,
+       chen_critical_velocity, hazard_degree, HAZARD_VARS, STAT_VARS, derive_hazard,
+       run_statistics
+include("hazard_run.jl")
 
 end # module

@@ -562,6 +562,44 @@ Click the colour bar to choose a palette: water (blue), brown flood water
 photographs), viridis, cividis, magma, turbo, blues, greys. The choice is
 remembered per variable in the browser.
 
+**Hazard variables** (since 0.8.9; runs with depth and speed). The variable
+menu also offers, for each frame: *Depth × velocity* (m²/s); the Defra/EA
+*Hazard rating* HR = d (v + 0.5) + DF (FD2321, with a debris factor DF by
+depth, velocity and land use); the *Hazard class (ARR H1–H6)* of the
+Australian combined hazard curves; and the *Hazard degree* of Chen et al.
+(2019): speed over the critical speed at which a person of a given mass and
+height is toppled (0–1; 1 = swept off their feet). The viewer's server
+computes them from each frame's depth and speed with the same code as
+`FloodA5Analysis` (`analysis/hazard.jl`: `FA.hazard_rating`,
+`FA.hazard_degree`, …). *Hazard parameters* (in the Layers tab, kept in the
+browser) set the land use for the debris factor — one for the whole run:
+*any* (FD2320's precautionary 0.5 / 1, the default), *pasture/arable*,
+*woodland*, *urban* (FD2321 Table 3.1) or *no debris*; a land-use map is a
+later development — the person (adult 75.1 kg, 1.77 m; child 25.5 kg,
+1.26 m; or your own) and the calibration of Chen et al. (θ = 75°,
+α = 3.064, β = 0.303 recommended), and the depth from which a cell counts as
+flooded (default 0.1 m). The *About* tab gives the definitions, classes,
+references and limitations (Chen et al.: toppling only).
+
+**Classes.** Water depth, D·V and the hazard rating can be drawn in classes
+(*Classes*; the hazard rating is classed by default, the ARR class always):
+depth bands 0.15 / 0.3 / 0.6 / 1.2 m; D·V 0.3 / 0.6 / 1.0 / 4.0 m²/s (the
+ARR curves' D·V limits); HR 0.75 / 1.25 / 2.0 (FD2320: low, danger for
+some, for most, for all). The legend then lists the classes; the breaks can
+be edited (*Reset* restores them) and are remembered in the browser.
+
+**Statistics over the run** (since 0.8.9). *Maximum depth*, *maximum speed*,
+the maximum of each hazard variable, the *time of first flooding* and the
+*duration of flooding* (depth ≥ the flooded threshold) are maps over the
+whole run: while one is shown the time slider and playback are off, and the
+water is drawn at each cell's maximum depth (cells never flooded are left
+out). They are computed from the output frames (a live run: from the frames
+the server keeps, recomputed as frames arrive), so at frame resolution —
+peaks between frames are missed. In Julia: `FA.statistics_maps(run; params)`
+(`FA.run_statistics` over arrays). With SGS the depth is that of the
+cell's lowest part, so depth-based hazards describe the deepest part of a
+cell.
+
 **Run and About.** The panel's *Run* tab shows what the run records: the
 FloodA5 version and commit, flow model, backend, the command line (*copy*
 puts it on the clipboard), the mesh, frames, input files, all options and
@@ -575,7 +613,8 @@ with the right button still turns or zooms the view) and choose *Add cell N
 to plot*. A plot opens at the bottom of the window (⇆ docks it on the
 right instead); each further cell adds a line, up to eight, with a numbered
 marker of the same colour on the map. The plot has its own variable (depth,
-water level — drawn only where the cell is wet —, speed, wetted fraction)
+water level — drawn only where the cell is wet —, speed, wetted fraction,
+or a hazard variable, with the hazard parameters; not the statistics)
 and shows the whole run, with a dashed line at the frame on the map; click
 the plot to go to that time. ✕ in the legend removes a line; *CSV*
 downloads the lines (time in seconds, one column per cell). In a live run
