@@ -481,7 +481,7 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | Endpoint | Response | Description |
 |---|---|---|
 | `GET /` | 302 | → `/viz/{viewer}/index.html` (query kept), `viewer` = the server's (`cesium` default, `giro3d`) |
-| `GET /viz/{dir}/{path}` | file | Viewer files; `dir` is `cesium`, `giro3d` or `viewer-common` (`..`, hidden files and `config.json` refused) |
+| `GET /viz/{dir}/{path}` | file | Viewer files; `dir` is `cesium`, `giro3d` or `viewer-common` (`..`, hidden files, `config.json`, `keys.json` and `palettes.json` refused) |
 | `GET /api/config` | JSON | `{protocol, cesium_url, ion_token, google_key, …}` — §7 |
 | `GET /api/info` | JSON | `{protocol, viewer, mode: "live"\|"replay", complete, frames, vars, derived, stats, mesh_ready, n_cells, label, flow_model, …}` (`derived`, `stats`: the hazard variables and statistics the run supports, since 0.8.9) |
 | `GET /api/mesh` | binary | The mesh (below); 204 until it is set |
@@ -493,6 +493,7 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | `GET /api/series/{i}?var=V` | JSON | Cell `i` (0-based) over the frames kept (since 0.8.8; `var` default `water_depth`; hazard variables since 0.8.9, with the hazard parameters in the query as for frames; not the statistics): `{index, id, var, frames: [id], t: [s], values: [v or null]}`; 404 if the cell or variable is absent |
 | `GET /api/run` | JSON | The run record (since 0.8.7; `{}` until set) — below |
 | `GET /api/about` | JSON | Variable descriptions (since 0.8.7): `io/variables.toml` as JSON, `{variables: {name: {label, unit, definition, notes?, viewer?, references?}}, topics: {name: {title, text}}}` |
+| `GET /api/palettes` | JSON | A group's shared palettes (since 0.8.11): `viewer-common/palettes.json` after the checks below, `{flooda5_palettes: 1, palettes: [...], error?}`; `palettes` is empty when the file is absent or fails (then `error` says why) |
 | `WS /api/live` | JSON messages | Notifications (below) |
 
 Frame variables use the output file's names: `water_depth`, `velocity`,
@@ -554,6 +555,60 @@ mesh byte for byte. Without a server (a static web host) `/api/config`
 falls back to `viewer-common/defaults.json` and `/api/about` to
 `viewer-common/about.json` (generated from `io/variables.toml` by
 `viewer-common/tools/make_about.jl`); there is no WebSocket.
+### Palette files (since 0.8.11)
+
+One JSON format for the palettes a user exports from the viewer's editor
+(and imports), and for a group's shared `palettes.json`
+(`visualisation/viewer-common/palettes.json`, beside `config.json`;
+git-ignored; template `palettes.example.json`):
+
+```json
+{
+  "flooda5_palettes": 1,
+  "palettes": [
+    { "name": "Shallow to deep",
+      "stops": [ { "pos": 0, "color": "#e6f5d0" },
+                 { "pos": 0.6, "color": "#2c7fb8" },
+                 { "pos": 1, "color": "#253494" } ] }
+  ]
+}
+```
+
+Checks (the viewer, `viewer-common/js/palettes.js` `validatePaletteFile`,
+and the server, `VisualisationServer.validate_palettes`, apply the same
+rules; a file that fails any of them is refused as a whole):
+`flooda5_palettes` is 1; no other keys at any level; 1–64 palettes; `name`
+is text of 1–40 characters after trimming, without control characters,
+unique within the file ignoring case; 2–32 `stops`; `pos` a number from 0
+to 1, the stops in non-decreasing order (two stops at the same position make
+a hard step); `color` `"#rrggbb"`; the file at most 256 KiB. Colours between
+stops are interpolated in OKLab (Ottosson 2020) into the viewer's 256-entry
+colour table; before the first stop and after the last the end colours
+hold. Names are only ever shown as text.
+
+The user's palettes are kept in the browser's local storage
+(`flooda5.palettes.user`: `{next, palettes: [{id: "user:N", name, stops}]}`;
+entries that fail the checks are dropped on loading). Palette choices are
+stored per variable (`flooda5.palette.<var>`) and for the bed
+(`flooda5.palette.bed`) by id: a built-in name (`depth`, `brown`, `viridis`,
+…, `terrain`), `cmocean:<map>`, `crameri:<map>`, `shared:<name>` or
+`user:N`; an id that is no longer available falls back to the default.
+
+The scientific colour maps are fixed tables in
+`visualisation/viewer-common/colormaps.json` (served with the viewer;
+regenerate with `julia --project=. visualisation/viewer-common/tools/make_palettes.jl`,
+from ColorSchemes.jl's data files, without loading the package):
+`{format: 1, generated_from, families: {cmocean | crameri: {title, version,
+url, reference, source, licence, copyright, licence_text, maps: {name:
+"rrggbb" × 256}}}}`.
+
+| Family | Maps | Version | Licence |
+|---|---|---|---|
+| `cmocean` | deep, dense, turbid, haline, speed, amp, tempo, thermal, ice, rain | as in ColorSchemes.jl 3.31.0 (its data file states no cmocean version) | MIT, © 2015 Kristen M. Thyng (`data/cmoceanlicense.txt`) |
+| `crameri` (Scientific colour maps) | batlow, oslo, devon, lajolla, davos, imola, lapaz, hawaii, roma, vik | 8.0.0 | MIT, © 2023 Fabio Crameri (`data/scientificcolormaps.txt`) |
+
+All twenty have 256 entries in ColorSchemes.jl (no resampling); values are
+rounded to 8 bits.
 
 ### Binary mesh (`/api/mesh`)
 
@@ -618,6 +673,10 @@ The two keys are looked up (`io/FloodA5Keys.jl`, since 0.8.5) in the
 environment variable of that name, then in JSON key files: the file named by
 `FLOODA5_KEYS`, `keys.json` in the repository root, `~/.flooda5/keys.json`
 (template `keys.example.json`; `keys.json` is git-ignored and never served).
+
+`visualisation/viewer-common/palettes.json` (optional, since 0.8.11): a
+group's shared palettes, offered by `/api/palettes` (§6, palette files) and
+never served as a file.
 
 Server tuning (environment only): `FLOODA5_VIS_INTERVAL` (s of wall-clock
 time between kept live frames, default 1), `FLOODA5_VIS_BUDGET_MB` (memory

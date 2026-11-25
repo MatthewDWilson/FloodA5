@@ -29,7 +29,8 @@
 
 import { parseMesh, decodeFloat32, FrameList, FrameCache, formatTime, PROTOCOL } from './protocol.js';
 import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile } from './geometry.js';
-import { cssGradient, COLORMAP_NAMES, COLORMAP_LABELS } from './colormaps.js';
+import { cssGradient, colormapKey, colormapLabel } from './colormaps.js';
+import { initPalettes, isPalette, fillPaletteMenu, openPaletteEditor, paletteApi } from './palette-editor.js';
 import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
 import { renderRun, renderAbout, shellLine, esc } from './info.js';
@@ -66,9 +67,7 @@ const VARS = {
 const VAR_GROUPS = [['frame', 'Each frame'], ['derived', 'Hazard (each frame)'], ['static', 'Over the run (no time)']];
 const isStatic = name => VARS[name]?.kind === 'static';
 
-/** Palettes offered for the water and for the bed (default 'terrain'). */
-const PALETTES = COLORMAP_NAMES.filter(n => n !== 'terrain');
-const BED_PALETTES = COLORMAP_NAMES;
+/** The bed's default palette ('terrain': for the bed only; the palettes: palette-editor.js). */
 const BED_DEFAULT_PALETTE = 'terrain';
 
 /** localStorage, where available (private windows, blocked storage: no-ops). */
@@ -312,7 +311,7 @@ export function startViewer(engine) {
   /** The bed's palette (chosen in its menu, else 'terrain'). */
   function bedPalette() {
     const p = store.get('flooda5.palette.bed');
-    return BED_PALETTES.includes(p) ? p : BED_DEFAULT_PALETTE;
+    return isPalette(p, true) ? p : BED_DEFAULT_PALETTE;
   }
 
   /** Bed colours: palette, range (auto: 1st–99th percentiles of the elevations, or fixed), opacity. */
@@ -325,9 +324,9 @@ export function startViewer(engine) {
       r.min = lo; r.max = hi;
     }
     const alpha = Math.min(Math.max(+$('bed-opacity').value || 1, 0.1), 1);
-    app.bed?.setStyle({ colormap: cmap, cmin: r.min, cmax: r.max, alpha });
+    app.bed?.setStyle({ colormap: colormapKey(cmap), cmin: r.min, cmax: r.max, alpha });
     $('bed-legend').style.background = cssGradient(cmap);
-    $('bed-legend').title = `Bed colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
+    $('bed-legend').title = `Bed colour palette: ${colormapLabel(cmap)} (click to change)`;
     const fmt = x => (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1));
     $('bed-min').textContent = fmt(r.min); $('bed-max').textContent = fmt(r.max);
     $('bed-opacity-val').textContent = alpha.toFixed(2);
@@ -681,7 +680,7 @@ export function startViewer(engine) {
   /** The palette of variable `name` (chosen in the palette menu, else its default). */
   function paletteOf(name = app.varName) {
     const p = store.get(`flooda5.palette.${name}`);
-    return PALETTES.includes(p) ? p : VARS[name].colormap;
+    return isPalette(p) ? p : VARS[name].colormap;
   }
 
   function applyVar() {
@@ -689,13 +688,13 @@ export function startViewer(engine) {
     const cmap = classed ? classedName(v.classes, breaksOf(v.classes).length + 1) : paletteOf();
     $('legend-bar').style.background = cssGradient(cmap);
     $('legend-bar').title = classed ? `Classes: ${CLASS_SETS[v.classes].title}`
-                                    : `Colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
+                                    : `Colour palette: ${colormapLabel(cmap)} (click to change)`;
     $('legend-bar').disabled = classed;
     $('legend-unit').textContent = v.time ? 'time' : v.unit;
     $('legend-labels').hidden = classed;
     $('range-row').hidden = classed;
     $('range-fixed').hidden = classed || app.range.mode !== 'fixed';
-    app.water?.setStyle({ cmode: classed ? COLOR_MODE.texture : v.cmode, colormap: cmap });
+    app.water?.setStyle({ cmode: classed ? COLOR_MODE.texture : v.cmode, colormap: colormapKey(cmap) });
     status.palette = cmap; status.classed = classed;
     if (v.kind !== 'static') status.static = null;
     renderClassLegend();
@@ -703,14 +702,14 @@ export function startViewer(engine) {
   }
 
   function setPalette(name) {
-    if (!PALETTES.includes(name) || classedNow()) return;
+    if (!isPalette(name) || classedNow()) return;
     store.set(`flooda5.palette.${app.varName}`, name);
     applyVar();
     closePaletteMenu();
   }
 
   function setBedPalette(name) {
-    if (!BED_PALETTES.includes(name)) return;
+    if (!isPalette(name, true)) return;
     store.set('flooda5.palette.bed', name);
     applyBedStyle();
     closePaletteMenu('bed');
@@ -725,19 +724,11 @@ export function startViewer(engine) {
     const bed = target === 'bed', ids = MENUS[target];
     const menu = $(ids.menu), cur = bed ? bedPalette() : paletteOf();
     const dflt = bed ? BED_DEFAULT_PALETTE : VARS[app.varName].colormap;
-    menu.innerHTML = '';
-    for (const name of bed ? BED_PALETTES : PALETTES) {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'palette'; b.setAttribute('role', 'option');
-      b.setAttribute('aria-selected', String(name === cur));
-      b.dataset.palette = name;
-      const sw = document.createElement('span'); sw.className = 'swatch'; sw.style.background = cssGradient(name);
-      const lab = document.createElement('span');
-      lab.textContent = (COLORMAP_LABELS[name] || name) + (name === dflt ? ' (default)' : '');
-      b.append(sw, lab);
-      b.onclick = () => (bed ? setBedPalette(name) : setPalette(name));
-      menu.appendChild(b);
-    }
+    fillPaletteMenu(menu, {
+      bed, current: cur, dflt,
+      onPick: name => (bed ? setBedPalette(name) : setPalette(name)),
+      onEdit: () => { closePaletteMenu(target); openPaletteEditor({ target, current: cur }); },
+    });
     menu.hidden = false;
     $(ids.button).setAttribute('aria-expanded', 'true');
     menu.querySelector('[aria-selected="true"]')?.focus();
@@ -1527,7 +1518,7 @@ export function startViewer(engine) {
     $('btn-live').onclick = () => setLive(!app.live);
     window.addEventListener('keydown', e => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
-          e.target.closest?.('.palette-menu, .legend, .tabs, #plot, .ctx-menu')) return;
+          e.target.closest?.('.palette-menu, .palette-editor, .legend, .tabs, #plot, .ctx-menu')) return;
       if (e.key === ' ') { e.preventDefault(); app.playing ? stopPlay() : startPlay(); }
       else if (e.key === 'ArrowRight') { stopPlay(); step(1); }
       else if (e.key === 'ArrowLeft') { stopPlay(); step(-1); }
@@ -1555,6 +1546,7 @@ export function startViewer(engine) {
     setBorders: on => { $('show-borders').checked = !!on; $('show-borders').onchange(); },
     setPalette: name => setPalette(name),
     setBedPalette: name => setBedPalette(name),
+    palettes: paletteApi,      // user palettes and the editor (palette-editor.js)
     setBedStyle: ({ mode, min, max, alpha } = {}) => {
       if (alpha !== undefined) $('bed-opacity').value = String(alpha);
       if (mode === 'fixed' && Number.isFinite(min) && Number.isFinite(max) && max > min) {
@@ -1616,6 +1608,8 @@ export function startViewer(engine) {
       const q = new URLSearchParams(location.search);
       app.autoplay = q.has('autoplay') ? !['0', 'false', 'no'].includes(q.get('autoplay')) : !!app.cfg.autoplay;
       if (app.cfg.protocol !== PROTOCOL) log(`Server protocol ${app.cfg.protocol}, viewer ${PROTOCOL}`, 'warn');
+      await initPalettes({ store, fetchJson, log, onChange: () => { applyVar(); applyBedStyle(); },
+                           onPick: (target, id) => (target === 'bed' ? setBedPalette(id) : setPalette(id)) });
       await engine.init($('viewer'), app.cfg, log);
       status.webgl2 = engine.webgl2;
       status.engine = engine.name;          // with its version, once loaded

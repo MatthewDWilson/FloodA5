@@ -565,6 +565,41 @@ Click the colour bar to choose a palette: water (blue), brown flood water
 photographs), viridis, cividis, magma, turbo, blues, greys. The choice is
 remembered per variable in the browser.
 
+**Palettes** (since 0.8.11). The palette menus (water and bed) are grouped:
+*Built-in* (the palettes above; *terrain* for the bed), *cmocean* (deep,
+dense, turbid — a brown sediment map —, haline, speed, amp, tempo, thermal,
+ice, rain), *Crameri* (Scientific colour maps 8.0.0: batlow, oslo, devon,
+lajolla, davos, imola, lapaz, hawaii, roma, vik), *Shared* and *Your
+palettes*. The scientific maps are fixed 256-entry tables shipped with the
+viewer (`visualisation/viewer-common/colormaps.json`, generated from
+ColorSchemes.jl 3.31.0 by `viewer-common/tools/make_palettes.jl`); both
+families are under the MIT licence — cmocean © 2015 Kristen M. Thyng
+(Thyng et al. 2016, *Oceanography* 29(3)), the Scientific colour maps
+© 2023 Fabio Crameri (Crameri 2018, doi:10.5281/zenodo.1243862); the
+licence texts are in the JSON file. Hover over a group's heading for its
+source.
+
+*Edit palettes…* at the end of a menu opens the editor of your own
+palettes: a name, a list of colour stops (a colour and a position from 0 to
+1; *Add stop* splits the widest gap, ✕ removes one, 2–32 stops), *Reverse*,
+*Even* (space the stops evenly), *Start from* (7 samples of any palette, to
+adjust), a preview, and *Save*, *Use for water* or *Use for bed*. Colours
+between stops are interpolated in OKLab (perceptually more even than RGB).
+Your palettes are kept in this browser (with the other viewer settings);
+*Export…* downloads them as a JSON file and *Import…* adds the palettes of
+such a file (read in the browser, nothing is uploaded; a name in use gets
+"(2)"). The file format is in DATA_FORMATS.md §6 (palette files); a file
+that fails any check is refused as a whole. Editing a palette that is in
+use recolours the map when it is saved.
+
+A group can share palettes: put a palette file named `palettes.json` in
+`visualisation/viewer-common/` (beside `config.json`; git-ignored; template
+`palettes.example.json`). The server checks it on each page load (same
+rules, at most 256 KiB) and offers its palettes as the read-only *Shared*
+group (`/api/palettes`); a file that fails is ignored, with a warning in the
+viewer's log. The file itself is never served, nor any other file of that
+directory beyond the viewer's own code.
+
 **Hazard variables** (since 0.8.9; runs with depth and speed). The variable
 menu also offers, for each frame: *Depth × velocity* (m²/s); the Defra/EA
 *Hazard rating* HR = d (v + 0.5) + DF (FD2321, with a debris factor DF by
