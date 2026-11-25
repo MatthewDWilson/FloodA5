@@ -489,6 +489,8 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
 | `GET /api/ranges?wet=0.05` | JSON | Colour ranges over the run (since 0.8.6): `{wet, frames, of, complete, vars: {var: {p02, p98, min, max, n}}}` — below |
 | `GET /api/cell/{i}?frame={id}` | JSON | Cell `i` (0-based): `{id, lon, lat, elevation, base, values: {var: v}}` |
+| `GET /api/run` | JSON | The run record (since 0.8.7; `{}` until set) — below |
+| `GET /api/about` | JSON | Variable descriptions (since 0.8.7): `io/variables.toml` as JSON, `{variables: {name: {label, unit, definition, notes?, viewer?, references?}}, topics: {name: {title, text}}}` |
 | `WS /api/live` | JSON messages | Notifications (below) |
 
 Frame variables use the output file's names: `water_depth`, `velocity`,
@@ -504,6 +506,16 @@ maximum and count of the values in wet cells (`water_depth ≥ wet`, default
 cells are subsampled evenly beyond 4 million values. A live run's ranges
 cover the frames so far (`complete` false). Cached until the mesh or the
 frames change.
+
+`/api/run` (`VisualisationServer.set_run!`, the viewer's *Run* tab):
+`FloodA5Output.run_record` — `run_info` (§2: version, git, environment,
+`argv`, `options`, `inputs`, `mesh_source`, `summary`) without `project`,
+`manifest` and `git_diff` (`git_diff_lines` counts it), plus `mesh`
+(`mesh_info`, `n_cells`, `cell_area_min_m2`, `cell_area_max_m2`,
+`cell_area_mean_m2`) and `frames` (`n`, `t_first`, `t_last`). Non-finite
+numbers are strings (`"Inf"`). A replay adds `file` and `label`; a live run
+builds it from the record its output file gets (`output`: that file's path;
+inputs without checksums).
 
 ### Binary mesh (`/api/mesh`)
 

@@ -50,6 +50,7 @@ using HDF5
 using JSON3
 using SHA
 using Dates
+import TOML
 
 const FORMAT_NAME    = "FloodA5 output"
 const FORMAT_VERSION = 2
@@ -442,9 +443,83 @@ end
 
 attrs_dict(obj) = Dict{String,Any}(k => read(attributes(obj)[k]) for k in keys(attributes(obj)))
 
+"""
+    run_record(f) → Dict
+    run_record(info; mesh = Dict(), n_cells = nothing, cell_area = nothing, times = nothing) → Dict
+
+A run's description for display (the globe viewers' *Run* tab, plot
+captions): `run_info` without the long texts (`project`, `manifest`,
+`git_diff`; `git_diff_lines` counts the diff), with `mesh` (`mesh_info`
+plus `n_cells` and the cell-area range) and `frames` (`n`, `t_first`,
+`t_last`). Plain data only: non-finite numbers become strings and symbols
+strings, so it can be written as JSON. The second form builds it for a run
+in progress from the same parts (FloodModel.jl, `--vis cesium|giro3d`).
+"""
+function run_record(info::AbstractDict; mesh::AbstractDict = Dict{String,Any}(), n_cells = nothing,
+                    cell_area = nothing, times = nothing)
+    r = Dict{String,Any}()
+    for (k, v) in info
+        k = String(k)
+        k in ("project", "manifest", "git_diff") && continue
+        r[k] = v
+    end
+    gd = get(info, "git_diff", "")
+    gd isa AbstractString && !isempty(gd) && (r["git_diff_lines"] = count(==('\n'), gd))
+    m = Dict{String,Any}(String(k) => v for (k, v) in mesh)
+    n_cells === nothing || (m["n_cells"] = n_cells)
+    if cell_area !== nothing
+        a = filter(isfinite, collect(Float64, cell_area))
+        if !isempty(a)
+            m["cell_area_min_m2"] = minimum(a); m["cell_area_max_m2"] = maximum(a)
+            m["cell_area_mean_m2"] = sum(a) / length(a)
+        end
+    end
+    r["mesh"] = m
+    if times !== nothing
+        r["frames"] = Dict{String,Any}("n" => length(times),
+                                       "t_first" => isempty(times) ? nothing : Float64(first(times)),
+                                       "t_last" => isempty(times) ? nothing : Float64(last(times)))
+    end
+    return _plain(r)
+end
+
+function run_record(f::HDF5.File)
+    v2 = format_version(f) >= 2
+    mesh = haskey(f, "mesh") ? mesh_info(f) : Dict{String,Any}()
+    n = haskey(f, "mesh/cell_ids") ? length(f["mesh/cell_ids"]) : nothing
+    area = v2 && haskey(f, "mesh/cell_area") ? cell_area(f) : nothing
+    return run_record(run_info(f); mesh, n_cells = n, cell_area = area, times = frame_times(f))
+end
+
+# JSON-safe plain data: Inf/NaN → "Inf"/"NaN", Symbol → String, containers recursively
+_plain(x::AbstractFloat) = isfinite(x) ? x : string(x)
+_plain(x::Symbol) = String(x)
+_plain(x::AbstractString) = String(x)
+_plain(x::AbstractDict) = Dict{String,Any}(string(k) => _plain(v) for (k, v) in x)
+_plain(x::Union{AbstractVector,Tuple}) = Any[_plain(v) for v in x]
+_plain(x) = x
+
+const _VARIABLES_TOML = joinpath(@__DIR__, "variables.toml")
+const _VARIABLE_DOCS = Ref{Any}(nothing)
+
+"""
+    variable_docs() → Dict
+
+The descriptions of the output's variables and of what the viewers derive
+from them (`io/variables.toml`): per variable `label`, `unit`, `definition`
+and optionally `notes`, `viewer`, `references`; `topics` holds general notes
+(colour range, vertical offset, …). One source for the globe viewers'
+*About* tab (`/api/about`), the static plots' captions and the notebooks.
+"""
+function variable_docs()
+    d = _VARIABLE_DOCS[]
+    d === nothing || return d
+    return (_VARIABLE_DOCS[] = TOML.parsefile(_VARIABLES_TOML))
+end
+
 for fn in (:format_version, :n_frames, :frame_times, :frame_at, :frame_vars, :has_var,
            :read_frame, :read_var, :read_series, :cell_table, :cell_area, :cell_polygons,
-           :cell_neighbours, :run_info, :mesh_info)
+           :cell_neighbours, :run_info, :mesh_info, :run_record)
     @eval $fn(path::AbstractString, args...) = _reader(f -> $fn(f, args...), path)
 end
 

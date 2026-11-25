@@ -1,0 +1,66 @@
+# io/variables.toml — what FloodA5's output variables mean, and what the
+# viewers derive from them. One source for the globe viewers' About tab
+# (/api/about), the static plots' captions (FloodA5Plots) and the notebooks;
+# read with FloodA5Output.variable_docs().
+#
+# Per variable: label, unit, definition; optionally notes (list), viewer
+# (how the globe viewer shows or derives it), references (list).
+# [topics.*]: title, text — general notes shown with the variables.
+# Keep the text plain (no Markdown): it goes into HTML and plot captions.
+
+[variables.water_depth]
+label = "Water depth"
+unit = "m"
+definition = "Depth of water in the cell, measured from the cell's depth datum: the cell elevation, or for the sub-grid (SGS) model the lowest sub-grid elevation in the cell."
+notes = [
+  "Diagnostic: the model's state is the stored volume per cell (also in the output, 'volume', m³); depth is derived from it.",
+  "With SGS the cell can be partly wet: the depth is that of its lowest part, not a cell average (see Wetted fraction).",
+]
+viewer = "Cells shallower than the 'Wet if depth ≥' threshold are not drawn."
+
+[variables.level]
+label = "Water level"
+unit = "m"
+definition = "Elevation of the water surface: depth datum + water depth, in the DEM's vertical datum."
+viewer = "Derived in the viewer from the depth and each cell's datum. The surface is drawn at this level plus the vertical offset."
+
+[variables.velocity]
+label = "Speed"
+unit = "m/s"
+definition = "Magnitude of the depth-averaged velocity at the cell centre: the unit discharge vector reconstructed from the fluxes through the cell's faces (a least-squares fit), divided by the depth."
+notes = [
+  "Diagnostic (the model advances face fluxes, not cell velocities).",
+  "Zero where the depth is below 1 cm.",
+  "Components: vel_u (east) and vel_v (north) in the output.",
+]
+
+[variables.saturation]
+label = "Wetted fraction"
+unit = ""
+definition = "Fraction of the cell's plan area that is under water, from 0 to 1."
+notes = [
+  "Sub-grid (SGS) model: from the cell's elevation-area table at the current water level.",
+  "Other models: 1 where the depth exceeds 0.1 mm, else 0.",
+]
+
+[variables.elevation]
+label = "Bed elevation"
+unit = "m"
+definition = "Ground elevation of the cell, sampled from the DEM at pixel centres (since 0.8.0), in the DEM's vertical datum."
+viewer = "Drawn as the bed surface (on by default on the flat basemaps) with its own palette, range and opacity."
+
+[topics.colour_range]
+title = "Colour range"
+text = "By default each variable's colours span the 2nd to 98th percentiles of its values over the whole run (wet cells, up to 24 frames sampled), so a frame's colours mean the same as any other's. 'frame' uses the 1st–99th percentiles of the frame shown; 'fixed' takes the range typed in. The wetted fraction is always 0–1."
+
+[topics.vertical_offset]
+title = "Vertical offset"
+text = "Added to the model's heights to put them on the basemap's. Model heights are in the DEM's datum (usually mean sea level); 3D tiles and Cesium World Terrain use heights above the WGS84 ellipsoid, so the offset is about the geoid height there (between about −107 and +86 m worldwide). Each basemap has its own offset, estimated from the basemap's heights under the mesh unless given with --offset; on a flat map the lowest bed is put at the map."
+
+[topics.wet_threshold]
+title = "Wet threshold"
+text = "Cells with less water than 'Wet if depth ≥' are not drawn and are left out of the colour ranges and the wet-cell count. It does not change the model."
+
+[topics.depth_bias]
+title = "Drawing water over 3D tiles"
+text = "When zoomed out, coarse 3D tiles can hide shallow water that lies below their simplified surfaces. Water further than about 1 km from the camera is drawn slightly nearer to it (a depth bias): its position on the screen does not change."

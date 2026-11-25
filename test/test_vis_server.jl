@@ -126,6 +126,18 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test cfg["protocol"] == 2 && cfg["vertical_offset"] == 1.5
             @test endswith(cfg["cesium_url"], "/") && haskey(cfg, "ion_token")
 
+            # the run record (Run tab) and the variable descriptions (About tab)
+            @test isempty(json_(port, "/api/run"))                       # none set yet
+            VS.set_run!(vis, Dict("flow_model" => "standard", "argv" => ["--dx", "25"],
+                                  "mesh" => Dict("n_cells" => 3)))
+            rec = json_(port, "/api/run")
+            @test rec["flow_model"] == "standard" && rec["argv"] == ["--dx", "25"] && rec["mesh"]["n_cells"] == 3
+            ab = json_(port, "/api/about")
+            for v in ("water_depth", "level", "velocity", "saturation", "elevation")
+                @test !isempty(ab["variables"][v]["label"]) && !isempty(ab["variables"][v]["definition"])
+            end
+            @test haskey(ab["topics"], "colour_range") && haskey(ab["topics"], "vertical_offset")
+
             # colour ranges over the run: wet cells (depth ≥ wet) of every frame so far
             rr = json_(port, "/api/ranges?wet=0.05")
             @test rr["complete"] == false && rr["frames"] == 2 && rr["of"] == 2 && rr["wet"] == 0.05

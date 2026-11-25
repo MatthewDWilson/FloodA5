@@ -244,17 +244,33 @@ function _colorbar!(gp, ramp, range, values; label = "", vertical = true, kw...)
 end
 
 """
+    _caption!(fig, runs, var) -> Label
+
+The figure's caption (`figure_caption`: the runs and the variable), small
+and muted, left-aligned in a new row under everything else, wrapped to
+about `px` pixels (the figure's width).
+"""
+function _caption!(fig, runs, var; px::Real)
+    nr, nc = size(fig.layout)
+    text = figure_caption(runs, var; width = max(40, floor(Int, px / 4.8)))
+    return Label(fig[nr + 1, 1:nc], text; fontsize = 9, color = MUTED,
+                 halign = :left, justification = :left, tellwidth = false)
+end
+
+"""
     fieldmap(run, k = last; width = 560, kw...) -> Figure
 
 One map, `width` pixels wide, the figure sized to fit (keywords: `fieldmap!`).
+`caption = false` leaves out the caption (run and variable; `figure_caption`).
 
     FP.fieldmap(r; t = 4 * 3600)                       # depth at 4 h
     FP.fieldmap(r, 12; var = :speed, coords = :local)
 """
-function fieldmap(r::FA.Run, k = nothing; width = 560, kw...)
+function fieldmap(r::FA.Run, k = nothing; width = 560, caption::Bool = CAPTIONS[], kw...)
     _themed() do
         fig = Figure()
         fieldmap!(fig[1, 1], r, k; width, kw...)
+        caption && _caption!(fig, r, get(kw, :var, :depth); px = width + 90)
         resize_to_layout!(fig)
         fig
     end
@@ -278,7 +294,7 @@ is the width of one map in pixels. `colormap`, `dry_threshold`, `basemap`,
 function fieldmaps(runs::AbstractVector, times::AbstractVector; var = :depth, colorrange = nothing,
                    colormap = nothing, coords = :lonlat, origin = :centre, tol = nothing,
                    panel::Real = 300, labels = nothing, dry_threshold::Real = 0.01,
-                   sources::Bool = true, basemap = :elevation)
+                   sources::Bool = true, basemap = :elevation, caption::Bool = CAPTIONS[])
     K = frame_grid(runs, times; tol)
     mc = coords isa MapCoords ? coords : map_coords(runs[1]; coords, origin)
     vals = [_masked_values(r, var, K[i, j], dry_threshold) for (i, r) in enumerate(runs), j in eachindex(times)]
@@ -305,6 +321,7 @@ function fieldmaps(runs::AbstractVector, times::AbstractVector; var = :depth, co
         end
         _colorbar!(fig[1:nr, nc + 1], cm, rng, reduce(vcat, vec(vals)); label = var_label(var))
         colgap!(fig.layout, 12); rowgap!(fig.layout, 10)
+        caption && _caption!(fig, runs, var; px = panel * nc + 120)
         resize_to_layout!(fig)
         fig
     end
@@ -429,10 +446,11 @@ end
 
 See `difference_map!`; the map is `width` pixels wide.
 """
-function difference_map(ref::FA.Run, run::FA.Run; width = 560, kw...)
+function difference_map(ref::FA.Run, run::FA.Run; width = 560, caption::Bool = CAPTIONS[], kw...)
     _themed() do
         fig = Figure()
         difference_map!(fig[1, 1], ref, run; width, kw...)
+        caption && _caption!(fig, [ref, run], get(kw, :var, :depth); px = width + 90)
         resize_to_layout!(fig)
         fig
     end
@@ -483,10 +501,11 @@ end
 
 See `extent_map!`; the map is `width` pixels wide.
 """
-function extent_map(ref::FA.Run, run::FA.Run; width = 560, kw...)
+function extent_map(ref::FA.Run, run::FA.Run; width = 560, caption::Bool = CAPTIONS[], kw...)
     _themed() do
         fig = Figure()
         extent_map!(fig[1, 1], ref, run; width, kw...)
+        caption && _caption!(fig, [ref, run], :depth; px = width + 90)
         resize_to_layout!(fig)
         fig
     end
@@ -563,12 +582,13 @@ timeseries!(gp, r::FA.Run, points; kw...) = timeseries!(gp, [r], points; kw...)
 
 See `timeseries!`.
 """
-function timeseries(runs, points; size = nothing, kw...)
+function timeseries(runs, points; size = nothing, caption::Bool = CAPTIONS[], kw...)
     rs = runs isa FA.Run ? [runs] : runs
     _themed() do
         n = length(rs) == 1 ? 1 : length(points)
-        fig = Figure(size = something(size, (max(560, 380 * n), 400)))
+        fig = Figure(size = something(size, (max(560, 380 * n), 400 + (caption ? 16 * (length(rs) + 1) : 0))))
         timeseries!(fig[1, 1], rs, points; kw...)
+        caption && _caption!(fig, rs, get(kw, :var, :depth); px = fig.scene.viewport[].widths[1])
         fig
     end
 end
@@ -629,10 +649,11 @@ end
 
 See `storage_plot!`.
 """
-function storage_plot(runs::AbstractVector; size = nothing, kw...)
+function storage_plot(runs::AbstractVector; size = nothing, caption::Bool = CAPTIONS[], kw...)
     _themed() do
-        fig = Figure(size = something(size, (760, 460)))
+        fig = Figure(size = something(size, (760, 460 + (caption ? 16 * length(runs) : 0))))
         storage_plot!(fig[1, 1], runs; kw...)
+        caption && _caption!(fig, runs, nothing; px = fig.scene.viewport[].widths[1])
         fig
     end
 end
@@ -682,10 +703,11 @@ end
 
 See `mass_balance_plot!`.
 """
-function mass_balance_plot(r::FA.Run; size = nothing)
+function mass_balance_plot(r::FA.Run; size = nothing, caption::Bool = CAPTIONS[])
     _themed() do
-        fig = Figure(size = something(size, (720, 520)))
+        fig = Figure(size = something(size, (720, 520 + (caption ? 16 : 0))))
         mass_balance_plot!(fig[1, 1], r)
+        caption && _caption!(fig, r, nothing; px = fig.scene.viewport[].widths[1])
         fig
     end
 end

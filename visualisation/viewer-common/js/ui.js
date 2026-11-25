@@ -18,12 +18,18 @@ export const UI_HTML = `
 <aside id="panel">
   <button id="panel-toggle" class="icon-btn" title="Hide/show the panel">☰</button>
   <div id="panel-body">
+    <nav class="tabs" role="tablist" aria-label="Panel">
+      <button id="tab-btn-layers" class="tab" role="tab" data-tab="layers" aria-selected="true" aria-controls="tab-layers">Layers</button>
+      <button id="tab-btn-run" class="tab" role="tab" data-tab="run" aria-selected="false" aria-controls="tab-run">Run</button>
+      <button id="tab-btn-about" class="tab" role="tab" data-tab="about" aria-selected="false" aria-controls="tab-about">About</button>
+    </nav>
+    <div id="tab-layers" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-layers">
     <section>
       <h2>Variable</h2>
       <select id="var"></select>
       <button id="legend-bar" class="legend" type="button" title="Colour palette: click to change"
               aria-haspopup="listbox" aria-expanded="false"></button>
-      <div id="palette-menu" role="listbox" aria-label="Colour palette" hidden></div>
+      <div id="palette-menu" class="palette-menu" role="listbox" aria-label="Colour palette" hidden></div>
       <div class="legend-labels"><span id="legend-min">0</span><span id="legend-unit"></span><span id="legend-max">1</span></div>
       <div class="row">
         <label for="range-mode">Range</label>
@@ -65,12 +71,37 @@ export const UI_HTML = `
         <span class="val">m</span>
       </div>
       <div class="row">
-        <label for="show-bed">Bed surface</label>
-        <input id="show-bed" type="checkbox">
-      </div>
-      <div class="row">
         <label for="show-borders">Cell borders</label>
         <input id="show-borders" type="checkbox">
+      </div>
+    </section>
+
+    <section>
+      <h2>Bed surface</h2>
+      <div class="row">
+        <label for="show-bed">Show</label>
+        <input id="show-bed" type="checkbox">
+      </div>
+      <button id="bed-legend" class="legend" type="button" title="Bed colour palette: click to change"
+              aria-haspopup="listbox" aria-expanded="false"></button>
+      <div id="bed-palette-menu" class="palette-menu" role="listbox" aria-label="Bed colour palette" hidden></div>
+      <div class="legend-labels"><span id="bed-min">–</span><span>m</span><span id="bed-max">–</span></div>
+      <div class="row">
+        <label for="bed-range-mode">Range</label>
+        <select id="bed-range-mode" title="auto: the 1st–99th percentiles of the bed elevations">
+          <option value="auto">auto (1–99 %)</option>
+          <option value="fixed">fixed</option>
+        </select>
+      </div>
+      <div class="row" id="bed-range-fixed" hidden>
+        <input id="bed-range-min" type="number" step="any" aria-label="Bed range minimum">
+        <span>to</span>
+        <input id="bed-range-max" type="number" step="any" aria-label="Bed range maximum">
+      </div>
+      <div class="row">
+        <label for="bed-opacity">Opacity</label>
+        <input id="bed-opacity" type="range" min="0.1" max="1" step="0.05" value="1">
+        <span id="bed-opacity-val" class="val">1.00</span>
       </div>
     </section>
 
@@ -98,6 +129,9 @@ export const UI_HTML = `
       <button id="home" class="btn">Home view</button>
       <span id="engine-label" class="engine"></span>
     </section>
+    </div>
+    <div id="tab-run" class="tab-pane info" role="tabpanel" aria-labelledby="tab-btn-run" hidden></div>
+    <div id="tab-about" class="tab-pane info" role="tabpanel" aria-labelledby="tab-btn-about" hidden></div>
   </div>
 </aside>
 

@@ -83,6 +83,35 @@ const ARGS1 = ["--meshgen-cartesian", AOI, "--dx", "25", "--meshout", MESH,
     m = isqrt(n)                                        # an m × m grid: 2m(m−1) faces
     @test m^2 == n && count(>(0), nb) == 2 * (2 * m * (m - 1))
     @test all(a -> isapprox(a, 625.0; rtol = 0.02), FO.cell_area(O1))
+    # 0.8.7: the record for display (viewer Run tab, captions): no long texts, JSON-safe
+    rr = FO.run_record(O1)
+    @test rr["argv"] == ARGS1 && rr["flooda5_version"] == FLOODA5_VERSION && rr["flow_model"] == "standard"
+    @test !haskey(rr, "project") && !haskey(rr, "manifest") && !haskey(rr, "git_diff")
+    @test rr["mesh"]["n_cells"] == n && rr["mesh"]["id_scheme"] == "cartesian"
+    @test isapprox(rr["mesh"]["cell_area_min_m2"], 625.0; rtol = 0.02) &&
+          isapprox(rr["mesh"]["cell_area_max_m2"], 625.0; rtol = 0.02)
+    @test rr["frames"] == Dict("n" => nf, "t_first" => FO.frame_times(O1)[1], "t_last" => 600.0)
+    @test rr["summary"]["completed"] == true && rr["inputs"][1]["sha256"] == FO.sha256_file(HYD)
+    @test FO.JSON3.read(FO.JSON3.write(rr))["argv"] == ARGS1        # writes as plain JSON
+end
+
+@testset "run_record and variable_docs" begin
+    r = FO.run_record(Dict("git_diff" => "a\nb\nc\n", "project" => "x", "dt" => Inf, "m" => :sgs,
+                           "options" => Dict(:courant => NaN, :list => (1.0, -Inf)));
+                      mesh = Dict(:mesh_family => "a5"), n_cells = 3, cell_area = [1.0, NaN, 3.0],
+                      times = Float64[])
+    @test r["git_diff_lines"] == 3 && !haskey(r, "git_diff") && !haskey(r, "project")
+    @test r["dt"] == "Inf" && r["m"] == "sgs" && r["options"]["courant"] == "NaN" && r["options"]["list"] == [1.0, "-Inf"]
+    @test r["mesh"] == Dict("mesh_family" => "a5", "n_cells" => 3, "cell_area_min_m2" => 1.0,
+                            "cell_area_max_m2" => 3.0, "cell_area_mean_m2" => 2.0)
+    @test r["frames"] == Dict("n" => 0, "t_first" => nothing, "t_last" => nothing)
+    @test occursin("Inf", FO.JSON3.write(r))                             # no non-finite numbers left
+    d = FO.variable_docs()
+    for v in ("water_depth", "level", "velocity", "saturation", "elevation")
+        @test all(k -> haskey(d["variables"][v], k), ("label", "unit", "definition"))
+    end
+    @test all(t -> haskey(t, "title") && haskey(t, "text"), values(d["topics"]))
+    @test FO.variable_docs() === d                                       # parsed once
 end
 
 @testset "O2 — --rerun reproduces the run from the file alone" begin

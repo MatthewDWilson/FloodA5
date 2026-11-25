@@ -35,11 +35,13 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             "--injection-point", "0.001,0.0015,0.5", "--rainfall", "20",
             "--sim-duration", "300", "--output", H5, "--output-interval", "60",
             "--vis", "cesium", "--vis-port", string(port)]
+    args0 = copy(args)                      # (main may consume its argument vector)
     run_task = Threads.@spawn with_logger(NullLogger()) do
         redirect_stdout(() -> main(args), devnull)
     end
 
     msgs = Any[]; mesh_bytes = Ref{Vector{UInt8}}(UInt8[]); last_cells = Ref{Any}(nothing)
+    live_run = Ref{Any}(nothing)
     client = Threads.@spawn begin
         # wait for the server
         t0 = time()
@@ -58,6 +60,7 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
                         fl = json_(port, "/api/frames")
                         last = fl.frames[end].id
                         last_cells[] = (frames = fl, cells = [json_(port, "/api/cell/$i?frame=$last") for i in 0:5:59])
+                        live_run[] = json_(port, "/api/run")
                     end
                 end
             end
@@ -89,6 +92,15 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         end
         @test any(c -> c.values.water_depth > 0, lc.cells)
     end
+    # the live run's record (the viewer's Run tab), as the output file will have it
+    lr = live_run[]
+    @test lr !== nothing
+    if lr !== nothing
+        @test lr.flooda5_version == FLOODA5_VERSION && lr.flow_model == "standard"
+        @test collect(String, lr.argv) == args0 && lr.options.manning_n isa Real
+        @test lr.mesh.n_cells == length(FA.load_run(H5).mesh) && lr.mesh.id_scheme == "cartesian" && lr.mesh.cell_area_mean_m2 > 0
+        @test lr.output == abspath(H5) && !haskey(lr, :project) && !haskey(lr, :manifest)
+    end
     @test VisualisationServer._port_free("127.0.0.1", port)   # stopped after the linger
 
     # the same run as a replay
@@ -114,6 +126,14 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         @test json_(rport, "/api/cell/$(length(run.mesh) - 1)").id == run.mesh.ids[end]
         mb = get_(rport, "/api/mesh").body
         @test reinterpret(UInt32, mb[9:12])[1] == length(run.mesh)
+        # the file's run record
+        rec = json_(rport, "/api/run")
+        @test rec.file == abspath(H5) && rec.label == basename(H5) && rec.flooda5_version == FLOODA5_VERSION
+        @test collect(String, rec.argv) == args0 && rec.format_version == 2 && !isempty(rec.git_commit)
+        @test rec.mesh.n_cells == length(run.mesh) && rec.frames.n == length(run.t) && rec.frames.t_last ≈ 300.0
+        @test !haskey(rec, :project) && !haskey(rec, :manifest) && !haskey(rec, :git_diff)
+        @test rec.mesh.cell_area_min_m2 ≈ rec.mesh.cell_area_max_m2 rtol = 0.05   # a 25 m Cartesian grid
+        @test json_(rport, "/api/about").variables.water_depth.unit == "m"
     finally
         VisualisationServer.stop(vis); close(f)
     end

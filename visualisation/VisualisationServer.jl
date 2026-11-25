@@ -20,6 +20,8 @@
 #   GET /api/frames/{id}/{var}     → raw little-endian Float32[n_cells]
 #   GET /api/ranges?wet=0.05       → each variable's 2nd/98th percentiles over the run (`run_ranges`)
 #   GET /api/cell/{i}?frame={id}   → one cell (0-based index): id, centre, values
+#   GET /api/run                   → the run record (`set_run!`; {} until set)
+#   GET /api/about                 → variable descriptions (io/variables.toml)
 #   WS  /api/live                  → hello, mesh, frame, reindex, complete (JSON)
 #
 # Every request must carry a Host header naming localhost / 127.0.0.1 (a
@@ -47,6 +49,7 @@ module VisualisationServer
 using HTTP
 using JSON3
 using Sockets
+import TOML
 
 # Access keys (Cesium ion token, Google key): environment, then key files
 include(joinpath(@__DIR__, "..", "io", "FloodA5Keys.jl"))
@@ -221,6 +224,7 @@ mutable struct VisServer
     task          :: Union{Task,Nothing}
     shutdown      :: Base.Event
     ranges        :: Dict{Tuple{Float64,Int,Int,Int},Any}   # run_ranges, by (wet, frames pushed, limits)
+    run           :: Dict{String,Any}                       # /api/run (`set_run!`)
 end
 
 _envnum(name, default) = something(tryparse(Float64, get(ENV, name, "")), default)
@@ -257,7 +261,8 @@ function start(; port::Int = 8080, host::AbstractString = "127.0.0.1",
                   Dict{String,Any}(String(k) => v for (k, v) in config),
                   Channel{String}[], Float64(min_interval), -Inf,
                   Dict{Tuple{Int,String},Vector{Float32}}(), Tuple{Int,String}[], 48,
-                  nothing, nothing, Base.Event(), Dict{Tuple{Float64,Int,Int,Int},Any}())
+                  nothing, nothing, Base.Event(), Dict{Tuple{Float64,Int,Int,Int},Any}(),
+                  Dict{String,Any}())
     _port_free(s.host, port) ||
         error("VisServer: port $port is already in use. Stop the other process or use --vis-port.")
     ready = Channel{Any}(1)
@@ -304,6 +309,30 @@ function stop(s::VisServer)
     s.server === nothing || try close(s.server) catch end
     notify(s.shutdown)
     return nothing
+end
+
+"""
+    set_run!(s, record) → s
+
+The run record `/api/run` serves (the viewer's *Run* tab):
+`FloodA5Output.run_record` of the output file (replay) or of the run in
+progress. Plain JSON-able data (`run_record` makes it so).
+"""
+function set_run!(s::VisServer, record::AbstractDict)
+    lock(s.lock) do
+        s.run = Dict{String,Any}(String(k) => v for (k, v) in record)
+    end
+    return s
+end
+
+const _VARIABLES_TOML = joinpath(@__DIR__, "..", "io", "variables.toml")
+const _ABOUT = Ref{Any}(nothing)
+
+"The variable descriptions (io/variables.toml; FloodA5Output.variable_docs reads the same file)."
+function about()
+    a = _ABOUT[]
+    a === nothing || return a
+    return (_ABOUT[] = TOML.parsefile(_VARIABLES_TOML))
 end
 
 "Set (or replace) the mesh and tell connected clients."
@@ -620,6 +649,8 @@ function _route(s::VisServer, req::HTTP.Request)
         a = parts[2]
         a == "config" && length(parts) == 2 && return _json(viewer_config(s))
         a == "info"   && length(parts) == 2 && return _json(_info(s))
+        a == "run"    && length(parts) == 2 && return _json(lock(() -> copy(s.run), s.lock))
+        a == "about"  && length(parts) == 2 && return _json(about())
         if a == "mesh" && length(parts) == 2
             m = s.mesh
             return m === nothing ? HTTP.Response(204, "") : _binary(m.bytes)

@@ -116,8 +116,8 @@ export class SurfaceMesh {
         uMinDepth: { value: s.minDepth }, uExag: { value: s.exag },
         uBorders: { value: s.borders }, uDepthBias: { value: s.depthBias },
       },
-      transparent: role !== 'bed',
-      depthWrite: role === 'bed',
+      transparent: role !== 'bed' || s.alpha < 1,     // the bed: opaque unless its opacity is < 1
+      depthWrite: role === 'bed' && s.alpha >= 1,
       side: THREE.DoubleSide,
     });
     this.object3d = new THREE.Mesh(g, this.material);
@@ -160,6 +160,14 @@ export class SurfaceMesh {
     if (s.colormap && s.colormap !== old.colormap) {
       this.material.uniforms.uCmap.value.dispose();
       this.material.uniforms.uCmap.value = colormapTexture(s.colormap);
+    }
+    if (this.role === 'bed' && s.alpha !== undefined) {
+      const tr = this.style.alpha < 1;
+      if (tr !== this.material.transparent) {
+        this.material.transparent = tr;
+        this.material.depthWrite = !tr;
+        this.material.needsUpdate = true;
+      }
     }
     this.instance.notifyChange();
   }
