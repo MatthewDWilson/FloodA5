@@ -15,6 +15,7 @@
 //   flyToBounds([w, s, e, n], height, duration)
 //   flyTo(lon, lat, height, headingDeg, pitchDeg)
 //   pickLonLat(x, y) → {lon, lat} | null   (canvas pixels)
+//   project(lon, lat, h) → {x, y} | null   canvas pixels; null behind the globe or camera
 //   sampleBasemapHeights([{lon, lat}], surfaces) → Float64Array (NaN: none)
 //   tilesLoaded() → bool
 //   credits() → html (or '' when the engine shows its own)
@@ -29,6 +30,7 @@ import { cssGradient, COLORMAP_NAMES, COLORMAP_LABELS } from './colormaps.js';
 import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
 import { renderRun, renderAbout, shellLine } from './info.js';
+import { TimePlot, SERIES_COLORS, MAX_SERIES, freeSlot, isClick, seriesValues, seriesCsv, nearestIndex } from './plot.js';
 
 // source: the frame variable read; stat: its name in /api/ranges; colormap: the default palette
 const VARS = {
@@ -67,6 +69,7 @@ export function startViewer(engine) {
     varName: 'depth', range: { mode: 'run', min: 0, max: 1 }, runRanges: null, rangesAt: -Infinity,
     offset: 0, offsetJob: 0, bedRange: { mode: 'auto', min: 0, max: 1 }, tab: 'layers', about: null, run: null,
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
+    plot: { series: [], varName: null, dock: 'bottom', chart: null, timer: null, ctxCell: -1 }, chartLib: null,
   };
 
   document.body.insertAdjacentHTML('beforeend', UI_HTML);
@@ -434,6 +437,7 @@ export function startViewer(engine) {
     updateRange();
     updateStats();
     updateTimeline();
+    app.plot.chart?.setCursor(f.t);
     if (app.playing) prefetch(i + 1);
   }
 
@@ -685,6 +689,7 @@ export function startViewer(engine) {
         break;
       case 'mesh':
         app.runRanges = null;
+        closePlot();                       // cell indices refer to the old mesh
         await refreshInfo();
         await loadMesh();
         await refreshFrames();
@@ -697,16 +702,19 @@ export function startViewer(engine) {
           updateTimeline();
           if (app.live && app.mesh) showFrame(app.frames.length - 1);
           refreshRanges();
+          schedulePlotRefresh();
         }
         break;
       case 'reindex':
         await refreshFrames();
+        schedulePlotRefresh(0);
         break;
       case 'complete':
         app.complete = true; status.complete = true;
         log(`Run complete: ${msg.frames} frames`);
         await refreshFrames();
         refreshRanges(true);
+        schedulePlotRefresh(0);
         break;
     }
     refreshStatus();
@@ -718,6 +726,7 @@ export function startViewer(engine) {
     $('run-label').textContent = [i.label, i.flow_model].filter(Boolean).join(' · ');
     $('run-label').title = i.label || '';
     populateVars();
+    if (!$('plot').hidden) populatePlotVars();
   }
 
   function setLive(on) {
@@ -767,6 +776,7 @@ export function startViewer(engine) {
         if (app.simTime >= app.frames.last().t) stopPlay();
       }
     }
+    if (app.plot.series.length) updateMarkers();
     requestAnimationFrame(tick);
   }
 
@@ -814,6 +824,245 @@ export function startViewer(engine) {
   }
 
   // -------------------------------------------------------------------------
+  // Time series at cells (plot.js): right-click → Add to plot
+  // -------------------------------------------------------------------------
+
+  /** Chart.js (an ES module from cfg.chartjs_url), loaded when the first plot opens. */
+  function loadChart() {
+    app.chartLib ??= import(app.cfg.chartjs_url).then(m => {
+      const Chart = m.Chart || m.default?.Chart || m.default || window.Chart;   // ES module, or the UMD build (sets window.Chart)
+      if (m.registerables) Chart.register(...m.registerables);
+      return Chart;
+    }).catch(e => { app.chartLib = null; throw e; });
+    return app.chartLib;
+  }
+
+  function plotVar() { return app.plot.varName || app.varName; }
+
+  function populatePlotVars() {
+    const sel = $('plot-var'), cur = plotVar();
+    sel.innerHTML = '';
+    for (const k of availableVars()) {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = `${VARS[k].label}${VARS[k].unit ? ` (${VARS[k].unit})` : ''}`;
+      sel.appendChild(o);
+    }
+    sel.value = availableVars().includes(cur) ? cur : 'depth';
+    app.plot.varName = sel.value;
+  }
+
+  const seriesLabel = s => `cell ${s.cell}${s.id ? ` (${s.id})` : ''}`;
+
+  /** The cell under canvas pixel (x, y), or -1. */
+  function cellAt(x, y) {
+    if (!app.mesh) return -1;
+    let ll = null;
+    try { ll = engine.pickLonLat(x, y); } catch { ll = null; }
+    return ll ? app.locator.find(ll.lon, ll.lat) : -1;
+  }
+
+  async function addToPlot(i) {
+    const p = app.plot;
+    if (!app.mesh || !(i >= 0 && i < app.mesh.nCells)) return false;
+    if (p.series.some(s => s.cell === i)) { log(`Cell ${i} is already in the plot.`); return false; }
+    const slot = freeSlot(p.series.map(s => s.slot));
+    if (slot < 0) { log(`At most ${MAX_SERIES} cells in the plot: remove one first.`, 'warn'); return false; }
+    const s = { cell: i, slot, id: null, t: [], raw: [], source: null };
+    p.series.push(s);
+    renderMarkers();
+    await openPlot();
+    try {
+      await loadSeries(s);
+    } catch (e) {
+      log(`Series of cell ${i}: ${e.message || e}`, 'err');
+    }
+    drawPlot();
+    return true;
+  }
+
+  function removeFromPlot(i) {
+    const p = app.plot;
+    p.series = p.series.filter(s => s.cell !== i);
+    if (!p.series.length) return closePlot();
+    drawPlot();
+  }
+
+  function setPlotDock(dock) {
+    const d = dock === 'right' ? 'right' : 'bottom';
+    app.plot.dock = d;
+    store.set('flooda5.plot.dock', d);
+    $('plot').className = `dock-${d}`;
+    const open = !$('plot').hidden;
+    document.body.classList.toggle('plot-bottom', open && d === 'bottom');
+    document.body.classList.toggle('plot-right', open && d === 'right');
+  }
+
+  async function openPlot() {
+    $('plot').hidden = false;
+    setPlotDock(app.plot.dock);
+    if (app.plot.chart) return;
+    populatePlotVars();
+    try {
+      const Chart = await loadChart();
+      app.plot.chart ??= new TimePlot($('plot-canvas'), Chart, { onPick: t => goToTime(t) });
+    } catch (e) {
+      log(`Chart.js did not load (${app.cfg.chartjs_url}): ${e.message || e}`, 'err');
+    }
+  }
+
+  function closePlot() {
+    const p = app.plot;
+    p.series = [];
+    clearTimeout(p.timer); p.timer = null;
+    $('plot').hidden = true;
+    setPlotDock(p.dock);
+    p.chart?.destroy(); p.chart = null;
+    renderMarkers();
+    status.plot = { cells: [], var: plotVar(), points: 0 };
+  }
+
+  /** Show the frame nearest to time t (a click on the plot). */
+  function goToTime(t) {
+    const ts = app.frames.frames.map(f => f.t), i = nearestIndex(ts, t);
+    if (i < 0) return;
+    stopPlay(); setLive(false); showFrame(i);
+  }
+
+  async function loadSeries(s) {
+    const src = VARS[plotVar()].source;
+    const r = await fetchJson(`/api/series/${s.cell}?var=${encodeURIComponent(src)}`);
+    s.id = r.id; s.t = r.t; s.raw = r.values; s.source = src;
+  }
+
+  async function reloadSeries() {
+    await Promise.all(app.plot.series.map(s => loadSeries(s).catch(e => log(`Series of cell ${s.cell}: ${e.message || e}`, 'warn'))));
+    drawPlot();
+  }
+
+  /** Re-read the plotted series (live frames arrive, frames reindexed): at most every 2 s. */
+  function schedulePlotRefresh(ms = 2000) {
+    const p = app.plot;
+    if (!p.series.length || p.timer) return;
+    p.timer = setTimeout(() => { p.timer = null; reloadSeries(); }, ms);
+  }
+
+  function plotLines() {
+    const name = plotVar(), wet = Math.max(+$('min-depth').value || 0, 0);
+    return app.plot.series.map(s => ({
+      key: s.cell, label: `${s.slot + 1} ${seriesLabel(s)}`, color: SERIES_COLORS[s.slot], t: s.t,
+      y: seriesValues(name, s.raw, { base: app.mesh?.base[s.cell] ?? 0, wet }),
+    }));
+  }
+
+  function drawPlot() {
+    const p = app.plot, name = plotVar(), v = VARS[name], lines = plotLines();
+    p.chart?.setSeries(lines, { label: v.label, unit: v.unit });
+    const f = app.frames.at(app.current);
+    p.chart?.setCursor(f ? f.t : null);
+    const leg = $('plot-legend');
+    leg.innerHTML = '';
+    for (const s of [...p.series].sort((a, b) => a.slot - b.slot)) {
+      const e = document.createElement('span');
+      e.className = 'entry';
+      const line = document.createElement('span'); line.className = 'line'; line.style.background = SERIES_COLORS[s.slot];
+      const num = document.createElement('span'); num.className = 'num'; num.textContent = String(s.slot + 1);
+      const lab = document.createElement('span'); lab.textContent = `cell ${s.cell}`; lab.title = seriesLabel(s);
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = '✕'; x.title = `Remove cell ${s.cell}`; x.dataset.cell = String(s.cell);
+      e.append(line, num, lab, x);
+      leg.appendChild(e);
+    }
+    renderMarkers();
+    status.plot = { cells: p.series.map(s => s.cell), var: name, dock: p.dock,
+                    points: lines.reduce((n, l) => n + l.y.filter(y => y !== null).length, 0) };
+  }
+
+  function plotCsv() {
+    const lines = plotLines();
+    return seriesCsv(lines.map((l, k) => ({ label: seriesLabel(app.plot.series[k]), t: l.t, y: l.y })),
+                     { variable: plotVar(), unit: VARS[plotVar()].unit });
+  }
+
+  function downloadCsv() {
+    if (!app.plot.series.length) return;
+    const name = `${(app.info?.label || 'flooda5').replace(/[^\w.-]+/g, '_')}_${plotVar()}.csv`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([plotCsv()], { type: 'text/csv' }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // map markers: numbered circles at the plotted cells, placed every animation frame
+  function renderMarkers() {
+    const box = $('markers');
+    box.innerHTML = '';
+    for (const s of app.plot.series) {
+      const m = document.createElement('div');
+      m.className = 'marker'; m.textContent = String(s.slot + 1);
+      m.style.background = SERIES_COLORS[s.slot]; m.dataset.cell = String(s.cell);
+      m.hidden = true;
+      box.appendChild(m);
+    }
+    if (app.plot.series.length) updateMarkers();
+  }
+
+  function updateMarkers() {
+    if (!app.mesh || !engine.project) return;
+    const m = app.mesh, d = app.depth, th = Math.max(+$('min-depth').value || 0, 0);
+    for (const el of $('markers').children) {
+      const i = +el.dataset.cell;
+      const wet = d && d[i] >= th;
+      const z = (wet ? m.base[i] + d[i] : m.elevation[i]) + app.offset;
+      let q = null;
+      try { q = engine.project(app.centres.lon[i], app.centres.lat[i], Number.isFinite(z) ? z : app.offset); } catch { q = null; }
+      el.hidden = !q;
+      if (q) { el.style.left = `${q.x}px`; el.style.top = `${q.y}px`; }
+    }
+  }
+
+  // the right-click menu
+  function openCtxMenu(cx, cy, x, y) {
+    const i = cellAt(x, y), menu = $('ctx-menu');
+    if (i < 0) return closeCtxMenu();
+    app.plot.ctxCell = i;
+    const has = app.plot.series.some(s => s.cell === i);
+    $('ctx-add').textContent = `Add cell ${i} to plot`;
+    $('ctx-add').disabled = has;
+    $('ctx-remove').hidden = !has;
+    menu.hidden = false;
+    menu.style.left = `${Math.min(cx, window.innerWidth - menu.offsetWidth - 4)}px`;
+    menu.style.top = `${Math.min(cy, window.innerHeight - menu.offsetHeight - 4)}px`;
+    $(has ? 'ctx-remove' : 'ctx-add').focus();
+  }
+
+  function closeCtxMenu() { $('ctx-menu').hidden = true; app.plot.ctxCell = -1; }
+
+  function setupContextMenu() {
+    const canvas = engine.canvas;
+    let down = null;
+    // right-drag turns or zooms the view in both engines: only a right *click* opens the menu
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('pointerdown', e => {
+      down = e.button === 2 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+      if (!$('ctx-menu').hidden) closeCtxMenu();
+    }, true);
+    canvas.addEventListener('pointerup', e => {
+      if (e.button !== 2) return;
+      const up = { x: e.clientX, y: e.clientY, t: performance.now() };
+      if (isClick(down, up)) {
+        const r = canvas.getBoundingClientRect();
+        openCtxMenu(e.clientX, e.clientY, e.clientX - r.left, e.clientY - r.top);
+      }
+      down = null;
+    }, true);
+    $('ctx-add').onclick = () => { const i = app.plot.ctxCell; closeCtxMenu(); addToPlot(i); };
+    $('ctx-remove').onclick = () => { const i = app.plot.ctxCell; closeCtxMenu(); removeFromPlot(i); };
+    $('ctx-menu').addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu(); });
+    document.addEventListener('pointerdown', e => { if (!$('ctx-menu').hidden && !e.target.closest('#ctx-menu')) closeCtxMenu(); });
+  }
+
+  // -------------------------------------------------------------------------
   // Controls
   // -------------------------------------------------------------------------
 
@@ -852,7 +1101,16 @@ export function startViewer(engine) {
       app.water?.setStyle({ minDepth: Math.max(+$('min-depth').value || 0, 0) });
       updateStats(); updateRange();
       refreshRanges(true);
+      if (app.plot.series.length && plotVar() === 'level') drawPlot();
     };
+    $('plot-var').onchange = () => { app.plot.varName = $('plot-var').value; return reloadSeries(); };
+    $('plot-dock').onclick = () => setPlotDock(app.plot.dock === 'bottom' ? 'right' : 'bottom');
+    $('plot-close').onclick = () => closePlot();
+    $('plot-csv').onclick = () => downloadCsv();
+    $('plot-legend').addEventListener('click', e => {
+      const b = e.target.closest('button[data-cell]');
+      if (b) removeFromPlot(+b.dataset.cell);
+    });
     $('show-bed').onchange = () => setBed($('show-bed').checked);
     $('bed-legend').onclick = () => ($('bed-palette-menu').hidden ? openPaletteMenu('bed') : closePaletteMenu('bed'));
     $('bed-range-mode').onchange = () => {
@@ -904,7 +1162,7 @@ export function startViewer(engine) {
     $('btn-live').onclick = () => setLive(!app.live);
     window.addEventListener('keydown', e => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
-          e.target.closest?.('.palette-menu, .legend, .tabs')) return;
+          e.target.closest?.('.palette-menu, .legend, .tabs, #plot, .ctx-menu')) return;
       if (e.key === ' ') { e.preventDefault(); app.playing ? stopPlay() : startPlay(); }
       else if (e.key === 'ArrowRight') { stopPlay(); step(1); }
       else if (e.key === 'ArrowLeft') { stopPlay(); step(-1); }
@@ -940,6 +1198,17 @@ export function startViewer(engine) {
       applyBedStyle();
     },
     showTab: name => showTab(name),
+    addToPlot: i => addToPlot(i),                       // cell index (0-based, mesh order)
+    addToPlotAt: (lon, lat) => addToPlot(app.locator ? app.locator.find(lon, lat) : -1),
+    removeFromPlot: i => removeFromPlot(i),
+    closePlot: () => closePlot(),
+    setPlotVar: name => { $('plot-var').value = name; return $('plot-var').onchange(); },
+    setPlotDock: dock => setPlotDock(dock),
+    plotCsv: () => plotCsv(),
+    plotPick: t => goToTime(t),
+    markers: () => Array.from($('markers').children, el => ({ cell: +el.dataset.cell, shown: !el.hidden,
+                                                               x: parseFloat(el.style.left), y: parseFloat(el.style.top) })),
+    rightClick: (x, y) => { const r = engine.canvas.getBoundingClientRect(); openCtxMenu(r.left + x, r.top + y, x, y); },
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setDepthBias: f => app.water?.setStyle({ depthBias: f }),
     play: () => startPlay(),
@@ -959,6 +1228,7 @@ export function startViewer(engine) {
   (async () => {
     wireControls();
     $('show-borders').checked = store.get('flooda5.borders') === '1';
+    app.plot.dock = store.get('flooda5.plot.dock') === 'right' ? 'right' : 'bottom';
     const bo = +store.get('flooda5.bed.opacity');
     if (bo >= 0.1 && bo <= 1) $('bed-opacity').value = String(bo);
     try {
@@ -972,6 +1242,7 @@ export function startViewer(engine) {
       $('engine-label').textContent = engine.name;
       log(engine.name);
       setupPicking();
+      setupContextMenu();
       populateBasemaps();
       const want = q.get('basemap') || app.cfg.default_basemap || engine.defaultBasemap(app.cfg);
       await setBasemap(want);

@@ -33,6 +33,30 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.8] — 2026-11-25
+
+Globe viewers: time series at cells (branch `wpv-series`; PATCH: no solver
+change, results unchanged). Step 2 of the viewer plan
+(`projectinstructions/FloodA5_GlobeViewer_Plan_2026-11.md`).
+
+- Right-click on the map (a click: a right *drag* still turns or zooms the
+  view) → *Add cell N to plot*. The first cell opens a plot panel docked at
+  the bottom (⇆ moves it to the right; remembered); each further cell adds a
+  line, up to eight, each in its own colour with a numbered marker on the
+  map. The plot shows a variable over the whole run (its own selector:
+  depth, level — where wet —, speed, wetted fraction), a dashed line at the
+  frame shown; a click on the plot shows the nearest frame; ✕ in the legend
+  removes a line (or the right-click menu on the cell); *CSV* downloads the
+  lines (time in seconds, one column per cell). Live runs: the lines grow
+  as frames arrive. Plots use Chart.js 4.5.1 (an ES module from jsDelivr,
+  loaded when the first plot opens; `FLOODA5_CHARTJS_URL` for a local copy).
+- Server: `GET /api/series/{i}?var=V` — one cell's values over the frames
+  kept (`VisualisationServer.series_data`). A replay reads the cell's row
+  from the file in one go (`set_replay!(…; series = (var, cell) -> …)`,
+  `FO.read_series`); live runs read the frames in memory. `/api/config`
+  gives `chartjs_url`. Engines gain `project(lon, lat, h)` (screen
+  position of a point; the markers).
+
 ## [0.8.7] — 2026-11-25
 
 Globe viewers: Run and About tabs, bed colours, *brown flood water*; run

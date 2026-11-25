@@ -20,6 +20,7 @@
 #   GET /api/frames/{id}/{var}     → raw little-endian Float32[n_cells]
 #   GET /api/ranges?wet=0.05       → each variable's 2nd/98th percentiles over the run (`run_ranges`)
 #   GET /api/cell/{i}?frame={id}   → one cell (0-based index): id, centre, values
+#   GET /api/series/{i}?var=V      → one cell's values of V over the frames kept (`series_data`)
 #   GET /api/run                   → the run record (`set_run!`; {} until set)
 #   GET /api/about                 → variable descriptions (io/variables.toml)
 #   WS  /api/live                  → hello, mesh, frame, reindex, complete (JSON)
@@ -42,7 +43,8 @@
 #   VisualisationServer.notify_complete!(vis)
 #   VisualisationServer.stop(vis)
 #
-# Usage (replay): set_replay!(vis, times, vars, (k, var) -> Vector{Float32}).
+# Usage (replay): set_replay!(vis, times, vars, (k, var) -> Vector{Float32};
+#                             series = (var, cell) -> Vector{Float32}).
 
 module VisualisationServer
 
@@ -63,6 +65,8 @@ const PROTOCOL = 2
 const MESH_MAGIC = b"FA5M"
 const MESH_VERSION = UInt32(1)
 const DEFAULT_CESIUM_URL = "https://cesium.com/downloads/cesiumjs/releases/1.147/Build/Cesium/"
+# Chart.js (the time-series plots), an ES module loaded when the first plot opens
+const DEFAULT_CHARTJS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/+esm"
 
 # ---------------------------------------------------------------------------
 # Mesh payload
@@ -181,10 +185,12 @@ end
 LiveFrames(budget) = LiveFrames(Int[], Float64[], Dict{String,Vector{Float32}}[], 0, budget, 1)
 
 struct ReplayFrames
-    t     :: Vector{Float64}
-    vars  :: Vector{String}
-    read  :: Function       # (k, var) → Vector{Float32}
+    t      :: Vector{Float64}
+    vars   :: Vector{String}
+    read   :: Function                  # (k, var) → Vector{Float32}
+    series :: Union{Function,Nothing}   # (var, cell) → Vector{Float32} over all frames, or nothing
 end
+ReplayFrames(t, vars, read) = ReplayFrames(t, vars, read, nothing)
 
 _frame_bytes(d) = sum(v -> sizeof(v), values(d); init = 0)
 
@@ -347,14 +353,17 @@ function set_mesh!(s::VisServer, m::MeshPayload)
 end
 
 """
-    set_replay!(s, times, vars, read) → s
+    set_replay!(s, times, vars, read; series = nothing) → s
 
 Serve a recorded run: `read(k, var)` returns frame k's `var` (in mesh order).
-The run is complete from the start.
+`series(var, cell)` (optional; cell 1-based, mesh order) returns one cell's
+values over all frames, for `/api/series` — without it a series is read
+frame by frame. The run is complete from the start.
 """
-function set_replay!(s::VisServer, times::AbstractVector, vars::AbstractVector, read::Function)
+function set_replay!(s::VisServer, times::AbstractVector, vars::AbstractVector, read::Function;
+                     series::Union{Function,Nothing} = nothing)
     lock(s.lock) do
-        s.frames = ReplayFrames(Float64.(times), String.(vars), read)
+        s.frames = ReplayFrames(Float64.(times), String.(vars), read, series)
         s.complete = true
         empty!(s.cache); empty!(s.cache_order); empty!(s.ranges)
         _broadcast!(s, (type = "reindex",))
@@ -435,6 +444,32 @@ function _frame_data(s::VisServer, id::Int, var::String)
         end
     end
     return v
+end
+
+"""
+    series_data(s, cell, var) → (ids, t, values) or nothing
+
+One cell's values of frame variable `var` over the frames kept (`cell`:
+1-based, mesh order): frame ids, times (s) and Float32 values. `nothing` if
+the variable is not served. A replay with a `series` reader reads the cell's
+row once; otherwise (live, or no reader) the values come from each frame.
+"""
+function series_data(s::VisServer, cell::Int, var::String)
+    f = s.frames
+    if f isa LiveFrames
+        return lock(s.lock) do
+            any(d -> haskey(d, var), f.data) || return nothing
+            vals = Float32[(v = get(d, var, nothing); v === nothing ? NaN32 : v[cell]) for d in f.data]
+            (copy(f.ids), copy(f.t), vals)
+        end
+    end
+    var in f.vars || return nothing
+    ids = collect(1:length(f.t))
+    if f.series !== nothing
+        return (ids, copy(f.t), Vector{Float32}(f.series(var, cell)))
+    end
+    vals = Float32[(d = _frame_data(s, k, var); d === nothing ? NaN32 : d[cell]) for k in ids]
+    return (ids, copy(f.t), vals)
 end
 
 # ---------------------------------------------------------------------------
@@ -527,11 +562,12 @@ Terrain) and `FLOODA5_GOOGLE_TILES_KEY` (Google Map Tiles API key, the other
 route to the Google tiles) — from the environment or a key file
 (`io/FloodA5Keys.jl`: keys.json in the repository root or
 ~/.flooda5/keys.json), then `FLOODA5_CESIUM_URL` (base URL of a CesiumJS
-build, e.g. a local copy for offline use) from the environment.
+build, e.g. a local copy for offline use) and `FLOODA5_CHARTJS_URL` (the
+Chart.js ES module) from the environment.
 """
 function viewer_config(s::VisServer)
     c = Dict{String,Any}("protocol" => PROTOCOL, "cesium_url" => DEFAULT_CESIUM_URL,
-                         "ion_token" => "", "google_key" => "")
+                         "chartjs_url" => DEFAULT_CHARTJS_URL, "ion_token" => "", "google_key" => "")
     f = joinpath(s.viz_dir, "viewer-common", "config.json")
     if isfile(f)
         try
@@ -549,6 +585,8 @@ function viewer_config(s::VisServer)
     end
     v = get(ENV, "FLOODA5_CESIUM_URL", "")
     isempty(v) || (c["cesium_url"] = v)
+    v = get(ENV, "FLOODA5_CHARTJS_URL", "")
+    isempty(v) || (c["chartjs_url"] = v)
     occursin("YOUR_", string(c["ion_token"])) && (c["ion_token"] = "")
     endswith(string(c["cesium_url"]), "/") || (c["cesium_url"] = string(c["cesium_url"], "/"))
     return c
@@ -676,6 +714,9 @@ function _route(s::VisServer, req::HTTP.Request)
         if a == "cell" && length(parts) == 3
             return _cell(s, tryparse(Int, parts[3]), HTTP.queryparams(uri))
         end
+        if a == "series" && length(parts) == 3
+            return _series(s, tryparse(Int, parts[3]), get(HTTP.queryparams(uri), "var", "water_depth"))
+        end
     end
     return _text(404, "Not found")
 end
@@ -709,6 +750,16 @@ function _cell(s::VisServer, i, q)
     end
     return _json((index = i, id = m.ids[k], lon = m.lon[k], lat = m.lat[k],
                   elevation = fl(m.elevation[k]), base = fl(m.base[k]), frame = fid, values = vals))
+end
+
+function _series(s::VisServer, i, var)
+    m = s.mesh
+    (m === nothing || i === nothing || !(0 <= i < m.n_cells)) && return _text(404, "No such cell")
+    r = series_data(s, i + 1, String(var))
+    r === nothing && return _text(404, "No variable $var")
+    ids, t, vals = r
+    return _json((index = i, id = m.ids[i + 1], var = var, frames = ids, t = t,
+                  values = [isfinite(x) ? x : nothing for x in vals]))
 end
 
 function _static(s::VisServer, parts)

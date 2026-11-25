@@ -489,6 +489,7 @@ on 127.0.0.1 and refuses requests whose `Host` header is not `localhost`,
 | `GET /api/frames/{id}/{var}` | binary | Float32 LE, `n_cells` values in mesh order; 404 if absent |
 | `GET /api/ranges?wet=0.05` | JSON | Colour ranges over the run (since 0.8.6): `{wet, frames, of, complete, vars: {var: {p02, p98, min, max, n}}}` — below |
 | `GET /api/cell/{i}?frame={id}` | JSON | Cell `i` (0-based): `{id, lon, lat, elevation, base, values: {var: v}}` |
+| `GET /api/series/{i}?var=V` | JSON | Cell `i` (0-based) over the frames kept (since 0.8.8; `var` default `water_depth`): `{index, id, var, frames: [id], t: [s], values: [v or null]}`; 404 if the cell or variable is absent |
 | `GET /api/run` | JSON | The run record (since 0.8.7; `{}` until set) — below |
 | `GET /api/about` | JSON | Variable descriptions (since 0.8.7): `io/variables.toml` as JSON, `{variables: {name: {label, unit, definition, notes?, viewer?, references?}}, topics: {name: {title, text}}}` |
 | `WS /api/live` | JSON messages | Notifications (below) |
@@ -559,13 +560,14 @@ Messages carry no data: the client fetches what it displays.
 `GET /api/config` merges, in order: `visualisation/viewer-common/config.json`
 (optional, git-ignored; template `config.example.json`), the server's own
 settings (e.g. `web_replay.jl --offset`), then the keys (environment or key
-file, below) and `FLOODA5_CESIUM_URL`.
+file, below), `FLOODA5_CESIUM_URL` and `FLOODA5_CHARTJS_URL`.
 
 | Key | Environment / key file | Default | Description |
 |---|---|---|---|
 | `ion_token` (`cesium_ion_token` in config.json) | `FLOODA5_CESIUM_ION_TOKEN` | `""` | Cesium ion token: Google Photorealistic 3D Tiles, Cesium World Terrain |
 | `google_key` | `FLOODA5_GOOGLE_TILES_KEY` | `""` | Google Map Tiles API key (the other route to the Google tiles) |
 | `cesium_url` | `FLOODA5_CESIUM_URL` | the CesiumJS 1.147 release on cesium.com | Base URL of a CesiumJS build (`…/Build/Cesium/`; a local copy for offline use) |
+| `chartjs_url` | `FLOODA5_CHARTJS_URL` | Chart.js 4.5.1 from jsDelivr (`…/chart.js@4.5.1/+esm`) | The Chart.js ES module for the time-series plots (since 0.8.8; an ES module or the UMD build, e.g. a local copy for offline use) |
 | `default_basemap` | — | `google3d` with a token, else `osm` | `google3d` / `terrain` / `osm` / `none` (the page's `?basemap=` overrides) |
 | `vertical_offset` | — | none | Offset (m) from model heights to ellipsoidal heights, used on basemaps with ellipsoidal heights (`web_replay.jl --offset`); without it the viewer estimates one per basemap and remembers it (USER_GUIDE §6.2) |
 | `autoplay` | — | `false` | Start playing a replay when the page opens (`web_replay.jl --autoplay`; the page's `?autoplay=1` overrides) |

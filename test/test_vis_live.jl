@@ -124,6 +124,12 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         @test d == Float32.(FloodA5Output.read_frame(f, "water_depth", k))
         @test json_(rport, "/api/cell/0").id == run.mesh.ids[1]          # file order
         @test json_(rport, "/api/cell/$(length(run.mesh) - 1)").id == run.mesh.ids[end]
+        # a cell's series, read from the file in one go (time-series plots)
+        c = length(run.mesh) ÷ 2
+        sr = json_(rport, "/api/series/$(c - 1)?var=velocity")
+        @test sr.id == run.mesh.ids[c] && collect(sr.t) == run.t && collect(sr.frames) == 1:k
+        @test Float32.(sr.values) == Float32.(FloodA5Output.read_series(f, "velocity", c))
+        @test Float32.(json_(rport, "/api/series/$(c - 1)").values)[k] == d[c]
         mb = get_(rport, "/api/mesh").body
         @test reinterpret(UInt32, mb[9:12])[1] == length(run.mesh)
         # the file's run record
