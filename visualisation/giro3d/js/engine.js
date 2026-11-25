@@ -82,6 +82,13 @@ export class Giro3DEngine {
 
   photoreal(name) { return name === 'google3d'; }
 
+  /**
+   * The height reference of a basemap: 'ellipsoid' (Google tiles: heights
+   * above WGS84), 'geoid' (Terrarium: heights above mean sea level, drawn as
+   * if above the ellipsoid) or 'flat'.
+   */
+  heightDatum(name) { return name === 'google3d' ? 'ellipsoid' : name === 'terrain' ? 'geoid' : 'flat'; }
+
   async setBasemap(name) {
     const inst = this.instance, cfg = this.cfg;
     if (name === 'google3d' && !(cfg.ion_token || cfg.google_key)) name = 'osm';

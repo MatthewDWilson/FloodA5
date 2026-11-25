@@ -82,53 +82,66 @@ export function finiteQuantile(values, q) {
 
 /**
  * Triangulate the mesh for the surface layers.
- * Cells are convex (A5 pentagons, squares, hexagons): a fan from the first
- * vertex. Vertices are placed on the ellipsoid at height h0 (choose it near
- * the water level so the bounding volume is right) relative to `centre`.
- * @returns {{positions:Float32Array, cell:Float32Array, indices:Uint32Array,
- *            centre:number[], h0:number, min:number[], max:number[]}}
+ * Each cell is a fan from its centre (the vertex mean; the cells are convex
+ * or star-shaped about it: A5 pentagons, squares, hexagons, Voronoi cells)
+ * on its own vertices: vertex `offsets[i] + i` is cell i's centre, followed by
+ * its ring. `edge` is 1 at the centre and 0 on the ring, so in the fragment
+ * shader it falls to 0 exactly on the cell's boundary (the cell-border lines).
+ * Vertices are placed on the ellipsoid at height h0 (choose it near the water
+ * level so the bounding volume is right) relative to `centre`.
+ * @returns {{positions:Float32Array, cell:Float32Array, edge:Float32Array,
+ *            indices:Uint32Array, centre:number[], h0:number, min:number[], max:number[]}}
  */
 export function buildSurface(mesh, h0 = 0) {
   const centre = geodeticToEcef(mesh.originLon, mesh.originLat, h0);
-  const nv = mesh.nVertices;
+  const nv = mesh.nVertices + mesh.nCells;
   const positions = new Float32Array(3 * nv);
   const cell = new Float32Array(nv);
-  let ntri = 0;
-  for (let i = 0; i < mesh.nCells; i++) ntri += mesh.offsets[i + 1] - mesh.offsets[i] - 2;
-  const indices = new Uint32Array(3 * ntri);
+  const edge = new Float32Array(nv);
+  const indices = new Uint32Array(3 * mesh.nVertices);     // one triangle per cell side
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  const put = (o, lon, lat) => {
+    const p = geodeticToEcef(lon, lat, h0);
+    for (let k = 0; k < 3; k++) {
+      const x = Math.fround(p[k] - centre[k]);
+      positions[3 * o + k] = x;
+      if (x < min[k]) min[k] = x;
+      if (x > max[k]) max[k] = x;
+    }
+  };
   let t = 0;
   for (let i = 0; i < mesh.nCells; i++) {
-    const a = mesh.offsets[i], b = mesh.offsets[i + 1];
+    const a = mesh.offsets[i], b = mesh.offsets[i + 1], c = a + i;   // c: the centre's vertex
+    let sx = 0, sy = 0;
+    for (let v = a; v < b; v++) { sx += mesh.dlon[v]; sy += mesh.dlat[v]; }
+    put(c, mesh.originLon + sx / (b - a), mesh.originLat + sy / (b - a));
+    cell[c] = i; edge[c] = 1;
     for (let v = a; v < b; v++) {
-      const p = geodeticToEcef(mesh.originLon + mesh.dlon[v], mesh.originLat + mesh.dlat[v], h0);
-      for (let k = 0; k < 3; k++) {
-        const x = Math.fround(p[k] - centre[k]);
-        positions[3 * v + k] = x;
-        if (x < min[k]) min[k] = x;
-        if (x > max[k]) max[k] = x;
-      }
-      cell[v] = i;
-    }
-    for (let v = a + 1; v < b - 1; v++) {
-      indices[t++] = a; indices[t++] = v; indices[t++] = v + 1;
+      const o = v + i + 1;
+      put(o, mesh.originLon + mesh.dlon[v], mesh.originLat + mesh.dlat[v]);
+      cell[o] = i;
+      indices[t++] = c; indices[t++] = o; indices[t++] = v + 1 < b ? o + 1 : c + 1;
     }
   }
-  return { positions, cell, indices, centre, h0, min, max };
+  return { positions, cell, edge, indices, centre, h0, min, max };
 }
 
 /**
- * A binary glTF 2.0 (GLB) of the surface: POSITION, a custom per-vertex
- * attribute `_CELL` (the cell index, float — exact below 2^24 cells),
- * UNSIGNED_INT indices and one unlit, double-sided material. The glTF is
- * Z-up (load it with upAxis Z, forwardAxis X so no axis correction applies).
+ * A binary glTF 2.0 (GLB) of the surface: POSITION, custom per-vertex
+ * attributes `_CELL` (the cell index, float — exact below 2^24 cells) and
+ * `_FA5EDGE` (buildSurface's `edge`; a name of our own, since CesiumJS
+ * already declares a `v_edge` of its own), UNSIGNED_INT indices and one unlit,
+ * double-sided material. The glTF is Z-up (load it with upAxis Z, forwardAxis
+ * X so no axis correction applies).
  * @returns {Uint8Array}
  */
 export function buildGlb(surface) {
-  const { positions, cell, indices, min, max } = surface;
+  const { positions, cell, edge, indices, min, max } = surface;
   const pad4 = n => (n + 3) & ~3;
-  const posBytes = positions.byteLength, cellBytes = cell.byteLength, idxBytes = indices.byteLength;
-  const posOff = 0, cellOff = pad4(posOff + posBytes), idxOff = pad4(cellOff + cellBytes);
+  const posBytes = positions.byteLength, cellBytes = cell.byteLength, edgeBytes = edge.byteLength,
+        idxBytes = indices.byteLength;
+  const posOff = 0, cellOff = pad4(posOff + posBytes), edgeOff = pad4(cellOff + cellBytes),
+        idxOff = pad4(edgeOff + edgeBytes);
   const binLength = pad4(idxOff + idxBytes);
   const nv = positions.length / 3;
   const json = {
@@ -137,7 +150,7 @@ export function buildGlb(surface) {
     scene: 0,
     scenes: [{ nodes: [0] }],
     nodes: [{ mesh: 0 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0, _CELL: 1 }, indices: 2, material: 0, mode: 4 }] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, _CELL: 1, _FA5EDGE: 2 }, indices: 3, material: 0, mode: 4 }] }],
     materials: [{
       pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1 },
       doubleSided: true,
@@ -148,12 +161,14 @@ export function buildGlb(surface) {
     bufferViews: [
       { buffer: 0, byteOffset: posOff, byteLength: posBytes, target: 34962 },
       { buffer: 0, byteOffset: cellOff, byteLength: cellBytes, target: 34962 },
+      { buffer: 0, byteOffset: edgeOff, byteLength: edgeBytes, target: 34962 },
       { buffer: 0, byteOffset: idxOff, byteLength: idxBytes, target: 34963 },
     ],
     accessors: [
       { bufferView: 0, componentType: 5126, count: nv, type: 'VEC3', min, max },
       { bufferView: 1, componentType: 5126, count: nv, type: 'SCALAR' },
-      { bufferView: 2, componentType: 5125, count: indices.length, type: 'SCALAR' },
+      { bufferView: 2, componentType: 5126, count: nv, type: 'SCALAR' },
+      { bufferView: 3, componentType: 5125, count: indices.length, type: 'SCALAR' },
     ],
   };
   let jsonText = JSON.stringify(json);
@@ -174,6 +189,7 @@ export function buildGlb(surface) {
   const bin = b0 + 8;
   out.set(new Uint8Array(positions.buffer, positions.byteOffset, posBytes), bin + posOff);
   out.set(new Uint8Array(cell.buffer, cell.byteOffset, cellBytes), bin + cellOff);
+  out.set(new Uint8Array(edge.buffer, edge.byteOffset, edgeBytes), bin + edgeOff);
   out.set(new Uint8Array(indices.buffer, indices.byteOffset, idxBytes), bin + idxOff);
   return out;
 }

@@ -67,34 +67,42 @@ export class CesiumEngine {
 
   photoreal(name) { return name === 'google3d'; }
 
+  /** The height reference of a basemap: 'ellipsoid' (heights above WGS84) or 'flat'. */
+  heightDatum(name) { return name === 'google3d' || name === 'terrain' ? 'ellipsoid' : 'flat'; }
+
+  /**
+   * Basemap layers are created once and then shown or hidden, never removed:
+   * destroying an imagery layer while CesiumJS still has work queued for it
+   * (reprojection of its tiles) fails inside the render loop (seen switching
+   * from OpenStreetMap to the Google tiles: "e._va is undefined").
+   */
   async setBasemap(name) {
     const C = window.Cesium, viewer = this.viewer, scene = viewer.scene;
     if ((name === 'google3d' && !this._google()) || (name === 'terrain' && !this.cfg.ion_token)) name = 'osm';
-    if (this.tileset) { scene.primitives.remove(this.tileset); this.tileset = null; }
-    viewer.imageryLayers.removeAll();
-    viewer.terrainProvider = new C.EllipsoidTerrainProvider();
-    scene.globe.show = true;
-    scene.globe.depthTestAgainstTerrain = false;
+    // load what the new basemap needs before changing what is shown
+    let tileset = null, terrain = null;
     if (name === 'google3d') {
-      this.tileset = await C.createGooglePhotorealistic3DTileset(
+      this._google3d ??= C.createGooglePhotorealistic3DTileset(
         this.cfg.google_key ? { key: this.cfg.google_key, onlyUsingWithGoogleGeocoder: true }
                             : { onlyUsingWithGoogleGeocoder: true },
-        { enableCollision: true });
-      scene.primitives.add(this.tileset);
-      scene.globe.show = false;
+        { enableCollision: true }).then(t => { t.show = false; scene.primitives.add(t); return t; })
+        .catch(e => { this._google3d = null; throw e; });
+      tileset = await this._google3d;
     } else if (name === 'terrain') {
-      viewer.terrainProvider = await C.createWorldTerrainAsync();
-      viewer.imageryLayers.add(this._osm());
-      scene.globe.depthTestAgainstTerrain = true;
-    } else if (name === 'osm') {
-      viewer.imageryLayers.add(this._osm());
+      this._worldTerrain ??= C.createWorldTerrainAsync().catch(e => { this._worldTerrain = null; throw e; });
+      terrain = await this._worldTerrain;
     }
+    this._ellipsoid ??= new C.EllipsoidTerrainProvider();
+    this._osmLayer ??= viewer.imageryLayers.addImageryProvider(
+      new C.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' }));
+    const wantTerrain = terrain || this._ellipsoid;
+    if (viewer.terrainProvider !== wantTerrain) viewer.terrainProvider = wantTerrain;
+    this._osmLayer.show = name === 'osm' || name === 'terrain';
+    scene.globe.show = name !== 'google3d';
+    scene.globe.depthTestAgainstTerrain = name === 'terrain';
+    this._google3d?.then(t => { t.show = name === 'google3d'; }).catch(() => {});
+    this.tileset = tileset;
     return name;
-  }
-
-  _osm() {
-    const C = window.Cesium;
-    return new C.ImageryLayer(new C.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' }));
   }
 
   credits() { return ''; }      // CesiumJS shows its own credits

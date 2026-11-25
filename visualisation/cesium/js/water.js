@@ -7,7 +7,7 @@
 
 import { buildSurface, buildGlb, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
 import { colormapTable } from '../../viewer-common/js/colormaps.js';
-import { defaultStyle, glslHelpers } from '../../viewer-common/js/surface.js';
+import { defaultStyle, glslHelpers, glslFragmentHelpers } from '../../viewer-common/js/surface.js';
 
 const VERTEX = `${glslHelpers()}
 void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
@@ -16,19 +16,22 @@ void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
   float d = max(fa5Packed(u_depth, u_texW, i), 0.0);
   float level = fa5Level(u_mode, u_exag, d, st);
   vec3 n = fa5Normal(vsInput.attributes.positionMC + u_centre);
-  vsOutput.positionMC = vsInput.attributes.positionMC + n * (level + u_offset - u_h0);
+  vec3 p = vsInput.attributes.positionMC + n * (level + u_offset - u_h0);
+  vsOutput.positionMC = fa5DepthBias(p, (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz, u_depthBias);
   v_depth = d;
+  v_fa5Edge = vsInput.attributes.fa5edge;
   float cv = (u_cmode > 1.5 && u_cmode < 2.5) ? fa5Packed(u_cvar, u_texW, i) : 0.0;
   v_cval = fa5ColorValue(u_cmode, d, st, cv);
 }
 `;
 
 // (CesiumJS compiles the custom vertex and fragment texts separately: both need the helpers)
-const FRAGMENT = `${glslHelpers()}
+const FRAGMENT = `${glslHelpers()}${glslFragmentHelpers()}
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+  float line = fa5Border(v_fa5Edge, u_borders);
   if (u_mode < 1.5 && v_depth < u_minDepth) discard;
-  material.diffuse = texture(u_cmap, fa5MapCoord(v_cval, u_cmin, u_cmax)).rgb;
-  material.alpha = u_alpha;
+  material.diffuse = mix(texture(u_cmap, fa5MapCoord(v_cval, u_cmin, u_cmax)).rgb, vec3(1.0), line);
+  material.alpha = max(u_alpha, line);
 }
 `;
 
@@ -77,8 +80,10 @@ export class SurfaceLayer {
         u_alpha: { type: U.FLOAT, value: s.alpha },
         u_minDepth: { type: U.FLOAT, value: s.minDepth },
         u_exag: { type: U.FLOAT, value: s.exag },
+        u_borders: { type: U.FLOAT, value: s.borders },
+        u_depthBias: { type: U.FLOAT, value: s.depthBias },
       },
-      varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT },
+      varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT, v_fa5Edge: C.VaryingType.FLOAT },
       lightingModel: C.LightingModel.UNLIT,
       translucencyMode: this.role === 'bed' ? C.CustomShaderTranslucencyMode.OPAQUE
                                             : C.CustomShaderTranslucencyMode.TRANSLUCENT,
@@ -125,7 +130,7 @@ export class SurfaceLayer {
     this.shader.setUniform('u_cvar', floatTexture(p));
   }
 
-  /** Update any of: mode, cmode, cmin, cmax, alpha, minDepth, exag, offset, colormap. */
+  /** Update any of: mode, cmode, cmin, cmax, alpha, minDepth, exag, offset, borders, colormap. */
   setStyle(s) {
     const old = this.style;
     this.style = { ...old, ...s };
@@ -134,6 +139,7 @@ export class SurfaceLayer {
     };
     set('u_mode', 'mode'); set('u_cmode', 'cmode'); set('u_cmin', 'cmin'); set('u_cmax', 'cmax');
     set('u_alpha', 'alpha'); set('u_minDepth', 'minDepth'); set('u_exag', 'exag'); set('u_offset', 'offset');
+    set('u_borders', 'borders'); set('u_depthBias', 'depthBias');
     if (s.colormap && s.colormap !== old.colormap) this.shader.setUniform('u_cmap', colormapTexture(s.colormap));
   }
 

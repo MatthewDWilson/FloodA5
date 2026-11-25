@@ -44,7 +44,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.8.5"
+const FLOODA5_VERSION = "0.8.6"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -5247,7 +5247,8 @@ Output options:
                      --mesh FILE.parquet (format-1 files only). Same as
                      visualisation/replay.jl FILE.h5 [options].
                      With --vis cesium|giro3d [--vis-port P]: in the web
-                     globe viewer instead (visualisation/web_replay.jl).
+                     globe viewer instead (visualisation/web_replay.jl;
+                     also --offset M, --autoplay, --open).
 
 Examples:
   # Generate mesh, sample DEM, build SGS tables, run 1hr SGS simulation

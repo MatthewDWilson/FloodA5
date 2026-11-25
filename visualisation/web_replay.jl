@@ -14,8 +14,12 @@
 #   --viewer V           cesium (default) or giro3d
 #   --port N             HTTP port (default 8080; --vis-port is accepted too)
 #   --mesh FILE.parquet  the run's GeoParquet mesh (format-1 files only)
-#   --offset M           default vertical offset in metres (model heights →
-#                        the basemap's heights); the viewer remembers its own
+#   --offset M           vertical offset in metres from the model's heights to
+#                        ellipsoidal ones (Google 3D tiles, Cesium World
+#                        Terrain); without it the viewer estimates it from the
+#                        basemap and remembers it
+#   --autoplay           start playing when the page opens (otherwise it shows
+#                        the first frame and waits for Play; also ?autoplay=1)
 #   --open               open the viewer in the default browser
 #
 # Cesium ion: set FLOODA5_CESIUM_ION_TOKEN for Google Photorealistic 3D Tiles
@@ -30,14 +34,14 @@ using HDF5
 const _WEB_REPLAY_VARS = ("water_depth", "velocity", "vel_u", "vel_v", "saturation")
 
 """
-    web_replay_server(h5; port = 8080, viewer = "cesium", parquet = nothing, offset = nothing)
-        → (server, file)
+    web_replay_server(h5; port = 8080, viewer = "cesium", parquet = nothing, offset = nothing,
+                      autoplay = false) → (server, file)
 
 Start a `VisualisationServer` serving the run recorded in `h5`. The HDF5 file
 stays open for reading (close it after `VisualisationServer.stop`).
 """
 function web_replay_server(h5::AbstractString; port::Integer = 8080, viewer::AbstractString = "cesium",
-                           parquet = nothing, offset = nothing)
+                           parquet = nothing, offset = nothing, autoplay::Bool = false)
     VS = VisualisationServer; FO = FloodA5Output; FA = FloodA5Analysis
     run = FA.load_run(h5; parquet)
     m = run.mesh
@@ -55,7 +59,8 @@ function web_replay_server(h5::AbstractString; port::Integer = 8080, viewer::Abs
     info = Dict{String,Any}("label" => run.label, "flow_model" => run.flow_model,
                             "source" => abspath(h5), "id_scheme" => m.id_scheme,
                             "flooda5_version" => string(get(ri, "flooda5_version", "")))
-    config = offset === nothing ? Dict{String,Any}() : Dict{String,Any}("vertical_offset" => Float64(offset))
+    config = Dict{String,Any}("autoplay" => autoplay)
+    offset === nothing || (config["vertical_offset"] = Float64(offset))
     vis = try
         VS.start(; port = Int(port), viewer = String(viewer), info, config)
     catch
@@ -73,7 +78,9 @@ Usage: julia --project=. visualisation/web_replay.jl RUN.h5 [options]
   --viewer V           cesium (default) or giro3d
   --port N             HTTP port (default 8080)
   --mesh FILE.parquet  the run's GeoParquet mesh (format-1 files only)
-  --offset M           default vertical offset (m) to the basemap's heights
+  --offset M           vertical offset (m) to ellipsoidal heights (Google 3D
+                       tiles); estimated from the basemap when not given
+  --autoplay           start playing when the page opens
   --open               open the viewer in the default browser
 """)
     code == 0 || exit(code)
@@ -109,11 +116,12 @@ function web_replay_main(args::Vector{String})
     mesh = opt("--mesh")
     off = opt("--offset")
     open_it = flag("--open")
+    autoplay = flag("--autoplay")
     files = filter(a -> !startswith(a, "--"), args)
     length(files) == 1 || (println("ERROR: give one output file"); return _web_replay_usage(1))
     length(args) == 1 || error("unknown option(s): $(join(filter(startswith("--"), args), " "))")
     vis, f = web_replay_server(files[1]; port, viewer, parquet = mesh,
-                               offset = off === nothing ? nothing : parse(Float64, off))
+                               offset = off === nothing ? nothing : parse(Float64, off), autoplay)
     url = "http://localhost:$port/"
     @info "Replay ($viewer): open $url in a browser (Ctrl-C to stop)"
     open_it && _open_browser(url)

@@ -21,12 +21,15 @@ export const UI_HTML = `
     <section>
       <h2>Variable</h2>
       <select id="var"></select>
-      <div id="legend-bar" class="legend"></div>
+      <button id="legend-bar" class="legend" type="button" title="Colour palette: click to change"
+              aria-haspopup="listbox" aria-expanded="false"></button>
+      <div id="palette-menu" role="listbox" aria-label="Colour palette" hidden></div>
       <div class="legend-labels"><span id="legend-min">0</span><span id="legend-unit"></span><span id="legend-max">1</span></div>
       <div class="row">
         <label for="range-mode">Range</label>
-        <select id="range-mode">
-          <option value="frame">auto (frame)</option>
+        <select id="range-mode" title="run: the 2nd–98th percentiles of the whole run (wet cells); frame: of the frame shown">
+          <option value="run">run (2–98 %)</option>
+          <option value="frame">frame (1–99 %)</option>
           <option value="fixed">fixed</option>
         </select>
       </div>
@@ -65,6 +68,10 @@ export const UI_HTML = `
         <label for="show-bed">Bed surface</label>
         <input id="show-bed" type="checkbox">
       </div>
+      <div class="row">
+        <label for="show-borders">Cell borders</label>
+        <input id="show-borders" type="checkbox">
+      </div>
     </section>
 
     <section>
@@ -79,9 +86,12 @@ export const UI_HTML = `
         <span class="val">m</span>
         <button id="calibrate" class="btn" title="Estimate from the basemap's heights under the mesh">Estimate</button>
       </div>
-      <p class="help">Added to model heights to give the basemap's heights (the
-        geoid separation of the DEM's datum: roughly +45 to +55 m in Great
-        Britain). Estimate compares the cell elevations with the basemap.</p>
+      <p class="help">Added to the model's heights to give the basemap's. For
+        a DEM on a mean-sea-level datum and a basemap with ellipsoidal heights
+        (3D tiles), it is the geoid height there: between about −107 and +86 m
+        worldwide. Each basemap keeps its own; it is estimated from the
+        basemap when not given (<code>--offset</code>) — Estimate redoes it.</p>
+      <p id="offset-source" class="help"></p>
     </section>
 
     <section class="buttons">

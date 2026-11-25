@@ -18,6 +18,7 @@
 #   GET /api/mesh                  → binary mesh (see `encode_mesh`); 204 until set
 #   GET /api/frames                → {complete, frames: [{id, t}]}
 #   GET /api/frames/{id}/{var}     → raw little-endian Float32[n_cells]
+#   GET /api/ranges?wet=0.05       → each variable's 2nd/98th percentiles over the run (`run_ranges`)
 #   GET /api/cell/{i}?frame={id}   → one cell (0-based index): id, centre, values
 #   WS  /api/live                  → hello, mesh, frame, reindex, complete (JSON)
 #
@@ -219,6 +220,7 @@ mutable struct VisServer
     server        :: Any
     task          :: Union{Task,Nothing}
     shutdown      :: Base.Event
+    ranges        :: Dict{Tuple{Float64,Int,Int,Int},Any}   # run_ranges, by (wet, frames pushed, limits)
 end
 
 _envnum(name, default) = something(tryparse(Float64, get(ENV, name, "")), default)
@@ -255,7 +257,7 @@ function start(; port::Int = 8080, host::AbstractString = "127.0.0.1",
                   Dict{String,Any}(String(k) => v for (k, v) in config),
                   Channel{String}[], Float64(min_interval), -Inf,
                   Dict{Tuple{Int,String},Vector{Float32}}(), Tuple{Int,String}[], 48,
-                  nothing, nothing, Base.Event())
+                  nothing, nothing, Base.Event(), Dict{Tuple{Float64,Int,Int,Int},Any}())
     _port_free(s.host, port) ||
         error("VisServer: port $port is already in use. Stop the other process or use --vis-port.")
     ready = Channel{Any}(1)
@@ -308,6 +310,7 @@ end
 function set_mesh!(s::VisServer, m::MeshPayload)
     lock(s.lock) do
         s.mesh = m
+        empty!(s.ranges)
         s.info["n_cells"] = m.n_cells
         _broadcast!(s, (type = "mesh", n_cells = m.n_cells))
     end
@@ -324,7 +327,7 @@ function set_replay!(s::VisServer, times::AbstractVector, vars::AbstractVector, 
     lock(s.lock) do
         s.frames = ReplayFrames(Float64.(times), String.(vars), read)
         s.complete = true
-        empty!(s.cache); empty!(s.cache_order)
+        empty!(s.cache); empty!(s.cache_order); empty!(s.ranges)
         _broadcast!(s, (type = "reindex",))
         _broadcast!(s, (type = "complete", frames = length(times)))
     end
@@ -403,6 +406,75 @@ function _frame_data(s::VisServer, id::Int, var::String)
         end
     end
     return v
+end
+
+# ---------------------------------------------------------------------------
+# Colour ranges over the run
+# ---------------------------------------------------------------------------
+
+# q-quantile (0–1) of sorted values, linear between order statistics (NaN if empty)
+function _sorted_quantile(a::AbstractVector, q::Real)
+    isempty(a) && return NaN
+    h = (length(a) - 1) * q + 1
+    lo = floor(Int, h); hi = min(lo + 1, length(a))
+    return Float64(a[lo]) + (h - lo) * (Float64(a[hi]) - Float64(a[lo]))
+end
+
+"""
+    run_ranges(s; wet = 0.05, max_frames = 24, max_values = 4_000_000) → NamedTuple
+
+Colour ranges fixed for the whole run: for each frame variable, and `level`
+(depth datum + depth), the 2nd and 98th percentiles (plus min, max and the
+count) over the wet cells — water depth ≥ `wet` — of up to `max_frames`
+frames spread evenly over the run (a live run: over its frames so far). Cells
+are subsampled evenly when frames × cells exceeds `max_values`. Cached until
+the mesh, the replay or the live frames change.
+"""
+function run_ranges(s::VisServer; wet::Real = 0.05, max_frames::Int = 24, max_values::Int = 4_000_000)
+    m = s.mesh
+    m === nothing && return (wet = Float64(wet), frames = 0, of = 0, complete = false, vars = Dict{String,Any}())
+    # what to scan (under the lock), read outside it
+    picks, getter, stamp, n, complete = lock(s.lock) do
+        f = s.frames
+        n = _nframes(f)
+        ks = n <= max_frames ? collect(1:n) : unique(round.(Int, range(1, n; length = max_frames)))
+        if f isa LiveFrames
+            ([f.data[k] for k in ks], (d, v) -> get(d, v, nothing), f.next, n, s.complete)
+        else
+            (ks, (k, v) -> v in f.vars ? f.read(k, v) : nothing, 0, n, true)
+        end
+    end
+    key = (Float64(wet), stamp, max_frames, max_values)
+    hit = lock(s.lock) do; get(s.ranges, key, nothing); end
+    hit === nothing || return hit
+    names = String[v for v in _vars(s)]
+    vals = Dict{String,Vector{Float32}}(v => Float32[] for v in names)
+    vals["level"] = Float32[]
+    stride = max(1, cld(m.n_cells * max(length(picks), 1), max_values))
+    for p in picks
+        d = getter(p, "water_depth")
+        d === nothing && continue
+        idx = [i for i in 1:stride:min(length(d), m.n_cells) if d[i] >= wet]
+        for v in names
+            x = v == "water_depth" ? d : getter(p, v)
+            x === nothing || append!(vals[v], (x[i] for i in idx if isfinite(x[i])))
+        end
+        append!(vals["level"], (m.base[i] + d[i] for i in idx if isfinite(m.base[i] + d[i])))
+    end
+    fl(x) = isfinite(x) ? x : nothing           # (JSON has no NaN)
+    out = Dict{String,Any}()
+    for (v, a) in vals
+        sort!(a)
+        out[v] = (p02 = fl(_sorted_quantile(a, 0.02)), p98 = fl(_sorted_quantile(a, 0.98)),
+                  min = isempty(a) ? nothing : fl(Float64(a[1])), max = isempty(a) ? nothing : fl(Float64(a[end])),
+                  n = length(a))
+    end
+    r = (wet = Float64(wet), frames = length(picks), of = n, complete = complete, vars = out)
+    lock(s.lock) do
+        filter!(kv -> kv[1][2] == stamp, s.ranges)     # older live states are stale
+        s.ranges[key] = r
+    end
+    return r
 end
 
 function _broadcast!(s::VisServer, msg)
@@ -563,6 +635,12 @@ function _route(s::VisServer, req::HTTP.Request)
                 v === nothing && return _text(404, "No frame $id variable $(parts[4])")
                 return _binary(collect(reinterpret(UInt8, htol.(v))))
             end
+        end
+        if a == "ranges" && length(parts) == 2
+            w = something(tryparse(Float64, get(HTTP.queryparams(uri), "wet", "")), 0.05)
+            w = isfinite(w) ? max(w, 0.0) : 0.05
+            # (scanning frames takes a moment: off the server's thread)
+            return _json(fetch(Threads.@spawn run_ranges(s; wet = w)))
         end
         if a == "cell" && length(parts) == 3
             return _cell(s, tryparse(Int, parts[3]), HTTP.queryparams(uri))

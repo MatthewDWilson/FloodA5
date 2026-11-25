@@ -53,16 +53,30 @@ test('ecefToGeodetic inverts geodeticToEcef', () => {
   assert.ok(Math.abs(pole.lat - 90) < 1e-9 && Math.abs(pole.h - 50) < 1e-3);
 });
 
-test('buildSurface triangulates each cell on its own vertices', () => {
+test('buildSurface: a fan from each cell centre, on the cell\'s own vertices', () => {
   const m = fixtureMesh();
   const s = buildSurface(m, 20);
-  assert.equal(s.positions.length, 3 * 12);
-  assert.equal(s.indices.length, 3 * (2 + 1 + 3));
-  assert.deepEqual(Array.from(s.cell), [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2]);
-  for (const i of s.indices) assert.ok(i < 12);
+  assert.equal(s.positions.length, 3 * (12 + 3));          // ring vertices + one centre per cell
+  assert.equal(s.indices.length, 3 * 12);                  // one triangle per side
+  assert.deepEqual(Array.from(s.cell), [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
+  assert.deepEqual(Array.from(s.edge), [1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
+  for (const i of s.indices) assert.ok(i < 15);
+  // every triangle: the cell's centre, then two consecutive ring vertices (closing the ring)
+  const tri = k => Array.from(s.indices.subarray(3 * k, 3 * k + 3));
+  assert.deepEqual([tri(0), tri(3), tri(4), tri(6)], [[0, 1, 2], [0, 4, 1], [5, 6, 7], [5, 8, 6]]);
+  for (let k = 0; k < 12; k++) {
+    const [c, a, b] = tri(k);
+    assert.equal(s.edge[c], 1); assert.equal(s.edge[a], 0); assert.equal(s.edge[b], 0);
+    assert.ok(s.cell[c] === s.cell[a] && s.cell[a] === s.cell[b]);
+  }
+  // the centre is the mean of the ring
+  for (let d = 0; d < 3; d++) {
+    const mean = [1, 2, 3, 4].reduce((acc, v) => acc + s.positions[3 * v + d], 0) / 4;
+    assert.ok(Math.abs(s.positions[d] - mean) < 0.05);
+  }
   // relative to the centre: small numbers, and the square's side is 0.001° of longitude
   for (const x of s.positions) assert.ok(Math.abs(x) < 1000);
-  const side = Math.hypot(s.positions[3] - s.positions[0], s.positions[4] - s.positions[1], s.positions[5] - s.positions[2]);
+  const side = Math.hypot(s.positions[6] - s.positions[3], s.positions[7] - s.positions[4], s.positions[8] - s.positions[5]);
   const expect = (Math.PI / 180) * 0.001 * WGS84_A * Math.cos(43 * Math.PI / 180) / Math.sqrt(1 - 0.00669438 * Math.sin(43 * Math.PI / 180) ** 2);
   assert.ok(Math.abs(side - expect) < 0.01, `${side} vs ${expect}`);
   for (let k = 0; k < 3; k++) assert.ok(s.min[k] <= s.max[k]);
@@ -80,9 +94,10 @@ test('buildGlb writes a well-formed GLB', () => {
   assert.equal(dv.getUint32(16, true), 0x4e4f534a);
   const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + jlen)));
   assert.equal(json.asset.version, '2.0');
-  assert.deepEqual(json.meshes[0].primitives[0].attributes, { POSITION: 0, _CELL: 1 });
-  assert.equal(json.accessors[0].count, 12);
-  assert.equal(json.accessors[2].count, 18);
+  assert.deepEqual(json.meshes[0].primitives[0].attributes, { POSITION: 0, _CELL: 1, _FA5EDGE: 2 });
+  assert.equal(json.accessors[0].count, 15);
+  assert.equal(json.accessors[2].count, 15);
+  assert.equal(json.accessors[3].count, 36);
   assert.equal(json.materials[0].doubleSided, true);
   const binLen = dv.getUint32(20 + jlen, true);
   assert.equal(dv.getUint32(24 + jlen, true), 0x004e4942);
@@ -93,7 +108,7 @@ test('buildGlb writes a well-formed GLB', () => {
     assert.ok(bv.byteOffset + bv.byteLength <= binLen);
   }
   // the indices round-trip
-  const bin = 28 + jlen, iv = json.bufferViews[2];
+  const bin = 28 + jlen, iv = json.bufferViews[3];
   const idx = new Uint32Array(glb.buffer.slice(glb.byteOffset + bin + iv.byteOffset, glb.byteOffset + bin + iv.byteOffset + iv.byteLength));
   assert.deepEqual(Array.from(idx), Array.from(s.indices));
 });

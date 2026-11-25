@@ -9,6 +9,7 @@
 //   defaultBasemap(cfg) → name
 //   setBasemap(name) → name actually set   (falls back when unavailable)
 //   photoreal(name) → bool                 basemap heights include buildings/trees
+//   heightDatum(name) → 'ellipsoid' | 'geoid' | 'flat'   what the basemap's heights are
 //   createSurface(mesh, {role, h0}) → surface {setDepth, setColorValues,
 //                                      setStyle, show, destroy}
 //   flyToBounds([w, s, e, n], height, duration)
@@ -24,15 +25,25 @@
 
 import { parseMesh, decodeFloat32, FrameList, FrameCache, formatTime, PROTOCOL } from './protocol.js';
 import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile } from './geometry.js';
-import { cssGradient } from './colormaps.js';
+import { cssGradient, COLORMAP_NAMES, COLORMAP_LABELS } from './colormaps.js';
 import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
 
+// source: the frame variable read; stat: its name in /api/ranges; colormap: the default palette
 const VARS = {
-  depth:      { label: 'Water depth',     unit: 'm',   source: 'water_depth', cmode: COLOR_MODE.depth,   colormap: 'depth',   fixed: null },
-  level:      { label: 'Water level',     unit: 'm',   source: 'water_depth', cmode: COLOR_MODE.level,   colormap: 'viridis', fixed: null },
-  speed:      { label: 'Speed',           unit: 'm/s', source: 'velocity',    cmode: COLOR_MODE.texture, colormap: 'magma',   fixed: null },
-  saturation: { label: 'Wetted fraction', unit: '',    source: 'saturation',  cmode: COLOR_MODE.texture, colormap: 'blues',   fixed: [0, 1] },
+  depth:      { label: 'Water depth',     unit: 'm',   source: 'water_depth', stat: 'water_depth', cmode: COLOR_MODE.depth,   colormap: 'depth',   fixed: null },
+  level:      { label: 'Water level',     unit: 'm',   source: 'water_depth', stat: 'level',       cmode: COLOR_MODE.level,   colormap: 'viridis', fixed: null },
+  speed:      { label: 'Speed',           unit: 'm/s', source: 'velocity',    stat: 'velocity',    cmode: COLOR_MODE.texture, colormap: 'magma',   fixed: null },
+  saturation: { label: 'Wetted fraction', unit: '',    source: 'saturation',  stat: 'saturation',  cmode: COLOR_MODE.texture, colormap: 'blues',   fixed: [0, 1] },
+};
+
+/** Palettes offered for the water (the bed keeps 'terrain'). */
+const PALETTES = COLORMAP_NAMES.filter(n => n !== 'terrain');
+
+/** localStorage, where available (private windows, blocked storage: no-ops). */
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } },
 };
 
 const $ = id => document.getElementById(id);
@@ -42,15 +53,16 @@ export function startViewer(engine) {
   const status = (window.__flooda5 = {
     state: 'starting', errors: [], meshCells: 0, frames: 0, shownFrame: null, renders: 0,
     lastRenderMs: null, basemap: null, offset: 0, complete: false, mode: null, webgl2: null,
-    calibration: null, engine: engine.name,
+    calibration: null, engine: engine.name, offsetSource: null, ranges: null,
   });
   const app = {
     cfg: null, info: null, mesh: null, centres: null, locator: null,
     water: null, bed: null, basemap: null, bedUser: null,
     frames: new FrameList(), cache: new FrameCache(32), pending: new Map(),
     current: -1, target: -1, live: true, complete: false, mode: null, wsDown: false,
-    playing: false, playAcc: 0, simTime: 0,
-    varName: 'depth', range: { mode: 'frame', min: 0, max: 1 }, offset: 0,
+    playing: false, playAcc: 0, simTime: 0, scrubbing: false, autoplay: false,
+    varName: 'depth', range: { mode: 'run', min: 0, max: 1 }, runRanges: null, rangesAt: -Infinity,
+    offset: 0, offsetJob: 0,
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
   };
 
@@ -168,7 +180,7 @@ export function startViewer(engine) {
     $('basemap').value = got;
     // the bed surface stands in for terrain on the flat basemaps
     if (app.bed && app.bedUser === null) setBed(got === 'osm' || got === 'none', false);
-    if (app.mesh) setOffset(loadOffset());
+    if (app.mesh) applyOffset();
     log(`Basemap: ${$('basemap').selectedOptions[0]?.textContent || got}`);
     updateCredits();
   }
@@ -193,7 +205,7 @@ export function startViewer(engine) {
     app.mesh = mesh;
     app.centres = cellCentres(mesh);
     app.locator = new CellLocator(mesh);
-    app.offset = loadOffset();
+    app.offset = resolveOffset().value;
     const h0 = (finiteMedian(mesh.base) || 0) + app.offset;
     app.water = await engine.createSurface(mesh, { role: 'water', h0 });
     app.bed = await engine.createSurface(mesh, { role: 'bed', h0 });
@@ -202,16 +214,17 @@ export function startViewer(engine) {
     app.water.setStyle({ offset: app.offset, alpha: +$('opacity').value,
                          minDepth: Math.max(+$('min-depth').value || 0, 0),
                          mode: +$('display-mode').value, exag: +$('exag').value });
+    const borders = $('show-borders').checked ? 1 : 0;
+    app.water.setStyle({ borders }); app.bed.setStyle({ borders });
     setBed(app.bedUser ?? (app.basemap === 'osm' || app.basemap === 'none'), false);
     status.meshCells = mesh.nCells;
     status.meshLoadMs = performance.now() - t0;          // download excluded: decode + surfaces
     if (performance.memory) status.heapMB = Math.round(performance.memory.usedJSHeapSize / 2 ** 20);
     $('stat-cells').textContent = mesh.nCells.toLocaleString();
-    $('offset').value = app.offset;
-    status.offset = app.offset;
     applyVar();
     log(`Mesh: ${mesh.nCells.toLocaleString()} cells (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
     flyHome(0);
+    applyOffset();
     return true;
   }
 
@@ -231,36 +244,71 @@ export function startViewer(engine) {
   // Vertical offset
   // -------------------------------------------------------------------------
 
-  function offsetKey() {
+  // Each basemap has its own offset: their heights need not share a datum
+  // (Google tiles and Cesium World Terrain are ellipsoidal, Terrarium is above
+  // mean sea level, a flat map is at height 0). The offset used is, in order:
+  //   1. --offset (the server's vertical_offset), for an ellipsoidal basemap;
+  //   2. the one saved in this browser for this basemap and place (set by
+  //      hand or estimated earlier);
+  //   3. a flat basemap: the lowest bed (2nd percentile) put at the map;
+  //   4. otherwise estimated from the basemap's heights, now (then saved).
+
+  function heightDatum(name = app.basemap) {
+    return engine.heightDatum ? engine.heightDatum(name) : (name === 'osm' || name === 'none' ? 'flat' : 'ellipsoid');
+  }
+
+  function offsetKey(name = app.basemap) {
     const m = app.mesh;
-    // per basemap: their heights need not share a datum (Google tiles are
-    // ellipsoidal; a terrain source may be above the geoid)
-    return `flooda5.offset.${app.basemap || ''}.${m.originLon.toFixed(4)},${m.originLat.toFixed(4)}`;
+    return `flooda5.offset.${name || ''}.${m.originLon.toFixed(4)},${m.originLat.toFixed(4)}`;
   }
 
-  function loadOffset() {
-    try {
-      const v = localStorage.getItem(offsetKey());
-      if (v !== null && Number.isFinite(+v)) return +v;
-    } catch { /* storage unavailable */ }
-    const d = Number(app.cfg.vertical_offset);
-    return Number.isFinite(d) ? d : 0;
+  function flatOffset() {
+    const z = finiteQuantile(app.mesh.elevation, 0.02);
+    return Number.isFinite(z) ? -Math.round(z * 10) / 10 : 0;
   }
 
-  function setOffset(v) {
+  /** The offset for the current basemap: {value, source, estimate}. */
+  function resolveOffset() {
+    const datum = heightDatum();
+    const cli = app.cfg.vertical_offset;
+    if (datum === 'ellipsoid' && cli !== undefined && cli !== null && Number.isFinite(+cli)) {
+      return { value: +cli, source: 'from the command line (--offset)', estimate: false };
+    }
+    const saved = store.get(offsetKey());
+    if (saved !== null && saved !== '' && Number.isFinite(+saved)) {
+      return { value: +saved, source: 'saved in this browser', estimate: false };
+    }
+    if (datum === 'flat') return { value: flatOffset(), source: 'flat basemap: lowest bed at the map', estimate: false };
+    return { value: 0, source: 'estimating…', estimate: true };
+  }
+
+  /** Apply the current basemap's offset; estimate it if there is none yet. */
+  function applyOffset() {
+    const r = resolveOffset();
+    setOffset(r.value, { save: false, source: r.source });
+    if (r.estimate) calibrateOffset({ auto: true });
+  }
+
+  function setOffset(v, { save = true, source = 'set by hand' } = {}) {
     if (!Number.isFinite(v)) return;
-    app.offset = v; status.offset = v;
+    app.offset = v; status.offset = v; status.offsetSource = source;
     $('offset').value = Math.round(v * 100) / 100;
+    $('offset-source').textContent = `Now: ${source}.`;
     app.water?.setStyle({ offset: v });
     app.bed?.setStyle({ offset: v });
-    try { localStorage.setItem(offsetKey(), String(v)); } catch { /* ignore */ }
+    if (save && app.mesh) store.set(offsetKey(), String(v));
   }
 
-  /** Estimate the offset: basemap height − cell elevation at sample cells. */
-  async function calibrateOffset() {
+  /**
+   * Estimate the offset: basemap height − cell elevation at sample cells (on a
+   * flat basemap: the lowest bed at the map). The result is used and saved
+   * for this basemap unless the basemap changed meanwhile.
+   */
+  async function calibrateOffset({ auto = false } = {}) {
     if (!app.mesh) return null;
-    if (app.basemap === 'osm' || app.basemap === 'none') {
-      log('Estimating the offset needs a basemap with heights (3D tiles or terrain).', 'warn');
+    const basemap = app.basemap, job = ++app.offsetJob;
+    if (heightDatum(basemap) === 'flat') {
+      setOffset(flatOffset(), { source: 'flat basemap: lowest bed at the map' });
       return null;
     }
     const m = app.mesh, n = m.nCells, step = Math.max(1, Math.floor(n / 300));
@@ -271,25 +319,30 @@ export function startViewer(engine) {
     log(`Estimating the vertical offset from ${cells.length} cells…`);
     try {
       const h = await engine.sampleBasemapHeights(pts, [app.water, app.bed].filter(Boolean));
+      if (app.basemap !== basemap || job !== app.offsetJob) return null;     // superseded
       const d = [];
       for (let k = 0; k < cells.length; k++) if (Number.isFinite(h[k])) d.push(h[k] - m.elevation[cells[k]]);
-      if (d.length < 10) { log(`Too few basemap heights (${d.length}) to estimate the offset.`, 'warn'); return null; }
+      if (d.length < 10) {
+        log(`Too few basemap heights (${d.length}) to estimate the offset.`, 'warn');
+        if (auto) setOffset(app.offset, { save: false, source: 'not estimated (no basemap heights): Estimate to retry' });
+        return null;
+      }
       // Buildings and trees only raise photogrammetry above the bare-earth DEM:
       // a lower quantile is a better ground estimate than the median.
-      const q = engine.photoreal(app.basemap) ? 0.3 : 0.5;
+      const q = engine.photoreal(basemap) ? 0.3 : 0.5;
       const est = finiteQuantile(d, q);
       status.calibration = { n: d.length, of: cells.length, q, estimate: est, p10: finiteQuantile(d, 0.1),
                              p50: finiteQuantile(d, 0.5), p90: finiteQuantile(d, 0.9) };
       log(`Offset ≈ ${est.toFixed(2)} m from ${d.length} cells ` +
           `(basemap − bed: p10 ${status.calibration.p10.toFixed(1)}, p50 ${status.calibration.p50.toFixed(1)}, ` +
           `p90 ${status.calibration.p90.toFixed(1)} m)`);
-      setOffset(Math.round(est * 10) / 10);
+      setOffset(Math.round(est * 10) / 10, { source: `estimated from the basemap (${d.length} cells)` });
       return status.calibration;
     } catch (e) {
       log(`Offset estimate failed: ${e.message || e}`, 'err');
       return null;
     } finally {
-      $('calibrate').disabled = false;
+      if (job === app.offsetJob) $('calibrate').disabled = false;
     }
   }
 
@@ -304,12 +357,13 @@ export function startViewer(engine) {
     status.frames = app.frames.length;
     updateTimeline();
     refreshStatus();
+    refreshRanges();
     if (!app.mesh || app.frames.length === 0) return;
     if (app.live) return showFrame(app.frames.length - 1);
-    // keep the shown frame; a fresh replay opens at the end of the run
+    // keep the shown frame; a replay (or a finished run) opens at the start
     const keep = app.current >= 0 ? app.frames.indexOfId(status.shownFrame) : -1;
     const n = app.frames.length;
-    return showFrame(keep >= 0 ? keep : app.target >= 0 ? Math.min(app.target, n - 1) : n - 1);
+    return showFrame(keep >= 0 ? keep : app.target >= 0 ? Math.min(app.target, n - 1) : 0);
   }
 
   /** Show frame index i (latest request wins while a render is in flight). */
@@ -384,11 +438,51 @@ export function startViewer(engine) {
     app.varName = sel.value;
   }
 
+  /** The palette of variable `name` (chosen in the palette menu, else its default). */
+  function paletteOf(name = app.varName) {
+    const p = store.get(`flooda5.palette.${name}`);
+    return PALETTES.includes(p) ? p : VARS[name].colormap;
+  }
+
   function applyVar() {
-    const v = VARS[app.varName];
-    $('legend-bar').style.background = cssGradient(v.colormap);
+    const v = VARS[app.varName], cmap = paletteOf();
+    $('legend-bar').style.background = cssGradient(cmap);
+    $('legend-bar').title = `Colour palette: ${COLORMAP_LABELS[cmap] || cmap} (click to change)`;
     $('legend-unit').textContent = v.unit;
-    app.water?.setStyle({ cmode: v.cmode, colormap: v.colormap });
+    app.water?.setStyle({ cmode: v.cmode, colormap: cmap });
+    status.palette = cmap;
+  }
+
+  function setPalette(name) {
+    if (!PALETTES.includes(name)) return;
+    store.set(`flooda5.palette.${app.varName}`, name);
+    applyVar();
+    closePaletteMenu();
+  }
+
+  function openPaletteMenu() {
+    const menu = $('palette-menu'), cur = paletteOf();
+    menu.innerHTML = '';
+    for (const name of PALETTES) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'palette'; b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(name === cur));
+      b.dataset.palette = name;
+      const sw = document.createElement('span'); sw.className = 'swatch'; sw.style.background = cssGradient(name);
+      const lab = document.createElement('span');
+      lab.textContent = (COLORMAP_LABELS[name] || name) + (name === VARS[app.varName].colormap ? ' (default)' : '');
+      b.append(sw, lab);
+      b.onclick = () => setPalette(name);
+      menu.appendChild(b);
+    }
+    menu.hidden = false;
+    $('legend-bar').setAttribute('aria-expanded', 'true');
+    menu.querySelector('[aria-selected="true"]')?.focus();
+  }
+
+  function closePaletteMenu() {
+    $('palette-menu').hidden = true;
+    $('legend-bar').setAttribute('aria-expanded', 'false');
   }
 
   function sampleWet(fn) {
@@ -398,12 +492,37 @@ export function startViewer(engine) {
     return out;
   }
 
+  /**
+   * The run's colour ranges (2nd–98th percentiles over wet cells and frames,
+   * /api/ranges). A finished run's are fetched once; a live run's are
+   * refreshed at most every 10 s as frames arrive.
+   */
+  async function refreshRanges(force = false) {
+    const now = performance.now();
+    if (!force && app.runRanges?.complete) return;
+    if (!force && now - app.rangesAt < 10000) return;
+    app.rangesAt = now;
+    try {
+      const th = Math.max(+$('min-depth').value || 0, 0);
+      const r = await fetchJson(`/api/ranges?wet=${th}`);
+      app.runRanges = r; status.ranges = r;
+      if (app.range.mode === 'run') updateRange();
+    } catch (e) {
+      app.runRanges = null;                     // (an older server: frame ranges instead)
+    }
+  }
+
   function updateRange() {
     const v = VARS[app.varName];
     let lo, hi;
+    const run = app.runRanges?.vars?.[v.stat];
     if (v.fixed) [lo, hi] = v.fixed;
     else if (app.range.mode === 'fixed') { lo = app.range.min; hi = app.range.max; }
-    else if (app.depth) {
+    else if (app.range.mode === 'run' && run && Number.isFinite(run.p02) && Number.isFinite(run.p98)) {
+      lo = run.p02; hi = run.p98;
+      if (!(hi > lo)) hi = lo + (app.varName === 'level' ? 1 : 0.1);
+      app.range.min = lo; app.range.max = hi;
+    } else if (app.depth) {
       const base = app.mesh.base, d = app.depth, cv = app.cvals;
       const vals = app.varName === 'level' ? sampleWet(i => base[i] + d[i])
                  : app.varName === 'depth' ? sampleWet(i => d[i])
@@ -436,7 +555,10 @@ export function startViewer(engine) {
   function updateTimeline() {
     const n = app.frames.length, tl = $('timeline');
     tl.max = Math.max(n - 1, 0);
-    if (app.current >= 0) tl.value = app.current;
+    // the frame asked for (renders lag behind it); not while the slider is
+    // being dragged, or it would jump back under the pointer
+    const at = app.target >= 0 ? app.target : app.current;
+    if (at >= 0 && !app.scrubbing) tl.value = String(at);
     $('stat-frames').textContent = n.toLocaleString();
     const f = app.frames.at(app.current);
     $('time-label').textContent = f ? `t = ${formatTime(f.t)}   frame ${app.current + 1} / ${n}` : `${n} frames`;
@@ -477,11 +599,14 @@ export function startViewer(engine) {
         await refreshFrames();
         status.state = 'ready';
         status.readyMs ??= Math.round(performance.now());   // page start → first frame shown
+        if (app.autoplay && !app.live && !app.playing) { app.autoplay = false; startPlay(); }
         break;
       case 'mesh':
+        app.runRanges = null;
         await refreshInfo();
         await loadMesh();
         await refreshFrames();
+        refreshRanges(true);
         break;
       case 'frame':
         if (app.frames.add(msg.id, msg.t)) {
@@ -489,6 +614,7 @@ export function startViewer(engine) {
           if (app.info && !(app.info.vars || []).length) await refreshInfo();
           updateTimeline();
           if (app.live && app.mesh) showFrame(app.frames.length - 1);
+          refreshRanges();
         }
         break;
       case 'reindex':
@@ -498,6 +624,7 @@ export function startViewer(engine) {
         app.complete = true; status.complete = true;
         log(`Run complete: ${msg.frames} frames`);
         await refreshFrames();
+        refreshRanges(true);
         break;
     }
     refreshStatus();
@@ -642,13 +769,32 @@ export function startViewer(engine) {
     $('min-depth').onchange = () => {
       app.water?.setStyle({ minDepth: Math.max(+$('min-depth').value || 0, 0) });
       updateStats(); updateRange();
+      refreshRanges(true);
     };
     $('show-bed').onchange = () => setBed($('show-bed').checked);
+    $('show-borders').onchange = () => {
+      const borders = $('show-borders').checked ? 1 : 0;
+      app.water?.setStyle({ borders }); app.bed?.setStyle({ borders });
+      store.set('flooda5.borders', String(borders));
+    };
+    $('legend-bar').onclick = () => ($('palette-menu').hidden ? openPaletteMenu() : closePaletteMenu());
+    document.addEventListener('pointerdown', e => {
+      if (!$('palette-menu').hidden && !e.target.closest('#palette-menu, #legend-bar')) closePaletteMenu();
+    });
+    $('palette-menu').addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closePaletteMenu(); $('legend-bar').focus(); }
+    });
     $('basemap').onchange = () => setBasemap($('basemap').value);
     $('offset').onchange = () => setOffset(+$('offset').value);
     $('calibrate').onclick = () => calibrateOffset();
     $('home').onclick = () => flyHome();
-    $('timeline').oninput = () => { stopPlay(); setLive(false); showFrame(+$('timeline').value); };
+    const tl = $('timeline');
+    tl.addEventListener('pointerdown', () => { app.scrubbing = true; });
+    const endScrub = () => { if (app.scrubbing) { app.scrubbing = false; updateTimeline(); } };
+    tl.addEventListener('pointerup', endScrub);
+    tl.addEventListener('pointercancel', endScrub);
+    tl.addEventListener('change', endScrub);
+    tl.oninput = () => { stopPlay(); setLive(false); showFrame(+tl.value); };
     $('btn-start').onclick = () => { stopPlay(); setLive(false); showFrame(0); };
     $('btn-end').onclick = () => { stopPlay(); setLive(false); showFrame(app.frames.length - 1); };
     $('btn-back').onclick = () => { stopPlay(); step(-1); };
@@ -656,7 +802,8 @@ export function startViewer(engine) {
     $('btn-play').onclick = () => (app.playing ? stopPlay() : startPlay());
     $('btn-live').onclick = () => setLive(!app.live);
     window.addEventListener('keydown', e => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
+          e.target.closest?.('#palette-menu, #legend-bar')) return;
       if (e.key === ' ') { e.preventDefault(); app.playing ? stopPlay() : startPlay(); }
       else if (e.key === 'ArrowRight') { stopPlay(); step(1); }
       else if (e.key === 'ArrowLeft') { stopPlay(); step(-1); }
@@ -681,6 +828,11 @@ export function startViewer(engine) {
       if (exag) { $('exag').value = String(exag); $('exag').oninput(); }
     },
     setBed: on => setBed(on),
+    setBorders: on => { $('show-borders').checked = !!on; $('show-borders').onchange(); },
+    setPalette: name => setPalette(name),
+    setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
+    setDepthBias: f => app.water?.setStyle({ depthBias: f }),
+    play: () => startPlay(),
     tilesLoaded: () => engine.tilesLoaded(),
     wetCell: () => {           // the deepest cell, for pointing the camera
       if (!app.depth) return null;
@@ -696,8 +848,11 @@ export function startViewer(engine) {
 
   (async () => {
     wireControls();
+    $('show-borders').checked = store.get('flooda5.borders') === '1';
     try {
       app.cfg = await fetchJson('/api/config');
+      const q = new URLSearchParams(location.search);
+      app.autoplay = q.has('autoplay') ? !['0', 'false', 'no'].includes(q.get('autoplay')) : !!app.cfg.autoplay;
       if (app.cfg.protocol !== PROTOCOL) log(`Server protocol ${app.cfg.protocol}, viewer ${PROTOCOL}`, 'warn');
       await engine.init($('viewer'), app.cfg, log);
       status.webgl2 = engine.webgl2;
@@ -706,8 +861,7 @@ export function startViewer(engine) {
       log(engine.name);
       setupPicking();
       populateBasemaps();
-      const want = new URLSearchParams(location.search).get('basemap') || app.cfg.default_basemap ||
-                   engine.defaultBasemap(app.cfg);
+      const want = q.get('basemap') || app.cfg.default_basemap || engine.defaultBasemap(app.cfg);
       await setBasemap(want);
       connectWs();
       requestAnimationFrame(tick);

@@ -33,6 +33,45 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.6] — 2026-11-25
+
+Globe viewers: fixes and small features from the first round of testing
+(branch `wpv-fixes`; PATCH: no solver change). Larger requests are planned
+in `projectinstructions/FloodA5_GlobeViewer_Plan_2026-11.md` (supplementary repository).
+
+- Water no longer disappears when zoomed out over 3D tiles (both viewers):
+  distant tiles are coarse and stand metres above the ground, hiding shallow
+  water in large triangles. The water is drawn nearer the camera by up to
+  1.5 % of its distance, only beyond 800 m (close views keep exact
+  occlusion by buildings and trees).
+- Vertical offset per basemap: `--offset` applies only to basemaps with
+  ellipsoidal heights (Google tiles, Cesium World Terrain), no longer to
+  Terrarium terrain or the flat maps (where it lifted the flood into the
+  air). Without `--offset` the viewer estimates the offset from the basemap
+  when it is first shown and saves it; a flat basemap puts the model's lowest
+  ground on the map. The panel says where the value came from; its help text
+  is no longer specific to Great Britain.
+- Colour ranges fixed for the whole run by default: the 2nd–98th percentiles
+  over wet cells and up to 24 frames (new endpoint `/api/ranges`,
+  `VisualisationServer.run_ranges`; DATA_FORMATS §6); *frame* and *fixed*
+  remain.
+- Palettes: click the colour bar to choose one, remembered per variable;
+  new *sediment* (light to dark brown), *cividis*, *greys*.
+- *Cell borders*: white hairlines along the cells (off by default). The
+  surfaces are now a fan from each cell's centre (one more vertex per cell).
+- Timeline: a replay (or a finished run) opens at the first frame and plays
+  only on *Play*; `web_replay.jl --autoplay` (or `?autoplay=1`) plays on
+  opening. The slider follows the frame shown and no longer jumps back while
+  it is dragged.
+- CesiumJS: switching basemaps (e.g. OpenStreetMap → Google tiles) could
+  fail in the render loop ("e._va is undefined"): basemap layers are now kept
+  and shown or hidden, not destroyed and rebuilt.
+- The opacity slider fits the panel.
+- Tests: `/api/ranges` (live, replay, caching, sampling) in
+  `test/test_vis_server.jl`; `--autoplay` and the ranges of a recorded run in
+  `test/test_vis_live.jl`; the centre fan and the `_FA5EDGE` attribute in the
+  viewer's JavaScript tests.
+
 ## [0.8.5] — 2026-11-25
 
 Access keys from a key file (branch `maint-keys`; PATCH: no solver change).
