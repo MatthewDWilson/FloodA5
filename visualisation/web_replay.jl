@@ -1,6 +1,7 @@
 # visualisation/web_replay.jl — replay an output file in a web globe viewer
 #
 #   julia --project=. visualisation/web_replay.jl RUN.h5 [--viewer cesium|giro3d] [options]
+#   julia --project=. visualisation/web_replay.jl [--viewer cesium|giro3d] [options]
 #   julia --project=. FloodModel.jl --replay RUN.h5 --vis cesium|giro3d [--vis-port PORT]
 #
 # Serves a recorded run (FloodA5 output, format 2: the mesh is in the file) to
@@ -9,6 +10,11 @@
 # served either way (/viz/cesium/index.html, /viz/giro3d/index.html); --viewer
 # picks the one / opens. Frames are read from the file on demand, so files of
 # any length work; frames written after start-up are not picked up.
+#
+# Without a file the viewer starts with no run and offers to open one from
+# the user's computer: the browser reads it (h5wasm), nothing is uploaded and
+# the server only serves the pages. Any viewer page can open a local file
+# ("Open file…" or drop it on the page).
 #
 # Options:
 #   --viewer V           cesium (default) or giro3d
@@ -76,9 +82,23 @@ function web_replay_server(h5::AbstractString; port::Integer = 8080, viewer::Abs
     return vis, f
 end
 
+"""
+    web_replay_empty(; port = 8080, viewer = "cesium") → server
+
+Start a `VisualisationServer` with no run: the viewer opens with a prompt to
+open an output file from the user's computer (read in the browser).
+"""
+web_replay_empty(; port::Integer = 8080, viewer::AbstractString = "cesium") =
+    VisualisationServer.start(; port = Int(port), viewer = String(viewer),
+                              info = Dict{String,Any}("label" => ""),
+                              config = Dict{String,Any}("no_data" => true))
+
 function _web_replay_usage(code::Int)
     println("""
-Usage: julia --project=. visualisation/web_replay.jl RUN.h5 [options]
+Usage: julia --project=. visualisation/web_replay.jl [RUN.h5] [options]
+
+Without RUN.h5 the viewer starts with no run and opens files from your
+computer in the browser (nothing is uploaded).
 
   --viewer V           cesium (default) or giro3d
   --port N             HTTP port (default 8080)
@@ -123,12 +143,19 @@ function web_replay_main(args::Vector{String})
     open_it = flag("--open")
     autoplay = flag("--autoplay")
     files = filter(a -> !startswith(a, "--"), args)
-    length(files) == 1 || (println("ERROR: give one output file"); return _web_replay_usage(1))
-    length(args) == 1 || error("unknown option(s): $(join(filter(startswith("--"), args), " "))")
-    vis, f = web_replay_server(files[1]; port, viewer, parquet = mesh,
-                               offset = off === nothing ? nothing : parse(Float64, off), autoplay)
+    length(files) <= 1 || (println("ERROR: give at most one output file"); return _web_replay_usage(1))
+    length(args) == length(files) || error("unknown option(s): $(join(filter(startswith("--"), args), " "))")
+    vis, f = if isempty(files)
+        (mesh === nothing && off === nothing) ||
+            error("--mesh and --offset need an output file")
+        (web_replay_empty(; port, viewer), nothing)
+    else
+        web_replay_server(files[1]; port, viewer, parquet = mesh,
+                          offset = off === nothing ? nothing : parse(Float64, off), autoplay)
+    end
     url = "http://localhost:$port/"
-    @info "Replay ($viewer): open $url in a browser (Ctrl-C to stop)"
+    @info (f === nothing ? "Viewer ($viewer, no run: open a file from the page)" : "Replay ($viewer)") *
+          ": open $url in a browser (Ctrl-C to stop)"
     open_it && _open_browser(url)
     try
         wait(vis.shutdown)
@@ -136,7 +163,7 @@ function web_replay_main(args::Vector{String})
         e isa InterruptException || rethrow()
     finally
         VisualisationServer.stop(vis)
-        close(f)
+        f === nothing || close(f)
     end
     return nothing
 end

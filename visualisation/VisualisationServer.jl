@@ -28,6 +28,10 @@
 #   GET /api/series/{i}?var=V      → one cell's values of V over the frames kept (`series_data`)
 #   GET /api/run                   → the run record (`set_run!`; {} until set)
 #   GET /api/about                 → variable descriptions (io/variables.toml)
+#
+# The viewer can also read an output file from the user's computer itself
+# (viewer-common/js/local/: h5wasm in a worker answers the same /api), and
+# runs without this server from a static web host (defaults.json, about.json).
 #   WS  /api/live                  → hello, mesh, frame, reindex, complete (JSON)
 #
 # Every request must carry a Host header naming localhost / 127.0.0.1 (a
@@ -73,9 +77,14 @@ export VisServer, MeshPayload
 const PROTOCOL = 2
 const MESH_MAGIC = b"FA5M"
 const MESH_VERSION = UInt32(1)
-const DEFAULT_CESIUM_URL = "https://cesium.com/downloads/cesiumjs/releases/1.147/Build/Cesium/"
+# Defaults of /api/config, shared with the viewer without a server (viewer-common/defaults.json)
+const _DEFAULTS = Dict{String,Any}(String(k) => v for (k, v) in
+    JSON3.read(read(joinpath(@__DIR__, "viewer-common", "defaults.json"), String)) if k != :_comment)
+const DEFAULT_CESIUM_URL = String(_DEFAULTS["cesium_url"])
 # Chart.js (the time-series plots), an ES module loaded when the first plot opens
-const DEFAULT_CHARTJS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/+esm"
+const DEFAULT_CHARTJS_URL = String(_DEFAULTS["chartjs_url"])
+"The h5wasm ES module (HDF5 in WebAssembly) the viewer reads local files with (0.8.10)."
+const DEFAULT_H5WASM_URL = String(_DEFAULTS["h5wasm_url"])
 
 # ---------------------------------------------------------------------------
 # Mesh payload
@@ -675,12 +684,12 @@ Terrain) and `FLOODA5_GOOGLE_TILES_KEY` (Google Map Tiles API key, the other
 route to the Google tiles) — from the environment or a key file
 (`io/FloodA5Keys.jl`: keys.json in the repository root or
 ~/.flooda5/keys.json), then `FLOODA5_CESIUM_URL` (base URL of a CesiumJS
-build, e.g. a local copy for offline use) and `FLOODA5_CHARTJS_URL` (the
-Chart.js ES module) from the environment.
+build, e.g. a local copy for offline use), `FLOODA5_CHARTJS_URL` (the
+Chart.js ES module) and `FLOODA5_H5WASM_URL` (the h5wasm ES module, for
+local files) from the environment. The defaults are viewer-common/defaults.json.
 """
 function viewer_config(s::VisServer)
-    c = Dict{String,Any}("protocol" => PROTOCOL, "cesium_url" => DEFAULT_CESIUM_URL,
-                         "chartjs_url" => DEFAULT_CHARTJS_URL, "ion_token" => "", "google_key" => "")
+    c = merge(Dict{String,Any}(_DEFAULTS), Dict{String,Any}("protocol" => PROTOCOL, "ion_token" => "", "google_key" => ""))
     f = joinpath(s.viz_dir, "viewer-common", "config.json")
     if isfile(f)
         try
@@ -700,6 +709,8 @@ function viewer_config(s::VisServer)
     isempty(v) || (c["cesium_url"] = v)
     v = get(ENV, "FLOODA5_CHARTJS_URL", "")
     isempty(v) || (c["chartjs_url"] = v)
+    v = get(ENV, "FLOODA5_H5WASM_URL", "")
+    isempty(v) || (c["h5wasm_url"] = v)
     occursin("YOUR_", string(c["ion_token"])) && (c["ion_token"] = "")
     endswith(string(c["cesium_url"]), "/") || (c["cesium_url"] = string(c["cesium_url"], "/"))
     return c

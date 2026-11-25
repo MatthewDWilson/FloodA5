@@ -33,6 +33,53 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.10] — 2026-11-26
+
+Output files from the user's own computer in the globe viewers, read in the
+browser (branch `wpv-local`; PATCH: no solver change, results unchanged).
+Step 4 of the viewer plan (`projectinstructions/FloodA5_GlobeViewer_Plan_2026-11.md`).
+
+- *Open file…* (top bar), or a file dropped on the page, opens a FloodA5
+  output (format 2) in this page. h5wasm 0.10.3 (HDF5 in WebAssembly) in a
+  module worker reads it through Emscripten's WORKERFS — in place, a frame
+  or a cell's series at a time, never uploaded — and
+  `viewer-common/js/local/` answers the viewer's `/api` requests as the
+  replay server does: `localrun.js` ports `web_replay.jl`, `encode_mesh`,
+  `depth_datum`, `run_ranges` and `FO.run_record`, `hazardcalc.js` ports
+  `analysis/hazard.jl` (hazard variables, `run_statistics`). Everything a
+  replay offers works: variables, hazards, statistics, colour ranges, the
+  time-series plot, the *Run* tab. On the Carlisle A5 SGS run (400 MB,
+  29 902 cells, 112 frames) every answer equals the server's for the same
+  file (binary to the last bit, JSON exactly; the mean cell area within
+  rounding); the worker opens it in 0.2–1.3 s, a statistic takes about
+  0.5 s. A file that cannot be opened (e.g. format 1, no cell polygons)
+  leaves the one open before it in place; the file replaces the run in that
+  page only.
+- No server needed: the pages work from a static web host (`/api/config`
+  missing → `viewer-common/defaults.json`; *About* from
+  `viewer-common/about.json`, generated from `io/variables.toml` by
+  `viewer-common/tools/make_about.jl`), starting with a prompt to open a
+  file. `web_replay.jl` without a file starts a server with no run
+  (`web_replay_empty`; config `no_data`) that does the same.
+- Configuration: `h5wasm_url` (`FLOODA5_H5WASM_URL`; offline: a copy in
+  the git-ignored `viewer-common/vendor/`). The library URLs' defaults
+  (CesiumJS, Chart.js, h5wasm) moved to `viewer-common/defaults.json`, read
+  by the server and by the viewer without one.
+- Plan: the `--dir` fallback (a server-side file list) is not needed —
+  WORKERFS reads large files without loading them — and was not built.
+- Tests: `test/test_vis_local.jl` (new, in CI): two generated runs (SGS with
+  NaNs, non-finite options, open and closed rings; depth-only standard)
+  served by the replay server and recorded with their contents in
+  `viewer-common/test/fixtures/local_run.json` (`test/vis_local_fixture.jl
+  --write`); the committed fixture must still be what the server answers,
+  and the JavaScript port must answer a fresh one alike (node);
+  `about.json` = `variables.toml`; `defaults.json` = the server's
+  defaults; the no-run server. JavaScript: `test/local.test.js` (the
+  fixture's 168 answers, frame picks incl. Julia's round-half-even ties,
+  JSON with Infinity/NaN, Float32 shortest decimals, mesh encoding, hazard
+  edge cases). `viewer-common/tools/smoke.mjs --file RUN.h5 [--file …]`
+  opens local files in the page in turn.
+
 ## [0.8.9] — 2026-11-25
 
 Hazard to people, statistics over the run and classed palettes in the globe

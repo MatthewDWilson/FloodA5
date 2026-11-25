@@ -535,6 +535,26 @@ numbers are strings (`"Inf"`). A replay adds `file` and `label`; a live run
 builds it from the record its output file gets (`output`: that file's path;
 inputs without checksums).
 
+**The same API in the browser** (local files, since 0.8.10). A viewer page
+can open an output file from the user's computer itself
+(`viewer-common/js/local/`): h5wasm (HDF5 in WebAssembly) in a module
+worker reads the file through Emscripten's WORKERFS — in place, a frame or a
+cell's series at a time, never uploaded — and `localrun.js` answers
+`/api/info`, `/api/mesh`, `/api/frames`, `/api/ranges`, `/api/stats`,
+`/api/cell`, `/api/series` and `/api/run` as the replay server does for
+the same file (a JavaScript port of `web_replay.jl`, `encode_mesh`,
+`run_ranges`, `run_record` and `analysis/hazard.jl`; `/api/info` adds
+`local: true`, and `label`, `source` and the run record's `file` are the
+file's name). `test/test_vis_local.jl` and
+`viewer-common/test/local.test.js` check the two against each other on the
+fixture `viewer-common/test/fixtures/local_run.json` (from
+`test/vis_local_fixture.jl`): binary answers equal to the last bit
+(`hazard_degree` within 10⁻⁶: `Math.pow` vs Julia's `^`), JSON equal, the
+mesh byte for byte. Without a server (a static web host) `/api/config`
+falls back to `viewer-common/defaults.json` and `/api/about` to
+`viewer-common/about.json` (generated from `io/variables.toml` by
+`viewer-common/tools/make_about.jl`); there is no WebSocket.
+
 ### Binary mesh (`/api/mesh`)
 
 Little-endian; every section 4-byte aligned.
@@ -577,7 +597,10 @@ Messages carry no data: the client fetches what it displays.
 `GET /api/config` merges, in order: `visualisation/viewer-common/config.json`
 (optional, git-ignored; template `config.example.json`), the server's own
 settings (e.g. `web_replay.jl --offset`), then the keys (environment or key
-file, below), `FLOODA5_CESIUM_URL` and `FLOODA5_CHARTJS_URL`.
+file, below), `FLOODA5_CESIUM_URL`, `FLOODA5_CHARTJS_URL` and
+`FLOODA5_H5WASM_URL`. The defaults of the library URLs are in
+`visualisation/viewer-common/defaults.json` (since 0.8.10), which the viewer
+also reads when there is no server.
 
 | Key | Environment / key file | Default | Description |
 |---|---|---|---|
@@ -585,6 +608,8 @@ file, below), `FLOODA5_CESIUM_URL` and `FLOODA5_CHARTJS_URL`.
 | `google_key` | `FLOODA5_GOOGLE_TILES_KEY` | `""` | Google Map Tiles API key (the other route to the Google tiles) |
 | `cesium_url` | `FLOODA5_CESIUM_URL` | the CesiumJS 1.147 release on cesium.com | Base URL of a CesiumJS build (`…/Build/Cesium/`; a local copy for offline use) |
 | `chartjs_url` | `FLOODA5_CHARTJS_URL` | Chart.js 4.5.1 from jsDelivr (`…/chart.js@4.5.1/+esm`) | The Chart.js ES module for the time-series plots (since 0.8.8; an ES module or the UMD build, e.g. a local copy for offline use) |
+| `h5wasm_url` | `FLOODA5_H5WASM_URL` | h5wasm 0.10.3 from jsDelivr (`…/h5wasm@0.10.3/dist/esm/hdf5_hl.js`) | The h5wasm ES module the viewer reads local files with (since 0.8.10; `hdf5_util.js` must sit beside it — for offline use, a copy in `viewer-common/vendor/`, git-ignored, as `/viz/viewer-common/vendor/hdf5_hl.js`) |
+| `no_data` | — | `false` | The server has no run: the viewer opens with a prompt to open a file (`web_replay.jl` without a file, since 0.8.10) |
 | `default_basemap` | — | `google3d` with a token, else `osm` | `google3d` / `terrain` / `osm` / `none` (the page's `?basemap=` overrides) |
 | `vertical_offset` | — | none | Offset (m) from model heights to ellipsoidal heights, used on basemaps with ellipsoidal heights (`web_replay.jl --offset`); without it the viewer estimates one per basemap and remembers it (USER_GUIDE §6.2) |
 | `autoplay` | — | `false` | Start playing a replay when the page opens (`web_replay.jl --autoplay`; the page's `?autoplay=1` overrides) |

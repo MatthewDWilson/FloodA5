@@ -1,6 +1,9 @@
 // app.js — the FloodA5 globe viewer, independent of the rendering engine:
 // live view of a running simulation or replay of a recorded one, from
-// visualisation/VisualisationServer.jl (protocol 2, docs/DATA_FORMATS.md §6).
+// visualisation/VisualisationServer.jl (protocol 2, docs/DATA_FORMATS.md §6),
+// or of an output file on this computer read in the browser (local/: the
+// same /api answered by a worker, nothing uploaded). Without a server (the
+// pages on a static web host) it starts with no data and offers to open a file.
 //
 // An engine (cesium/js/engine.js, giro3d/js/engine.js) provides:
 //   name                                   'CesiumJS 1.147', …
@@ -29,10 +32,11 @@ import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile } fr
 import { cssGradient, COLORMAP_NAMES, COLORMAP_LABELS } from './colormaps.js';
 import { COLOR_MODE } from './surface.js';
 import { UI_HTML } from './ui.js';
-import { renderRun, renderAbout, shellLine } from './info.js';
+import { renderRun, renderAbout, shellLine, esc } from './info.js';
 import { TimePlot, SERIES_COLORS, MAX_SERIES, freeSlot, isClick, seriesValues, seriesCsv, nearestIndex } from './plot.js';
 import { CLASS_SETS, classify, classOf, classLabels, classedName, classColors, parseBreaks } from './classes.js';
 import { DEFAULT_HAZARD, LAND_USES, PERSON_PRESETS, normalizeHazard, hazardQuery, describeHazard } from './hazard.js';
+import { LocalSource, ABOUT_URL, DEFAULTS_URL } from './local/source.js';
 
 // source: the variable read from the server; stat: its name in /api/ranges;
 // colormap: the default palette; kind: 'frame' (a frame variable), 'derived'
@@ -93,6 +97,7 @@ export function startViewer(engine) {
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
     plot: { series: [], varName: null, dock: 'bottom', chart: null, timer: null, ctxCell: -1 }, chartLib: null,
     hazard: loadHazard(), stats: new Map(), statsAt: -Infinity, classBuf: null,
+    source: null, ws: null, standalone: false, gen: 0,   // local file (LocalSource); no server; run generation
   };
 
   /** The hazard parameters saved in this browser (defaults otherwise). */
@@ -132,6 +137,8 @@ export function startViewer(engine) {
 
   function refreshStatus() {
     if (status.state === 'error') return;
+    if (app.source) return setStatus('replay', 'local file');
+    if (app.standalone || app.cfg?.no_data) return setStatus('', 'no data');
     if (app.wsDown) return setStatus('disconnected', app.mode === 'replay' || app.complete ? 'offline (cached)' : 'disconnected');
     if (app.mode === 'replay') return setStatus('replay', 'replay');
     if (app.complete) return setStatus('complete', 'run complete');
@@ -148,6 +155,9 @@ export function startViewer(engine) {
    * page was busy for seconds building a large mesh.
    */
   async function fetchRetry(path, tries = 4) {
+    // a local file answers the run's requests itself; without a server, About is a static file
+    if (app.source && path.startsWith('/api/') && !path.startsWith('/api/config')) return app.source.fetch(path);
+    if (app.standalone && path.startsWith('/api/about')) return fetch(ABOUT_URL, { cache: 'no-cache' });
     for (let k = 0; ; k++) {
       try {
         return await fetch(path, { cache: 'no-store' });
@@ -174,6 +184,7 @@ export function startViewer(engine) {
     const hit = app.cache.get(key);
     if (hit) return hit;
     if (app.pending.has(key)) return app.pending.get(key);
+    const gen = app.gen;
     const p = (async () => {
       const r = await fetchRetry(`/api/frames/${id}/${name}${q}`);
       if (!r.ok) {
@@ -181,7 +192,7 @@ export function startViewer(engine) {
         throw new Error(`frame ${id} ${name}: HTTP ${r.status}`);
       }
       const a = decodeFloat32(await r.arrayBuffer(), app.mesh.nCells);
-      app.cache.set(key, a);
+      if (gen === app.gen) app.cache.set(key, a);       // (not a frame of the run before a file was opened)
       return a;
     })().finally(() => app.pending.delete(key));
     app.pending.set(key, p);
@@ -877,14 +888,16 @@ export function startViewer(engine) {
   // -------------------------------------------------------------------------
 
   function connectWs() {
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`);
+    const ws = app.ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`);
     ws.onopen = () => { app.wsDown = false; refreshStatus(); };
     ws.onclose = () => {
+      if (app.source || ws !== app.ws) return;       // a local file replaced the server's run
       if (!app.wsDown) log('Connection to the server closed — retrying', 'warn');
       app.wsDown = true; refreshStatus();
       setTimeout(connectWs, 3000);
     };
     ws.onmessage = ev => {
+      if (app.source) return;
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       handleMessage(msg).catch(e => log(`${msg.type}: ${e.message || e}`, 'err'));
@@ -949,6 +962,90 @@ export function startViewer(engine) {
     $('run-label').title = i.label || '';
     populateVars();
     if (!$('plot').hidden) populatePlotVars();
+  }
+
+  // -------------------------------------------------------------------------
+  // Local files: an output file on this computer, read in the browser
+  // -------------------------------------------------------------------------
+
+  const viewerName = () => (/giro3d/i.test(engine.name) ? 'giro3d' : 'cesium');
+
+  /**
+   * Open `file` (a File) in this page: it replaces the server's run here
+   * (other pages are not affected; reload to return to the server's run).
+   */
+  async function openLocalFile(file) {
+    if (!file) return false;
+    if (!app.cfg?.h5wasm_url) { log('Cannot open files: no h5wasm_url in the configuration', 'err'); return false; }
+    const src = app.source || new LocalSource({ h5wasmUrl: app.cfg.h5wasm_url, viewer: viewerName() });
+    const mb = file.size / 2 ** 20;
+    log(`Opening ${file.name} (${mb >= 1 ? `${mb.toFixed(0)} MB` : `${(file.size / 1024).toFixed(0)} kB`}) — read in this browser, not uploaded…`);
+    status.local = { file: file.name, state: 'opening' };
+    $('open-file').disabled = true;
+    const t0 = performance.now();
+    let fileMs;
+    try {
+      await src.open(file);
+      fileMs = Math.round(performance.now() - t0);
+    } catch (e) {
+      if (!app.source) src.close();               // (else the file open before stays open)
+      status.local = { file: file.name, state: 'error', error: String(e.message || e) };
+      log(`Cannot open ${file.name}: ${e.message || e}`, 'err');
+      return false;
+    } finally {
+      $('open-file').disabled = false;
+    }
+    const first = !app.source;
+    app.source = src;
+    if (first && app.ws) { app.ws.onclose = null; app.ws.close(); app.ws = null; }
+    // forget the previous run
+    stopPlay(); closePlot();
+    app.gen++;
+    app.cache.clear(); app.pending.clear(); app.stats.clear(); app.cellIds.clear();
+    app.runRanges = null; app.run = null; app.current = -1; app.target = -1;
+    status.shownFrame = null;
+    app.mode = 'replay'; status.mode = 'replay'; app.complete = true; status.complete = true;
+    app.live = false; app.wsDown = false;
+    $('open-prompt').hidden = true;
+    await refreshInfo();
+    await loadMesh();
+    await refreshFrames();
+    refreshRanges(true);
+    if (app.tab !== 'layers') showTab(app.tab);
+    status.state = 'ready';
+    status.local = { file: file.name, state: 'open', fileMs, openMs: Math.round(performance.now() - t0) };
+    refreshStatus();
+    log(`Local file: ${file.name}, ${app.frames.length} frames`);
+    return true;
+  }
+
+  function chooseFile() {
+    const inp = $('file-input');
+    inp.value = '';
+    inp.click();
+  }
+
+  /** Drop a file anywhere on the page to open it. */
+  function setupDrop() {
+    let depth = 0;
+    const hasFiles = e => Array.from(e.dataTransfer?.types || []).includes('Files');
+    window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; $('drop-hint').hidden = false; });
+    window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+    window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--depth <= 0) { depth = 0; $('drop-hint').hidden = true; } });
+    window.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); depth = 0; $('drop-hint').hidden = true;
+      const f = e.dataTransfer.files?.[0];
+      if (f) openLocalFile(f);
+    });
+  }
+
+  /** The configuration without a server: viewer-common/defaults.json. */
+  async function standaloneConfig() {
+    let d = {};
+    try { d = await (await fetch(DEFAULTS_URL, { cache: 'no-cache' })).json(); } catch { /* defaults below */ }
+    delete d._comment;
+    return { protocol: PROTOCOL, ion_token: '', google_key: '', ...d, standalone: true };
   }
 
   /** A live run's statistics are recomputed as frames arrive: at most every 10 s. */
@@ -1053,7 +1150,8 @@ export function startViewer(engine) {
       }
       rows.push([v.label, txt]);
     }
-    tip.innerHTML = rows.map(([k, val]) => `<div><span class="k">${k}</span> ${val}</div>`).join('');
+    // (escaped: cell ids come from the file, which may be anyone's when opened locally)
+    tip.innerHTML = rows.map(([k, val]) => `<div><span class="k">${esc(k)}</span> ${esc(val)}</div>`).join('');
     tip.style.left = `${cx + 14}px`; tip.style.top = `${cy + 10}px`;
     tip.hidden = false;
     if (!app.cellIds.has(i)) {
@@ -1319,6 +1417,10 @@ export function startViewer(engine) {
   // -------------------------------------------------------------------------
 
   function wireControls() {
+    $('open-file').onclick = chooseFile;
+    $('open-prompt-btn').onclick = chooseFile;
+    $('file-input').onchange = () => { const f = $('file-input').files?.[0]; if (f) openLocalFile(f); };
+    setupDrop();
     $('panel-toggle').onclick = () => $('panel').classList.toggle('collapsed');
     $('var').onchange = () => {
       const was = isStatic(app.varName);
@@ -1474,6 +1576,10 @@ export function startViewer(engine) {
     rightClick: (x, y) => { const r = engine.canvas.getBoundingClientRect(); openCtxMenu(r.left + x, r.top + y, x, y); },
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setHazard: p => setHazard(p || {}),
+    openFile: file => openLocalFile(file),               // a File (tests: from an <input type=file>)
+    localFetch: path => (app.source ? app.source.fetch(path).then(async r => ({ status: r.status,
+                                       body: r.headers.get('Content-Type')?.startsWith('application/json') ? await r.json()
+                                           : Array.from(new Uint8Array(await r.arrayBuffer())) })) : null),
     setClassed: on => setClassed(!!on),
     setBreaks: text => setBreaks(text),
     vars: () => availableVars(),
@@ -1500,7 +1606,13 @@ export function startViewer(engine) {
     const bo = +store.get('flooda5.bed.opacity');
     if (bo >= 0.1 && bo <= 1) $('bed-opacity').value = String(bo);
     try {
-      app.cfg = await fetchJson('/api/config');
+      try {
+        app.cfg = await fetchJson('/api/config');
+      } catch (e) {
+        // no server (a static web host): local files only
+        app.cfg = await standaloneConfig();
+        app.standalone = true; status.standalone = true;
+      }
       const q = new URLSearchParams(location.search);
       app.autoplay = q.has('autoplay') ? !['0', 'false', 'no'].includes(q.get('autoplay')) : !!app.cfg.autoplay;
       if (app.cfg.protocol !== PROTOCOL) log(`Server protocol ${app.cfg.protocol}, viewer ${PROTOCOL}`, 'warn');
@@ -1514,7 +1626,13 @@ export function startViewer(engine) {
       populateBasemaps();
       const want = q.get('basemap') || app.cfg.default_basemap || engine.defaultBasemap(app.cfg);
       await setBasemap(want);
-      connectWs();
+      if (app.standalone || app.cfg.no_data) {
+        status.state = 'ready'; refreshStatus();
+        $('run-label').textContent = 'no run open';
+        $('open-prompt').hidden = false;
+        log(app.standalone ? 'No server: open a FloodA5 output file from this computer.'
+                           : 'Started without a run: open a FloodA5 output file from this computer.');
+      } else connectWs();
       requestAnimationFrame(tick);
       setInterval(updateCredits, 2000);
     } catch (e) {

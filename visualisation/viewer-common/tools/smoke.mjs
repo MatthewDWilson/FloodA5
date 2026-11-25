@@ -5,6 +5,8 @@
 //        [--browser PATH] [--timeout 120] [--settle 8] [--size 1400x900]
 //        [--eval "JS" ...]          (each run after the viewer is ready, then a
 //                                    screenshot shot_1.png, shot_2.png, …)
+//        [--file RUN.h5 ...]        open local files in the page, in turn (as "Open file…"):
+//                                   for pages started without a run, or to replace it
 //
 // Starts Edge/Chrome headless with a DevTools port, opens the viewer, waits
 // until it reports a rendered frame (window.__flooda5), takes screenshots and
@@ -24,6 +26,8 @@ const url = opt('--url', 'http://localhost:8080/');
 const out = opt('--out', 'smoke.png');
 const timeout = +opt('--timeout', '120') * 1000;
 const settle = +opt('--settle', '8') * 1000;
+const localFiles = []; args.forEach((a, i) => { if (a === '--file') localFiles.push(args[i + 1]); });
+const localFile = localFiles[0] || null;
 const [W, H] = opt('--size', '1400x900').split('x').map(Number);
 const browser = opt('--browser', [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -118,6 +122,21 @@ try {
     await sleep(500);
     try { st = await evaluate('JSON.stringify(window.__flooda5 || null)').then(JSON.parse); } catch { continue; }
     if (st && (st.state === 'error' || (st.shownFrame !== null && st.renders > 0))) break;
+    if (localFile && st && st.state === 'ready') break;           // (no run yet: open the file)
+  }
+  for (const f of (st && st.state !== 'error' ? localFiles : [])) {       // one after another, as a user would
+    const { root } = await send('DOM.getDocument');
+    const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#file-input' });
+    await evaluate("window.__flooda5.local && (window.__flooda5.local.state = 'chosen'), 0");
+    await send('DOM.setFileInputFiles', { nodeId, files: [f] });
+    const t2 = Date.now();
+    while (Date.now() - t2 < timeout) {
+      await sleep(500);
+      try { st = await evaluate('JSON.stringify(window.__flooda5 || null)').then(JSON.parse); } catch { continue; }
+      const l = st.local;
+      if (st.state === 'error' || l?.state === 'error' || (l?.state === 'open' && st.shownFrame !== null)) break;
+    }
+    console.error(`local file: ${f} → ${JSON.stringify(st.local)}`);
   }
   await sleep(settle);
   await shot(out);
