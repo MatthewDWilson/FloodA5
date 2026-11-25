@@ -114,7 +114,12 @@ export function renderRun(rec) {
 }
 
 /** Order of the variables in the About tab (others follow). */
-const ABOUT_ORDER = ['water_depth', 'level', 'velocity', 'saturation', 'elevation'];
+const ABOUT_ORDER = ['water_depth', 'level', 'velocity', 'saturation', 'elevation',
+  'depth_velocity', 'hazard_rating', 'hazard_class_arr', 'hazard_degree',
+  'max_water_depth', 'max_velocity', 'max_hazard', 'time_first_flooded', 'flood_duration'];
+
+/** Order of the general notes (others follow). */
+const TOPIC_ORDER = ['colour_range', 'wet_threshold', 'vertical_offset', 'depth_bias', 'hazard_parameters', 'statistics'];
 
 /** The About tab. `docs`: /api/about; `ctx`: {engine}. (The run's FloodA5 version is in the Run tab.) */
 export function renderAbout(docs, ctx = {}) {
@@ -133,7 +138,8 @@ export function renderAbout(docs, ctx = {}) {
     out.push('</div>');
   }
   const topics = docs?.topics || {};
-  for (const t of Object.values(topics)) out.push(`<h3>${esc(t.title)}</h3><p>${esc(t.text)}</p>`);
+  const tnames = [...TOPIC_ORDER.filter(k => topics[k]), ...Object.keys(topics).filter(k => !TOPIC_ORDER.includes(k)).sort()];
+  for (const t of tnames.map(k => topics[k])) out.push(`<h3>${esc(t.title)}</h3><p>${esc(t.text)}</p>`);
   if (!names.length && !Object.keys(topics).length) out.push('<p class="muted">No descriptions from the server.</p>');
   return out.join('\n');
 }

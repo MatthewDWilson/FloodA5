@@ -128,8 +128,10 @@ const EXTENT_LABELS = ["Wet in both (hit)", "Reference only (miss)", "Run only (
 
 Axis/colourbar label and unit of a map variable, and whether dry cells
 (depth ≤ `dry_threshold`) are masked. Variables: `:depth`, `:wse`, `:speed`,
-`:volume`, `:elevation`, or any per-frame output variable name (as a Symbol
-or String, e.g. `"saturation"`); or a vector of per-cell values (e.g.
+`:volume`, `:elevation`, the hazard variables `:depth_velocity`,
+`:hazard_rating`, `:hazard_degree`, `:hazard_class_arr` (`FA.hazard_field`
+with the default parameters; for others pass the vector), or any per-frame
+output variable name (as a Symbol or String, e.g. `"saturation"`); or a vector of per-cell values (e.g.
 `FA.wse_residual(r, k).r`), drawn as given — NaN cells are not drawn.
 """
 var_spec(::AbstractVector) = (label = "Value", unit = "", masked = false)
@@ -140,6 +142,10 @@ function var_spec(var)
     v === :speed     && return (label = "Speed", unit = "m/s", masked = true)
     v === :volume    && return (label = "Volume", unit = "m³", masked = true)
     v === :elevation && return (label = "Elevation", unit = "m", masked = false)
+    v === :depth_velocity   && return (label = "Depth × velocity", unit = "m²/s", masked = true)
+    v === :hazard_rating    && return (label = "Hazard rating (Defra)", unit = "", masked = true)
+    v === :hazard_degree    && return (label = "Hazard degree (Chen et al.)", unit = "", masked = true)
+    v === :hazard_class_arr && return (label = "Hazard class (ARR H1–H6)", unit = "", masked = true)
     return (label = String(v), unit = "", masked = false)
 end
 
@@ -164,6 +170,7 @@ function frame_values(r::FA.Run, var, k::Integer)
     v === :speed     && return FA.speed(r, k)
     v === :volume    && return FA.volume(r, k)
     v === :elevation && return copy(r.mesh.elevation)
+    haskey(FA.HAZARD_VARS, String(v)) && return Float64.(FA.hazard_field(r, String(v), k))
     return FA.field(r, String(v), k)
 end
 
@@ -612,7 +619,9 @@ const CAPTIONS = Ref(true)
 
 # plot variables (var_spec) → io/variables.toml
 const _DOC_KEY = Dict(:depth => "water_depth", :wse => "level", :speed => "velocity",
-                      :elevation => "elevation", :saturation => "saturation")
+                      :elevation => "elevation", :saturation => "saturation",
+                      :depth_velocity => "depth_velocity", :hazard_rating => "hazard_rating",
+                      :hazard_degree => "hazard_degree", :hazard_class_arr => "hazard_class_arr")
 
 _thousands(n::Integer) = replace(string(n), r"(?<=\d)(?=(\d{3})+$)" => ",")
 

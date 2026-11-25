@@ -67,6 +67,19 @@ select, input[type=number] { background: #0d1318; color: var(--text); border: 1p
 .help code { font: 10px var(--mono); color: var(--text); font-variant-ligatures: none; }
 .legend-labels { display: flex; justify-content: space-between; font: 10px var(--mono); color: var(--dim); }
 .help { margin: 6px 0 0; font-size: 11px; color: var(--dim); }
+/* classed legend, class breaks, hazard parameters */
+.legend:disabled { cursor: default; border-color: var(--border); }
+.legend-classes { margin-top: 6px; font: 11px var(--mono); }
+.legend-classes .class { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.legend-classes .swatch { flex: 0 0 16px; height: 10px; border: 1px solid var(--border); }
+#breaks { flex: 1; min-width: 0; background: #0d1318; color: var(--text); border: 1px solid var(--border);
+  font: 12px var(--mono); padding: 3px 6px; }
+#hazard-section summary { cursor: pointer; list-style-position: inside; color: var(--dim); }
+#hazard-section summary h2 { display: inline; margin: 0; }
+#hazard-section details.sub { margin-top: 6px; }
+#hazard-section details.sub summary { font-size: 11px; }
+#hazard-section input:disabled { opacity: .55; }
+#playbar.static #timeline { opacity: .35; }
 .btn, .icon-btn { background: none; border: 1px solid var(--border); color: var(--text); font: 12px var(--mono);
   padding: 4px 9px; cursor: pointer; }
 .btn:hover, .icon-btn:hover { border-color: var(--accent); color: var(--accent); }

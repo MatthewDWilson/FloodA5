@@ -295,6 +295,85 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         end
     end
 
+    @testset "hazard variables and statistics" begin
+        port = free_port()
+        vis = VS.start(; port)
+        try
+            VS.set_mesh!(vis, small_mesh())
+            # depth and speed over three frames (cells 1–3)
+            D = Float32[0.0 0.3 1.0; 0.2 0.5 0.0; 0.4 2.0 NaN]       # frame k = column k
+            V = Float32[0.0 1.0 2.5; 0.5 0.5 0.0; 0.1 0.5 0.0]
+            VS.set_replay!(vis, [0.0, 60.0, 120.0], ["water_depth", "velocity"],
+                           (k, v) -> v == "water_depth" ? D[:, k] : V[:, k])
+            info = json_(port, "/api/info")
+            @test sort(String.(info["derived"])) == ["depth_velocity", "hazard_class_arr", "hazard_degree", "hazard_rating"]
+            @test String.(info["stats"]) == collect(VS.STAT_VARS)
+            f32b(r) = reinterpret(Float32, r.body)
+            dv = f32b(get_(port, "/api/frames/2/depth_velocity"))
+            @test dv ≈ Float32[0.3, 0.25, 1.0]
+            # Defra HR with the land use from the query (urban: DF 0 / 1 / 1)
+            hr = f32b(get_(port, "/api/frames/2/hazard_rating?landuse=urban"))
+            @test hr ≈ Float32[0.3 * 1.5 + 1, 0.5 * 1.0 + 1, 2.0 * 1.0 + 1]
+            @test f32b(get_(port, "/api/frames/2/hazard_rating"))[1] ≈ 0.3 * 1.5 + 1      # fd2320
+            @test f32b(get_(port, "/api/frames/2/hazard_rating?landuse=pasture"))[1] ≈ 0.45
+            # the same code as FloodA5Analysis would run: analysis/hazard.jl
+            p = VS.HazardParams(mass = 50.0, height = 1.6)
+            hd = f32b(get_(port, "/api/frames/2/hazard_degree?mass=50&height=1.6"))
+            @test hd ≈ VS.derive_hazard("hazard_degree", D[:, 2], V[:, 2], p)
+            @test f32b(get_(port, "/api/frames/1/hazard_class_arr")) == Float32[0, 1, 2]
+            @test isnan(f32b(get_(port, "/api/frames/3/depth_velocity"))[3])
+            # a cell's series derives the same way as a frame (any length)
+            @test VS.derived_values("depth_velocity", n -> n == "water_depth" ? D[1, :] : V[1, :], p) ≈ Float32[0, 0.3, 2.5]
+            @test VS.derived_values("depth_velocity", n -> nothing, p) === nothing
+            # … and over HTTP: /api/series of a hazard variable, with the parameters
+            sr = json_(port, "/api/series/0?var=hazard_rating&landuse=urban")
+            @test sr["t"] == [0.0, 60.0, 120.0]
+            @test Float32.(something.(sr["values"], NaN)) ≈
+                  VS.derive_hazard("hazard_rating", D[1, :], V[1, :], VS.HazardParams(landuse = "urban")) nans = true
+            @test Float32.(sr["values"][2:3]) ≈ Float32[0.3 * 1.5 + 1, 1.0 * 3.0 + 1]
+            @test Float32.(json_(port, "/api/series/0?var=depth_velocity")["values"]) ≈ Float32[0, 0.3, 2.5]
+            @test Float32.(json_(port, "/api/series/1?var=hazard_degree&mass=50&height=1.6")["values"]) ≈
+                  VS.derive_hazard("hazard_degree", D[2, :], V[2, :], p)
+            @test get_(port, "/api/series/0?var=max_water_depth").status == 404          # statistics: no series
+            c = json_(port, "/api/cell/0?frame=2&landuse=urban")
+            @test c["values"]["hazard_rating"] ≈ 1.45 && c["values"]["depth_velocity"] ≈ 0.3
+            # ranges include the hazard variables (with the parameters)
+            rr = json_(port, "/api/ranges?wet=0.05&landuse=none")
+            @test rr["vars"]["depth_velocity"]["max"] ≈ 2.5 && rr["vars"]["hazard_rating"]["max"] ≈ 3.0
+            @test json_(port, "/api/ranges?wet=0.05&landuse=urban")["vars"]["hazard_rating"]["max"] ≈ 4.0
+            # statistics over the run
+            st(name, q = "") = f32b(get_(port, "/api/stats/$name$q"))
+            @test st("max_water_depth") == Float32[1.0, 0.5, 2.0]
+            @test st("max_velocity") == Float32[2.5, 0.5, 0.5]
+            @test st("max_depth_velocity") ≈ Float32[2.5, 0.25, 1.0]
+            t1 = st("time_first_flooded", "?flood_depth=0.25")
+            @test t1[1:2] == Float32[60, 60] && t1[3] == 0
+            @test st("flood_duration", "?flood_depth=0.25") == Float32[90, 60, 90]  # weights 30, 60, 30
+            @test isnan(st("time_first_flooded", "?flood_depth=5")[1])
+            @test get_(port, "/api/stats/nonesuch").status == 404
+            @test length(vis.stats) == 3                                   # one entry per parameter set
+            st("max_water_depth", "?flood_depth=0.25")
+            @test length(vis.stats) == 3                                   # cached
+        finally
+            VS.stop(vis)
+        end
+        # live: statistics over the frames kept so far, recomputed as frames arrive
+        port = free_port()
+        vis = VS.start(; port, min_interval = 0.0)
+        try
+            VS.set_mesh!(vis, small_mesh())
+            VS.push_frame!(vis, 0.0, Dict("water_depth" => [0.0, 0.2, 0.4]))
+            @test isempty(json_(port, "/api/info")["derived"])            # no velocity: no hazard
+            @test String.(json_(port, "/api/info")["stats"]) == ["max_water_depth", "time_first_flooded", "flood_duration"]
+            @test reinterpret(Float32, get_(port, "/api/stats/max_water_depth").body) == Float32[0, 0.2, 0.4]
+            @test get_(port, "/api/stats/max_velocity").status == 404
+            VS.push_frame!(vis, 10.0, Dict("water_depth" => [0.5, 0.1, 0.4]))
+            @test reinterpret(Float32, get_(port, "/api/stats/max_water_depth").body) == Float32[0.5, 0.2, 0.4]
+        finally
+            VS.stop(vis)
+        end
+    end
+
     @testset "port in use" begin
         port = free_port()
         vis = VS.start(; port)
