@@ -224,12 +224,14 @@ of its own DEM profile (flow area and Σ h^(5/3)), so channels, notches and
 walls narrower than a cell are represented (`docs/HYDRAULICS.md` §9). It
 requires a DEM and a mesh built with `--flow-model sgs`; **meshes built before
 0.8.0 must be rebuilt**. It defaults to Courant 0.5, and limits each face to
-critical flow (`--sgs-critical on`; weirs, notches, outflow edges). On
+critical flow (`--sgs-critical on`; weirs, notches, outflow edges). Since
+0.9.0 its sources enter after each step's flux update (`--source-order
+post`), which removed the cell-scale checkerboard it showed on most meshes. On
 synthetic cases it reaches the analytic levels within 1–2 cm. On Carlisle at
 the peak it reproduces a 5 m local-inertial solution more closely than 22 m
 local-inertial does, but like any local-inertial model it conveys more than
 the full SWE in deep, fast flow: against the 5 m SWE benchmark it stores 0.74
-of the volume (`docs/HYDRAULICS.md` §15.13–15.14). SGS is a representation
+of the volume (`docs/HYDRAULICS.md` §15.13–15.15). SGS is a representation
 of the cell's elevations; hydraulic formulations with momentum on it are
 planned.
 

@@ -38,7 +38,7 @@ fully resolves the bias on its own.
 The SGS checkerboard (MINOR, result-changing for SGS; branch
 `wps4-sgs-stability`; HYDRAULICS §15.15). Every case with SGS runs is
 re-recorded (deliberately); the previous values are kept in
-`cases/expected/v0.8.x/`. Standard flow and SWE are unchanged (bit-identical).
+`cases/expected/v0.8.16/`. Standard flow and SWE are unchanged (bit-identical).
 
 ### Fixed
 - ⚠ **SGS: sources enter with the flux update** (`--source-order pre|post`;
