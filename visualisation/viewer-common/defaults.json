@@ -1,0 +1,6 @@
+{
+  "_comment": "Defaults of the viewer configuration (/api/config). Read by VisualisationServer.jl and, without a server (the pages on a static web host), by the viewer itself. Environment variables and config.json override them: docs/DATA_FORMATS.md section 7.",
+  "cesium_url": "https://cesium.com/downloads/cesiumjs/releases/1.147/Build/Cesium/",
+  "chartjs_url": "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/+esm",
+  "h5wasm_url": "https://cdn.jsdelivr.net/npm/h5wasm@0.10.3/dist/esm/hdf5_hl.js"
+}

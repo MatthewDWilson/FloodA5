@@ -7,6 +7,9 @@ export const UI_HTML = `
   <div id="status-dot" class="dot"></div>
   <div id="status-label" class="status">starting</div>
   <div id="run-label" class="run" title="Run"></div>
+  <button id="open-file" class="btn" type="button"
+          title="Open a FloodA5 output (.h5) from this computer: it is read in this browser, not uploaded">Open file…</button>
+  <input id="file-input" type="file" accept=".h5,.hdf5" hidden>
   <div class="spacer"></div>
   <div class="stat"><div class="k">Cells</div><div class="v" id="stat-cells">–</div></div>
   <div class="stat"><div class="k">Frames</div><div class="v" id="stat-frames">0</div></div>
@@ -221,4 +224,12 @@ export const UI_HTML = `
 <div id="tooltip" hidden></div>
 <div id="log"></div>
 <div id="fatal" hidden></div>
+<div id="open-prompt" class="open-prompt" hidden>
+  <h2>Open a run</h2>
+  <p>A FloodA5 output file (<code>.h5</code>, format 2: FloodA5 0.4 or later) from this computer.
+     It is read here, in the browser — nothing is uploaded.</p>
+  <button id="open-prompt-btn" class="btn" type="button">Choose a file…</button>
+  <p class="help">or drop it anywhere on the page</p>
+</div>
+<div id="drop-hint" class="drop-hint" hidden>Drop a FloodA5 output (.h5) to open it</div>
 `;

@@ -525,6 +525,9 @@ julia --project=. --threads auto FloodModel.jl --meshload mesh.parquet \
 # replay an output file (format 2: the mesh is in the file)
 julia --project=. visualisation/web_replay.jl run.h5 [--viewer giro3d] [--port 8091] [--offset 53.2] [--autoplay] [--open]
 julia --project=. FloodModel.jl --replay run.h5 --vis cesium|giro3d [--vis-port 8091]   # the same
+
+# no run: open output files from this computer in the page (read in the browser)
+julia --project=. visualisation/web_replay.jl [--viewer giro3d] [--port 8091] [--open]
 ```
 
 A replay opens at the first frame and waits for *Play*; `--autoplay` (or
@@ -622,6 +625,32 @@ the lines grow as frames arrive (the frames the viewer keeps: thinned in
 long runs). The plots use Chart.js, loaded from jsDelivr when the first
 plot opens; for offline use point `FLOODA5_CHARTJS_URL` at a local copy of
 `chart.umd.min.js` (from the `chart.js` package, served by any local web server).
+
+**Files from this computer** (since 0.8.10). *Open file…* (top bar), or a
+file dropped anywhere on the page, opens a FloodA5 output file (format 2:
+FloodA5 0.4 or later) from your computer in this page. The browser reads it
+itself — HDF5 compiled to WebAssembly (h5wasm 0.10.3) in a background worker,
+reading only the parts needed (a frame, a cell's series) — and nothing is
+uploaded, so a viewer hosted elsewhere never sees the data. Everything works
+as in a replay, with the same results (the server's code ported to
+JavaScript; `test/test_vis_local.jl` checks them against each other): the
+variables, hazard variables, statistics over the run, colour ranges, the
+time-series plot and the *Run* tab. The file replaces the run in this page
+only (other pages, and the server, are not affected; reload the page to go
+back to the server's run). `web_replay.jl` without a file starts a server
+with no run that opens with a prompt to choose a file, and the viewer pages
+also work **without a server** — e.g. the `visualisation/` directory on a
+static web host (the settings then come from
+`viewer-common/defaults.json`, the *About* text from
+`viewer-common/about.json`; there is no live view and no Cesium ion token,
+so the basemaps are OpenStreetMap and Giro3D's Terrarium terrain).
+Opening the 400 MB, 30 000-cell Carlisle run takes 3–8 s (h5wasm, about 4 MB, is
+loaded from jsDelivr the first time; for offline use copy `hdf5_hl.js` and
+`hdf5_util.js` from the h5wasm package's `dist/esm/` to
+`visualisation/viewer-common/vendor/` (git-ignored) and set
+`FLOODA5_H5WASM_URL=/viz/viewer-common/vendor/hdf5_hl.js`);
+a statistic over its 112 frames about half a second. Format-1 files (≤ 0.3.x)
+have no cell polygons: replay them with `web_replay.jl --mesh`.
 
 **Vertical offset.** Model heights are in the DEM's datum (usually mean sea
 level: a geoid); Google tiles and Cesium World Terrain use heights above the

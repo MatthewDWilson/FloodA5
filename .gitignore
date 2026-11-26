@@ -35,6 +35,8 @@ test/notebook_runs/
 
 # Web viewer: local settings may hold a Cesium ion token (docs/DATA_FORMATS.md §7)
 visualisation/viewer-common/config.json
+# local copies of CDN libraries for offline use (h5wasm, Chart.js)
+visualisation/viewer-common/vendor/
 # smoke-test screenshots (visualisation/viewer-common/tools/smoke.mjs)
 visualisation/viewer-common/*.png
 
