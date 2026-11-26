@@ -103,11 +103,13 @@ free_port_() = (s = HTTP.Sockets.listen(HTTP.Sockets.IPv4("127.0.0.1"), 0);
                 @test g("/api/mesh").status == 204
                 info = JSON3.read(String(g("/api/info").body))
                 @test info["mesh_ready"] == false && info["frames"] == 0
-                for f in ("defaults.json", "about.json", "js/local/worker.js", "js/local/localrun.js")
+                for f in ("defaults.json", "about.json", "js/local/worker.js", "js/local/localrun.js",
+                          "img/GoogleMaps_Logo_WithDarkOutline.svg")       # (0.8.16: Giro3D's Google credit)
                     r = g("/viz/viewer-common/$f")
                     @test r.status == 200
                 end
                 @test startswith(HTTP.header(g("/viz/viewer-common/js/local/worker.js"), "Content-Type"), "text/javascript")
+                @test HTTP.header(g("/viz/viewer-common/img/GoogleMaps_Logo_WithDarkOutline.svg"), "Content-Type") == "image/svg+xml"
                 withenv("FLOODA5_H5WASM_URL" => "/viz/viewer-common/vendor/hdf5_hl.js") do
                     @test JSON3.read(String(g("/api/config").body))["h5wasm_url"] == "/viz/viewer-common/vendor/hdf5_hl.js"
                 end

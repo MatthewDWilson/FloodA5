@@ -814,8 +814,9 @@ Scope the token to `assets:read` and restrict its allowed URLs to
 `http://localhost:*` in the ion dashboard. A Google Map Tiles API key
 (`FLOODA5_GOOGLE_TILES_KEY`) is the other route to the Google tiles.
 Without either, the viewer uses OpenStreetMap on a flat globe. Google's
-terms: the Google Maps logo (CesiumJS) or the words *Google Maps* (Giro3D)
-and the data attributions are shown; Google tiles must not be combined with
+terms: the Google Maps logo (both viewers; Giro3D since 0.8.16, the official
+outlined logo from Google's attribution assets, `viewer-common/img/`) and the
+data attributions are shown; Google tiles must not be combined with
 Bing imagery (the viewers use none).
 Optional settings go in `visualisation/viewer-common/config.json`
 (git-ignored; see `config.example.json` and docs/DATA_FORMATS.md §7). Both

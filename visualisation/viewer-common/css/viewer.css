@@ -164,8 +164,9 @@ select, input[type=number] { background: #0d1318; color: var(--text); border: 1p
 #credits img { height: 16px; vertical-align: middle; margin-right: 6px; }
 #credits a { color: inherit; }
 .engine { margin-left: auto; align-self: center; font: 10px var(--mono); color: var(--dim); }
-#credits .gmaps { font: 600 12px/16px var(--sans); letter-spacing: .01em; color: #fff;
-  padding: 1px 6px; margin-right: 6px; background: rgba(0,0,0,.45); border-radius: 2px; }
+/* the Google Maps logo (Map Tiles API policies: the outlined logo on a map, 16–19 px high,
+   clear space 10 px left, right and top and 5 px below, apart from other logos) */
+#credits img.gmaps { height: 18px; margin: 10px 10px 5px 0; vertical-align: middle; }
 
 /* time-series plot (plot.js): docked at the bottom (above the playback bar) or on the right */
 #plot { position: absolute; z-index: 12; display: flex; flex-direction: column; background: var(--panel);
