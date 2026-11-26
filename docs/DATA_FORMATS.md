@@ -577,15 +577,24 @@ fixture `viewer-common/test/fixtures/local_run.json` (from
 `test/vis_local_fixture.jl`): binary answers equal to the last bit
 (`hazard_degree` within 10⁻⁶: `Math.pow` vs Julia's `^`), JSON equal, the
 mesh byte for byte. Without a server (a static web host) `/api/config`
-falls back to `viewer-common/defaults.json` and `/api/about` to
+falls back to `viewer-common/defaults.json`, `/api/about` to
 `viewer-common/about.json` (generated from `io/variables.toml` by
-`viewer-common/tools/make_about.jl`); there is no WebSocket.
+`viewer-common/tools/make_about.jl`) and `/api/palettes` to
+`viewer-common/palettes.json` (0.8.15); there is no WebSocket. Since 0.8.15
+the file can also be on a web server (`?file=URL`, or a link in the *Open*
+panel): a range request for its first bytes decides how it is read — 206:
+in 64 KiB blocks fetched on demand (`js/local/rangefile.js` `RangeCache`;
+synchronous range requests in the worker, adjacent blocks in one request,
+at most 256 MiB cached), the size from `Content-Range` or a HEAD request's
+`Content-Length`; 200: the whole file, downloaded into the worker's memory.
+`/api/info` then has `source` = the URL and `remote` = {url, ranged, size}.
 ### Palette files (since 0.8.11)
 
 One JSON format for the palettes a user exports from the viewer's editor
 (and imports), and for a group's shared `palettes.json`
-(`visualisation/viewer-common/palettes.json`, beside `config.json`;
-git-ignored; template `palettes.example.json`):
+(`visualisation/viewer-common/palettes.json`, beside `config.json`; in the
+repository since 0.8.15 — it was git-ignored, with a template
+`palettes.example.json`, before):
 
 ```json
 {
@@ -699,9 +708,10 @@ environment variable of that name, then in JSON key files: the file named by
 `FLOODA5_KEYS`, `keys.json` in the repository root, `~/.flooda5/keys.json`
 (template `keys.example.json`; `keys.json` is git-ignored and never served).
 
-`visualisation/viewer-common/palettes.json` (optional, since 0.8.11): a
-group's shared palettes, offered by `/api/palettes` (§6, palette files) and
-never served as a file.
+`visualisation/viewer-common/palettes.json` (since 0.8.11; in the
+repository since 0.8.15): a group's shared palettes, offered by
+`/api/palettes` (§6, palette files); the server does not serve it as a
+file, a static host does (the viewer then reads it directly).
 
 Server tuning (environment only): `FLOODA5_VIS_INTERVAL` (s of wall-clock
 time between kept live frames, default 1), `FLOODA5_VIS_BUDGET_MB` (memory

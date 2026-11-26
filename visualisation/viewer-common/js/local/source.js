@@ -1,4 +1,5 @@
-// source.js — a FloodA5 output file on this computer as the viewer's data
+// source.js — a FloodA5 output file on this computer, or on a web server
+// (a URL, 0.8.15), as the viewer's data
 // source: the main-thread side of worker.js. `fetch(path)` answers the
 // viewer's /api requests as the server would (a real Response), so the rest
 // of the viewer does not know the difference. The file is read in the
@@ -21,7 +22,8 @@ const response = r => {
 
 export class LocalSource {
   /** @param h5wasmUrl  the h5wasm ES module (dist/esm/hdf5_hl.js); @param viewer  'cesium' | 'giro3d' */
-  constructor({ h5wasmUrl, viewer = 'cesium' } = {}) {
+  constructor({ h5wasmUrl, viewer = 'cesium', onProgress = null } = {}) {
+    this.onProgress = onProgress;     // (loaded, total) while a whole file downloads
     if (!h5wasmUrl) throw new Error('no h5wasm URL in the configuration');
     this.h5wasmUrl = h5wasmUrl;
     this.viewer = viewer;
@@ -37,13 +39,14 @@ export class LocalSource {
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'flooda5-local' });
     this.worker.onmessage = ev => {
       const m = ev.data || {};
+      if (m.op === 'progress') { this.onProgress?.(m.loaded, m.total); return; }
       if (m.op === 'open') {
         const o = this.opening; this.opening = null;
         if (o) m.ok ? o.resolve(m.info) : o.reject(new Error(m.error));
         return;
       }
       const p = this.pending.get(m.id);
-      if (p) { this.pending.delete(m.id); p.resolve(response(m)); }
+      if (p) { this.pending.delete(m.id); p.resolve('stats' in m ? m.stats : response(m)); }
     };
     this.worker.onerror = ev => {
       const err = new Error(ev.message || 'the file reader stopped');
@@ -53,14 +56,28 @@ export class LocalSource {
     };
   }
 
-  /** Open `file` (a File from a file input or a drop) → the run's /api/info. Replaces the file open before. */
-  open(file) {
+  /**
+   * Open `what` — a File (a file input or a drop) or the URL of a file on a
+   * web server — → the run's /api/info. Replaces the file open before.
+   */
+  open(what) {
     this._start();
     if (this.opening) this.opening.reject(new Error('superseded by another file'));
+    const url = typeof what === 'string' ? what : null;
     return new Promise((resolve, reject) => {
       this.opening = { resolve, reject };
-      this.worker.postMessage({ op: 'open', file, h5wasmUrl: this.h5wasmUrl, viewer: this.viewer });
-    }).then(info => { this.name = file.name; return info; });
+      this.worker.postMessage({ op: 'open', ...(url ? { url } : { file: what }), h5wasmUrl: this.h5wasmUrl, viewer: this.viewer });
+    }).then(info => { this.name = info.label; return info; });
+  }
+
+  /** For a file on a web server: {url, ranged, size, requests, fetched, cached} so far (else null). */
+  stats() {
+    if (!this.worker) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+      const id = this.next++;
+      this.pending.set(id, { resolve: r => resolve(r), reject });
+      this.worker.postMessage({ op: 'stats', id });
+    });
   }
 
   /** The viewer's request `path` ("/api/…?…") → Promise<Response>. */

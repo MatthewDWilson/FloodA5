@@ -37,8 +37,6 @@ test/notebook_runs/
 visualisation/viewer-common/config.json
 # local copies of CDN libraries for offline use (h5wasm, Chart.js)
 visualisation/viewer-common/vendor/
-# a group's shared palettes (optional; template palettes.example.json)
-visualisation/viewer-common/palettes.json
 # smoke-test screenshots (visualisation/viewer-common/tools/smoke.mjs)
 visualisation/viewer-common/*.png
 

@@ -8,7 +8,7 @@ export const UI_HTML = `
   <div id="status-label" class="status">starting</div>
   <div id="run-label" class="run" title="Run"></div>
   <button id="open-file" class="btn" type="button"
-          title="Open a FloodA5 output (.h5) from this computer: it is read in this browser, not uploaded">Open file…</button>
+          title="Open a FloodA5 output (.h5) from this computer or from a link: it is read in this browser">Open…</button>
   <input id="file-input" type="file" accept=".h5,.hdf5" hidden>
   <div class="spacer"></div>
   <div class="stat"><div class="k">Cells</div><div class="v" id="stat-cells">–</div></div>
@@ -226,11 +226,19 @@ export const UI_HTML = `
 <div id="log"></div>
 <div id="fatal" hidden></div>
 <div id="open-prompt" class="open-prompt" hidden>
+  <button id="open-prompt-close" class="icon-btn prompt-close" type="button" title="Close" hidden>✕</button>
   <h2>Open a run</h2>
   <p>A FloodA5 output file (<code>.h5</code>, format 2: FloodA5 0.4 or later) from this computer.
      It is read here, in the browser — nothing is uploaded.</p>
   <button id="open-prompt-btn" class="btn" type="button">Choose a file…</button>
   <p class="help">or drop it anywhere on the page</p>
+  <h3>or from a link</h3>
+  <div class="row">
+    <input id="open-url" type="url" placeholder="https://…/run.h5" aria-label="Link to a FloodA5 output file" spellcheck="false">
+    <button id="open-url-btn" class="btn" type="button">Open</button>
+  </div>
+  <p class="help">A file on a web server that lets this page read it (CORS), read in pieces where the
+     server allows (range requests). The page's address then links to it (<code>?file=…</code>).</p>
 </div>
 <div id="drop-hint" class="drop-hint" hidden>Drop a FloodA5 output (.h5) to open it</div>
 `;

@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-26): 0.8.14 — the default engine is
+(`VERSIONING.md`). Status (2026-11-26): 0.8.15 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -72,7 +72,8 @@ checks them against each other, fixture from `test/vis_local_fixture.jl
 code as the viewers' statistics; keep `run_statistics` a loop over it.
 0.8.14: smooth water/bed surfaces (`geometry.js` `cornerIndex` /
 `cornerValues`, corner texture; CesiumJS rebuilds its model with a corner
-attribute once).
+attribute once). 0.8.15: `?file=URL` (files on a web server, read by
+range requests: `js/local/rangefile.js`); `palettes.json` is tracked.
 0.8.11 (plan step 5, palettes): cmocean and Crameri maps as fixed tables
 (`viewer-common/colormaps.json`, from `tools/make_palettes.jl`), user
 palettes (OKLab stops, editor, JSON export/import; `js/palettes.js`,

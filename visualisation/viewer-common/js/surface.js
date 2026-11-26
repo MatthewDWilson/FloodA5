@@ -32,6 +32,14 @@ export const SURFACE_MODE = { water: 0, exaggerated: 1, bed: 2 };
 /** Water drawn this fraction of its distance nearer the camera when zoomed out (fa5DepthBias). */
 export const DEPTH_BIAS = 0.015;
 
+/**
+ * Distances (m) over which that bias comes in, by basemap: 3D tiles stay
+ * exact within 800 m (semi-submerged buildings); terrain tiles are coarse at
+ * middle distances too — at a few hundred metres they stand metres above the
+ * ground and would hide the water (0.8.15).
+ */
+export const DEPTH_BIAS_RANGE = { tiles: [800, 4000], terrain: [30, 600] };
+
 /** Slopes are exaggerated this many times for the smooth surface's shading: water slopes are small, the bed's are not. */
 export const SHADE_EXAG = { water: 20, bed: 3 };
 
@@ -42,7 +50,7 @@ export function defaultStyle(role) {
     mode: bed ? SURFACE_MODE.bed : SURFACE_MODE.water,
     cmode: bed ? COLOR_MODE.bed : COLOR_MODE.depth,
     cmin: 0, cmax: 1, alpha: bed ? 1 : 0.8, minDepth: 0.05, exag: 10, offset: 0, borders: 0,
-    depthBias: bed ? 0 : DEPTH_BIAS,
+    depthBias: bed ? 0 : DEPTH_BIAS, biasNear: DEPTH_BIAS_RANGE.tiles[0], biasFar: DEPTH_BIAS_RANGE.tiles[1],
     colormap: bed ? 'terrain' : 'depth',
     smooth: 0, blend: 1, shadeExag: bed ? SHADE_EXAG.bed : SHADE_EXAG.water,
   };
@@ -111,14 +119,15 @@ vec2 fa5MapCoord(float v, float cmin, float cmax) {
 }
 // Move a vertex (model coordinates, metres) toward the camera by a fraction
 // of its distance: its place on screen is unchanged, only its depth. Distant
-// 3D tiles are coarse and stand metres above the ground they simplify, so
-// without this they hide shallow water when zoomed out. 'bias' is the
-// fraction reached beyond 4 km; it is 0 within 800 m (close views keep exact
-// occlusion: semi-submerged buildings).
-vec3 fa5DepthBias(vec3 p, vec3 cam, float bias) {
+// 3D tiles and terrain are coarse and stand metres above the ground they
+// simplify, so without this they hide shallow water when zoomed out. 'bias'
+// is the fraction reached beyond range.y metres; it is 0 within range.x
+// (3D tiles: 800 m – 4 km, so close views keep exact occlusion of
+// semi-submerged buildings; terrain: 30 – 600 m, DEPTH_BIAS_RANGE).
+vec3 fa5DepthBias(vec3 p, vec3 cam, float bias, vec2 range) {
   vec3 v = cam - p;
   float d = length(v);
-  return p + v * (bias * smoothstep(800.0, 4000.0, d));
+  return p + v * (bias * smoothstep(range.x, range.y, d));
 }
 `;
 }
