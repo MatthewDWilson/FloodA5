@@ -384,6 +384,88 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
         end
     end
 
+    @testset "shared palettes (palettes.json)" begin
+        good = Dict("flooda5_palettes" => 1,
+                    "palettes" => [Dict("name" => " Team depth ",
+                                        "stops" => [Dict("pos" => 0, "color" => "#C6EBFF"),
+                                                    Dict("pos" => 1, "color" => "#0a1964")])])
+        ps, err = VS.validate_palettes(JSON3.read(JSON3.write(good)))
+        @test err === nothing && length(ps) == 1
+        @test ps[1]["name"] == "Team depth" && ps[1]["stops"][1]["color"] == "#c6ebff"
+        stops = good["palettes"][1]["stops"]
+        bad_palettes = Any[
+            Dict("name" => "x"),                                             # no stops
+            Dict("name" => "x", "stops" => stops, "extra" => 1),             # unknown key
+            Dict("name" => "", "stops" => stops),
+            Dict("name" => "x"^41, "stops" => stops),
+            Dict("name" => "a" * Char(7) * "b", "stops" => stops),           # control character
+            Dict("name" => 42, "stops" => stops),
+            Dict("name" => "x", "stops" => stops[1:1]),
+            Dict("name" => "x", "stops" => [Dict("pos" => i / 32, "color" => "#000000") for i in 0:32]),
+            Dict("name" => "x", "stops" => reverse(stops)),                  # unsorted
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => 1.5, "color" => "#000000")]),
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => "1", "color" => "#000000")]),
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => true, "color" => "#000000")]),
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => 1, "color" => "blue")]),
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => 1, "color" => "#fff")]),
+            Dict("name" => "x", "stops" => [stops[1], Dict("pos" => 1, "color" => "#000000", "a" => 1)]),
+        ]
+        for p in bad_palettes
+            d = Dict("flooda5_palettes" => 1, "palettes" => [p])
+            @test VS.validate_palettes(JSON3.read(JSON3.write(d)))[1] === nothing
+        end
+        for d in Any[[], Dict("palettes" => [good["palettes"][1]]),
+                     Dict("flooda5_palettes" => 2, "palettes" => good["palettes"]),
+                     Dict("flooda5_palettes" => 1, "palettes" => good["palettes"], "x" => 1),
+                     Dict("flooda5_palettes" => 1, "palettes" => []),
+                     Dict("flooda5_palettes" => 1, "palettes" => [Dict("name" => "p$i", "stops" => stops) for i in 1:65]),
+                     Dict("flooda5_palettes" => 1, "palettes" => [Dict("name" => "A", "stops" => stops),
+                                                                  Dict("name" => "a", "stops" => stops)])]
+            @test VS.validate_palettes(JSON3.read(JSON3.write(d)))[1] === nothing
+        end
+
+        # Over HTTP, from a viewer directory with palettes.json beside config.json
+        viz = mktempdir()
+        common = joinpath(viz, "viewer-common")
+        mkpath(common)
+        write(joinpath(common, "app.js"), "// app")
+        write(joinpath(common, "config.json"), JSON3.write(Dict("cesium_ion_token" => "SECRET-CONFIG")))
+        write(joinpath(common, "keys.json"), JSON3.write(Dict("FLOODA5_CESIUM_ION_TOKEN" => "SECRET-KEYS")))
+        pal = joinpath(common, "palettes.json")
+        port = free_port()
+        vis = VS.start(; port, viz_dir = viz)
+        try
+            r = json_(port, "/api/palettes")                      # absent: nothing offered, no error
+            @test r["flooda5_palettes"] == 1 && isempty(r["palettes"]) && !haskey(r, "error")
+            write(pal, JSON3.write(good))
+            r = json_(port, "/api/palettes")                      # read on each request
+            @test length(r["palettes"]) == 1 && r["palettes"][1]["name"] == "Team depth" && !haskey(r, "error")
+            @test r["palettes"][1]["stops"][2]["pos"] == 1
+            write(pal, "{ not json")
+            r = json_(port, "/api/palettes")
+            @test isempty(r["palettes"]) && occursin("palettes.json", r["error"])
+            write(pal, JSON3.write(Dict("flooda5_palettes" => 1, "palettes" => [bad_palettes[9]])))
+            r = json_(port, "/api/palettes")
+            @test isempty(r["palettes"]) && occursin("sorted", r["error"])
+            big = Dict("flooda5_palettes" => 1, "palettes" => [Dict("name" => "x", "stops" => stops)])
+            write(pal, JSON3.write(big) * " "^(300 * 1024))      # valid JSON, but over the size limit
+            r = json_(port, "/api/palettes")
+            @test isempty(r["palettes"]) && occursin("256 KiB", r["error"])
+            write(pal, JSON3.write(good))
+            # palettes.json only through /api/palettes; config.json and keys.json never
+            @test get_(port, "/viz/viewer-common/app.js").status == 200
+            for f in ("palettes.json", "config.json", "keys.json")
+                r = get_(port, "/viz/viewer-common/$f")
+                @test r.status == 404
+                @test !occursin("SECRET", String(r.body))
+            end
+            @test !occursin("SECRET", String(get_(port, "/api/palettes").body))
+            @test get_(port, "/viz/viewer-common/../viewer-common/keys.json").status in (403, 404)
+        finally
+            VS.stop(vis)
+        end
+    end
+
     @testset "viewer choice" begin
         port = free_port()
         vis = VS.start(; port, viewer = "giro3d")

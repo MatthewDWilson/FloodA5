@@ -28,6 +28,8 @@
 #   GET /api/series/{i}?var=V      → one cell's values of V over the frames kept (`series_data`)
 #   GET /api/run                   → the run record (`set_run!`; {} until set)
 #   GET /api/about                 → variable descriptions (io/variables.toml)
+#   GET /api/palettes              → a group's shared palettes: viewer-common/palettes.json
+#                                    if present, validated (`shared_palettes`)
 #
 # The viewer can also read an output file from the user's computer itself
 # (viewer-common/js/local/: h5wasm in a worker answers the same /api), and
@@ -717,6 +719,102 @@ function viewer_config(s::VisServer)
 end
 
 # ---------------------------------------------------------------------------
+# Shared palettes
+# ---------------------------------------------------------------------------
+
+"Files of the viewer directories never served as static files (palettes.json only through `/api/palettes`)."
+const _NOT_SERVED = ("config.json", "keys.json", "palettes.json")
+
+"Limits of a palette file (the same as the viewer's, viewer-common/js/palettes.js `LIMITS`)."
+const PALETTE_LIMITS = (min_stops = 2, max_stops = 32, max_name = 40, max_palettes = 64, max_bytes = 256 * 1024)
+
+# A name's length as JavaScript counts it (UTF-16 code units).
+_js_length(s::AbstractString) = sum(c -> UInt32(c) > 0xffff ? 2 : 1, s; init = 0)
+_is_number(x) = x isa Real && !(x isa Bool) && isfinite(x)
+_keys_only(o, allowed) = all(k -> String(k) in allowed, keys(o))
+
+"""
+    validate_palettes(doc) → (palettes, nothing) | (nothing, error message)
+
+Check a palette file (docs/DATA_FORMATS.md §6), as the viewer does
+(viewer-common/js/palettes.js): `{"flooda5_palettes": 1, "palettes": [...]}`
+and no other keys; 1–64 palettes, each `{"name", "stops"}` and no other keys;
+names text of 1–40 characters (trimmed, no control characters), unique
+ignoring case; 2–32 stops `{"pos", "color"}`, positions numbers in [0, 1] in
+non-decreasing order, colours `"#rrggbb"` (returned in lower case).
+"""
+function validate_palettes(doc)
+    L = PALETTE_LIMITS
+    (doc isa AbstractDict && _keys_only(doc, ("flooda5_palettes", "palettes")) &&
+     _is_number(get(doc, "flooda5_palettes", nothing)) && doc["flooda5_palettes"] == 1) ||
+        return nothing, "not a palette file ({\"flooda5_palettes\": 1, \"palettes\": [...]})"
+    ps = get(doc, "palettes", nothing)
+    (ps isa AbstractVector && 1 <= length(ps) <= L.max_palettes) ||
+        return nothing, "1–$(L.max_palettes) palettes are needed"
+    out = Any[]; seen = Set{String}()
+    for p in ps
+        (p isa AbstractDict && _keys_only(p, ("name", "stops"))) ||
+            return nothing, "a palette is {\"name\", \"stops\"}"
+        n = get(p, "name", nothing)
+        name = n isa AbstractString ? String(strip(n)) : ""
+        (1 <= _js_length(name) <= L.max_name && !any(iscntrl, name)) ||
+            return nothing, "a name must be text of 1–$(L.max_name) characters"
+        lowercase(name) in seen && return nothing, "\"$name\" appears twice"
+        push!(seen, lowercase(name))
+        st = get(p, "stops", nothing)
+        (st isa AbstractVector && L.min_stops <= length(st) <= L.max_stops) ||
+            return nothing, "\"$name\": $(L.min_stops)–$(L.max_stops) stops are needed"
+        stops = Any[]; last = -Inf
+        for x in st
+            (x isa AbstractDict && _keys_only(x, ("pos", "color"))) ||
+                return nothing, "\"$name\": a stop is {\"pos\", \"color\"}"
+            pos = get(x, "pos", nothing); col = get(x, "color", nothing)
+            (_is_number(pos) && 0 <= pos <= 1) || return nothing, "\"$name\": positions are numbers from 0 to 1"
+            (col isa AbstractString && occursin(r"^#[0-9a-fA-F]{6}$", col)) ||
+                return nothing, "\"$name\": colours are \"#rrggbb\""
+            pos < last && return nothing, "\"$name\": positions must be sorted"
+            last = pos
+            push!(stops, Dict("pos" => Float64(pos), "color" => lowercase(col)))
+        end
+        push!(out, Dict("name" => name, "stops" => stops))
+    end
+    return out, nothing
+end
+
+"""
+    shared_palettes(s) / shared_palettes(dir) → Dict
+
+`/api/palettes`: the palettes of `palettes.json` in `visualisation/viewer-common/`
+(beside config.json; optional, a group's shared palettes) after
+`validate_palettes`: `{"flooda5_palettes": 1, "palettes": [...]}` — an empty
+list when the file is absent, and also an `"error"` when it cannot be read,
+is larger than 256 KiB or fails a check (then none of it is offered). The
+file is read on each request; it is never served as a static file.
+"""
+shared_palettes(s::VisServer) = shared_palettes(joinpath(s.viz_dir, "viewer-common"))
+function shared_palettes(dir::AbstractString)
+    out = Dict{String,Any}("flooda5_palettes" => 1, "palettes" => Any[])
+    f = joinpath(dir, "palettes.json")
+    isfile(f) || return out
+    err = try
+        if filesize(f) > PALETTE_LIMITS.max_bytes
+            "larger than 256 KiB"
+        else
+            ps, e = validate_palettes(JSON3.read(read(f, String)))
+            ps === nothing ? e : (out["palettes"] = ps; nothing)
+        end
+    catch e
+        e isa InterruptException && rethrow()
+        "not readable as JSON"
+    end
+    if err !== nothing
+        out["error"] = "palettes.json: $err"
+        @warn "VisServer: palettes.json ignored: $err" path = f
+    end
+    return out
+end
+
+# ---------------------------------------------------------------------------
 # HTTP handling
 # ---------------------------------------------------------------------------
 
@@ -813,6 +911,7 @@ function _route(s::VisServer, req::HTTP.Request)
         a == "info"   && length(parts) == 2 && return _json(_info(s))
         a == "run"    && length(parts) == 2 && return _json(lock(() -> copy(s.run), s.lock))
         a == "about"  && length(parts) == 2 && return _json(about())
+        a == "palettes" && length(parts) == 2 && return _json(shared_palettes(s))
         if a == "mesh" && length(parts) == 2
             m = s.mesh
             return m === nothing ? HTTP.Response(204, "") : _binary(m.bytes)
@@ -912,7 +1011,7 @@ function _static(s::VisServer, parts)
     root = abspath(s.viz_dir)
     f = abspath(joinpath(root, parts...))
     (startswith(f, root) && isfile(f)) || return _text(404, "Not found")
-    basename(f) in ("config.json", "keys.json") && return _text(404, "Not found")   # never served as files
+    basename(f) in _NOT_SERVED && return _text(404, "Not found")   # never served as files
     ext = lowercase(splitext(f)[2])
     return HTTP.Response(200, ["Content-Type" => get(_MIME, ext, "application/octet-stream"),
                                "Cache-Control" => "no-cache"], read(f))
