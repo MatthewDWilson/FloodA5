@@ -1,11 +1,11 @@
 # Expected metrics for case "planar_embankment" — written by `julia --project=. cases/run.jl baseline planar_embankment`.
 # Tolerances are in cases/registry (Case.rtol / Case.atol).
 [meta]
-flooda5_version = "0.8.9"
-git_commit = "2eb57f933caf6c77aa2b7e400d26779aba8b4fd6"
-git_dirty = true
+flooda5_version = "0.9.0"
+git_commit = "ea23c5abe2d1c9a97b0c6918d689a20d85e55e83"
+git_dirty = false
 platform = "NT x86_64"
-recorded_utc = "2026-11-26T09:29:25Z"
+recorded_utc = "2026-11-26T23:30:13Z"
 
 [sgs]
 crest_z = 7.0
