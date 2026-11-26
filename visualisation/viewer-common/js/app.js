@@ -28,7 +28,8 @@
 // scripting interface (viewer-common/tools/smoke.mjs, the browser console).
 
 import { parseMesh, decodeFloat32, FrameList, FrameCache, formatTime, PROTOCOL } from './protocol.js';
-import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile } from './geometry.js';
+import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile,
+         cornerIndex, cornerValues, bedCornerValues } from './geometry.js';
 import { cssGradient, colormapKey, colormapLabel } from './colormaps.js';
 import { initPalettes, isPalette, fillPaletteMenu, openPaletteEditor, paletteApi } from './palette-editor.js';
 import { COLOR_MODE } from './surface.js';
@@ -102,6 +103,7 @@ export function startViewer(engine) {
     plot: { series: [], varName: null, dock: 'bottom', chart: null, timer: null, ctxCell: -1 }, chartLib: null,
     hazard: loadHazard(), stats: new Map(), statsAt: -Infinity, classBuf: null,
     source: null, ws: null, standalone: false, gen: 0,   // local file (LocalSource); no server; run generation
+    smooth: { water: false, bed: false }, corners: null, cornerBuf: null, cvShown: null,   // smooth surface (0.8.14)
   };
 
   /** The hazard parameters saved in this browser (defaults otherwise). */
@@ -280,8 +282,10 @@ export function startViewer(engine) {
     app.locator = new CellLocator(mesh);
     app.offset = resolveOffset().value;
     const h0 = (finiteMedian(mesh.base) || 0) + app.offset;
+    app.corners = null; app.cornerBuf = null;
     app.water = await engine.createSurface(mesh, { role: 'water', h0 });
     app.bed = await engine.createSurface(mesh, { role: 'bed', h0 });
+    for (const t of ['water', 'bed']) if (app.smooth[t]) await setSmooth(t, true, false);
     app.bed.setStyle({ offset: app.offset });
     applyBedStyle();
     app.water.setStyle({ offset: app.offset, alpha: +$('opacity').value,
@@ -509,8 +513,10 @@ export function startViewer(engine) {
     if (VARS[app.varName] !== v) return;                     // the variable changed meanwhile
     const cv = cv0 ?? (classedNow() ? depth : null);        // classed depth: coloured by class
     app.water.setDepth(depth);
-    if (cv) app.water.setColorValues(colorValues(cv));
+    app.cvShown = cv ? colorValues(cv) : null;
+    if (app.cvShown) app.water.setColorValues(app.cvShown);
     app.depth = depth; app.cvals = cv;
+    updateCorners();
     app.current = i;
     status.shownFrame = f.id; status.renders++; status.lastRenderMs = performance.now() - t0;
     updateRange();
@@ -533,14 +539,62 @@ export function startViewer(engine) {
     const depth = new Float32Array(hmax.length);
     for (let k = 0; k < depth.length; k++) depth[k] = Number.isFinite(cv[k]) ? hmax[k] : 0;
     app.water.setDepth(depth);
-    app.water.setColorValues(colorValues(cv));
+    app.cvShown = colorValues(cv);
+    app.water.setColorValues(app.cvShown);
     app.depth = depth; app.cvals = cv;
+    updateCorners();
     if (i >= 0) app.current = i;
     status.shownFrame = null; status.static = v.source; status.renders++;
     status.lastRenderMs = performance.now() - t0;
     updateRange();
     updateStats();
     updateTimeline();
+  }
+
+  // -------------------------------------------------------------------------
+  // Smooth surface (0.8.14): the cells joined at their corners
+  // -------------------------------------------------------------------------
+
+  /** The mesh's shared corners (geometry.js cornerIndex), found when first needed. */
+  function corners() {
+    if (!app.corners && app.mesh) {
+      const t0 = performance.now();
+      app.corners = cornerIndex(app.mesh);
+      const ms = Math.round(performance.now() - t0);
+      status.smoothCorners = { n: app.corners.nCorners, ms };
+      log(`Smooth surface: ${app.corners.nCorners.toLocaleString()} corners (${ms} ms)`);
+    }
+    return app.corners;
+  }
+
+  /** Smooth surface on or off for 'water' or 'bed' (remembered in the browser). */
+  async function setSmooth(target, on, save = true) {
+    on = !!on;
+    app.smooth[target] = on;
+    if (save) store.set(`flooda5.smooth.${target}`, on ? '1' : '0');
+    $(`smooth-${target}`).checked = on;
+    status.smooth = { ...app.smooth };
+    const s = target === 'bed' ? app.bed : app.water;
+    if (!s) return;
+    if (on) {
+      const ci = corners();
+      if (!ci) return;
+      await s.setCorners(ci);
+      if (target === 'bed') s.setCornerValues(bedCornerValues(ci, app.mesh.elevation, app.mesh.base));
+      else updateCorners();
+    }
+    s.setStyle({ smooth: on ? 1 : 0 });
+  }
+
+  /** The water's corner values for the frame shown (each frame; and when the wet threshold changes). */
+  function updateCorners() {
+    if (!app.smooth.water || !app.corners || !app.water || !app.depth) return;
+    const t0 = performance.now();
+    const p = cornerValues(app.corners, app.depth, app.mesh.base, app.mesh.elevation, app.cvShown,
+                           Math.max(+$('min-depth').value || 0, 0), app.cornerBuf);
+    app.cornerBuf = p.data;
+    app.water.setCornerValues(p);
+    status.smoothFrameMs = Math.round((performance.now() - t0) * 10) / 10;     // (CPU: the corner means and the upload)
   }
 
   function prefetch(i) {
@@ -715,7 +769,8 @@ export function startViewer(engine) {
     $('legend-labels').hidden = classed;
     $('range-row').hidden = classed;
     $('range-fixed').hidden = classed || app.range.mode !== 'fixed';
-    app.water?.setStyle({ cmode: classed ? COLOR_MODE.texture : v.cmode, colormap: colormapKey(cmap) });
+    app.water?.setStyle({ cmode: classed ? COLOR_MODE.texture : v.cmode, colormap: colormapKey(cmap),
+                          blend: classed ? 0 : 1 });       // (blended class numbers would be classes of their own)
     status.palette = cmap; status.classed = classed;
     if (v.kind !== 'static') status.static = null;
     renderClassLegend();
@@ -1439,6 +1494,8 @@ export function startViewer(engine) {
 
   function wireControls() {
     $('open-file').onclick = chooseFile;
+    $('smooth-water').onchange = () => setSmooth('water', $('smooth-water').checked);
+    $('smooth-bed').onchange = () => setSmooth('bed', $('smooth-bed').checked);
     $('open-prompt-btn').onclick = chooseFile;
     $('file-input').onchange = () => { const f = $('file-input').files?.[0]; if (f) openLocalFile(f); };
     setupDrop();
@@ -1485,6 +1542,7 @@ export function startViewer(engine) {
     };
     $('min-depth').onchange = () => {
       app.water?.setStyle({ minDepth: Math.max(+$('min-depth').value || 0, 0) });
+      updateCorners();
       updateStats(); updateRange();
       refreshRanges(true);
       if (app.plot.series.length && plotVar() === 'level') drawPlot();
@@ -1598,6 +1656,7 @@ export function startViewer(engine) {
     rightClick: (x, y) => { const r = engine.canvas.getBoundingClientRect(); openCtxMenu(r.left + x, r.top + y, x, y); },
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setHazard: p => setHazard(p || {}),
+    setSmooth: (target, on) => setSmooth(target === 'bed' ? 'bed' : 'water', on),
     openFile: file => openLocalFile(file),               // a File (tests: from an <input type=file>)
     localFetch: path => (app.source ? app.source.fetch(path).then(async r => ({ status: r.status,
                                        body: r.headers.get('Content-Type')?.startsWith('application/json') ? await r.json()
@@ -1624,6 +1683,10 @@ export function startViewer(engine) {
     wireControls();
     populateHazard();
     $('show-borders').checked = store.get('flooda5.borders') === '1';
+    for (const t of ['water', 'bed']) {
+      app.smooth[t] = store.get(`flooda5.smooth.${t}`) === '1';
+      $(`smooth-${t}`).checked = app.smooth[t];
+    }
     app.plot.dock = store.get('flooda5.plot.dock') === 'right' ? 'right' : 'bottom';
     const bo = +store.get('flooda5.bed.opacity');
     if (bo >= 0.1 && bo <= 1) $('bed-opacity').value = String(bo);

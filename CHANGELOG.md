@@ -33,6 +33,37 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.14] — 2026-11-26
+
+Smooth water and bed surfaces in the globe viewers (branch `wpv-smooth`;
+PATCH: viewer only, results unchanged).
+
+- *Smooth surface* (Display) and *Smooth* (Bed surface), off by default:
+  each cell's ring corners are drawn at the mean level of the wet cells
+  sharing them (the bed: the mean elevation), each centre at the cell's own
+  level, so the surface follows the slope instead of stepping; colours
+  blend (not with classed palettes), and the surface is shaded by its slope
+  (exaggerated 20× for water, 3× for the bed, for the shading only; lit
+  from the north-west). For viewing — the flat cells remain the exact view.
+- How: `geometry.js` `cornerIndex` finds the shared corners by sorting
+  (no hash map: affordable for millions of cells), once, when smoothing is
+  first on; `cornerValues` / `bedCornerValues` give each corner's means
+  (one RGBA32F texel per corner: level, bed, depth, colour value) for every
+  frame; the shaders (`surface.js` `fa5Corner`, `fa5LevelC`,
+  `fa5ColorValueC`, `fa5Shade`) read them for ring vertices. Giro3D adds a
+  `corner` attribute; CesiumJS rebuilds the surface once with a
+  `_FA5CORNER` glTF attribute (`buildGlb(surface, corner)`).
+- Cost, measured: the 30 000-cell A5 Carlisle mesh — corners 57 ms, nothing
+  noticeable per frame; the 582 000-cell 5 m mesh — corners 0.8–0.9 s
+  (CesiumJS: 1.9 s with the rebuild), a frame 90–125 ms instead of 30–75 ms
+  (23 ms of it the corner means on the CPU).
+- About: a *Smooth surface* note (`io/variables.toml`).
+- Tests: `viewer-common/test/geometry.test.js` (corners shared and welded
+  within ~1 cm, centres −1, corner → cells; means over wet cells, missing
+  colour values left out, dry corners zero; the bed's means; the glTF
+  attribute). Browser smoke on both engines (flat vs smooth, water and bed,
+  frames stepping).
+
 ## [0.8.13] — 2026-11-26
 
 Statistics over the run written by the model (branch `wpv-stats`; PATCH:

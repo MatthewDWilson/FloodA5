@@ -551,6 +551,21 @@ and an opacity (below 1 the bed is translucent).
 default; faded out where cells are smaller than about 8 pixels). Hover over
 a cell for its depth, level, bed and id.
 
+*Smooth surface* (0.8.14; off by default) joins the cells at their corners:
+each corner at the mean level of the wet cells sharing it, each cell's
+centre at its own level, so the surface follows the water slope instead of
+stepping from cell to cell. Colours blend across the cells (not with
+classed palettes) and the surface is shaded by its slope (exaggerated 20
+times for the shading, lit from the north-west). It is for viewing: the
+flat cells show the model's values; smoothing interpolates between them and
+blurs real jumps. *Smooth* under *Bed surface* does the same for the bed
+(shading exaggerated 3 times). The corners are found when smoothing is
+first switched on (0.9 s for the 582 000-cell 5 m Carlisle mesh; CesiumJS
+then rebuilds the surface once, about 1 s); a frame then costs about
+25 ms more on the CPU (90 ms in all with the texture upload on CesiumJS) at
+that size, nothing noticeable for the 30 000-cell A5 mesh. Both choices
+are remembered in the browser.
+
 When zoomed out, 3D tiles and terrain are drawn from coarse levels of
 detail that stand metres above the ground they simplify; the water is
 therefore drawn slightly nearer the camera than it is — up to 1.5 % of its

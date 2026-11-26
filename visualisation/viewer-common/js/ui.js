@@ -123,6 +123,10 @@ export const UI_HTML = `
         <label for="show-borders">Cell borders</label>
         <input id="show-borders" type="checkbox">
       </div>
+      <div class="row">
+        <label for="smooth-water" title="Join the cells at their corners: each corner at the mean level of its wet cells, each cell's centre at its own level; colours blend (not with classes) and the surface is shaded by its slope. For viewing: the flat cells show the model's own values.">Smooth surface</label>
+        <input id="smooth-water" type="checkbox">
+      </div>
     </section>
 
     <section>
@@ -148,6 +152,10 @@ export const UI_HTML = `
         <label for="bed-opacity">Opacity</label>
         <input id="bed-opacity" type="range" min="0.1" max="1" step="0.05" value="1">
         <span id="bed-opacity-val" class="val">1.00</span>
+      </div>
+      <div class="row">
+        <label for="smooth-bed" title="Join the cells at their corners (each corner at the mean elevation of its cells), shaded by the slope">Smooth</label>
+        <input id="smooth-bed" type="checkbox">
       </div>
       </div>
     </section>

@@ -19,26 +19,38 @@ const VERTEX = `
 ${glslHelpers()}
 attribute float cell;
 attribute float edge;
+attribute float corner;          // smooth surface: the vertex's corner (−1 at the centre; unset until smoothing is first on)
 uniform sampler2D uDepth;
 uniform sampler2D uCvar;
 uniform sampler2D uStatic;
-uniform float uTexW, uStaticW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias;
+uniform sampler2D uCorner;
+uniform float uTexW, uStaticW, uCornerW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias, uSmooth, uBlend;
 uniform vec3 uCentre;
 varying float vDepth;
 varying float vCval;
 varying float vEdge;
+varying vec3 vPos;
+varying vec3 vUp;
 void main() {
   int i = int(cell + 0.5);
   vec4 st = fa5Static(uStatic, uStaticW, i);
   float d = max(fa5Packed(uDepth, uTexW, i), 0.0);
   float level = fa5Level(uMode, uExag, d, st);
+  float cv = (uCmode > 1.5 && uCmode < 2.5) ? fa5Packed(uCvar, uTexW, i) : 0.0;
+  float cval = fa5ColorValue(uCmode, d, st, cv);
+  if (uSmooth > 0.5 && corner > -0.5) {
+    vec4 cc = fa5Corner(uCorner, uCornerW, int(corner + 0.5));
+    level = fa5LevelC(uMode, uExag, cc);
+    if (uBlend > 0.5) cval = fa5ColorValueC(uCmode, cc);
+  }
   vec3 n = fa5Normal(position + uCentre);
   // (the mesh's matrix is a translation to uCentre: model = world − uCentre)
-  vec3 p = fa5DepthBias(position + n * (level + uOffset - uH0), cameraPosition - uCentre, uDepthBias);
+  vec3 p0 = position + n * (level + uOffset - uH0);
+  vec3 p = fa5DepthBias(p0, cameraPosition - uCentre, uDepthBias);
   vDepth = d;
   vEdge = edge;
-  float cv = (uCmode > 1.5 && uCmode < 2.5) ? fa5Packed(uCvar, uTexW, i) : 0.0;
-  vCval = fa5ColorValue(uCmode, d, st, cv);
+  vCval = cval;
+  vPos = p0; vUp = n;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   #include <logdepthbuf_vertex>
 }
@@ -49,24 +61,28 @@ const FRAGMENT = `
 #include <logdepthbuf_pars_fragment>
 ${glslHelpers()}${glslFragmentHelpers()}
 uniform sampler2D uCmap;
-uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode, uBorders;
+uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode, uBorders, uSmooth, uShadeExag;
 varying float vDepth;
 varying float vCval;
 varying float vEdge;
+varying vec3 vPos;
+varying vec3 vUp;
 // three.js declares no fragment output for an explicit GLSL3 ShaderMaterial
 layout(location = 0) out highp vec4 fa5FragColor;
 void main() {
   float line = fa5Border(vEdge, uBorders);
   if (uMode < 1.5 && vDepth < uMinDepth) discard;
   #include <logdepthbuf_fragment>
-  vec3 c = mix(texture(uCmap, fa5MapCoord(vCval, uCmin, uCmax)).rgb, vec3(1.0), line);
+  vec3 c = texture(uCmap, fa5MapCoord(vCval, uCmin, uCmax)).rgb;
+  if (uSmooth > 0.5) c = clamp(c * fa5Shade(vPos, normalize(vUp), uShadeExag), 0.0, 1.0);
+  c = mix(c, vec3(1.0), line);
   fa5FragColor = vec4(c, max(uAlpha, line));
 }
 `;
 
 const STYLE_UNIFORMS = { mode: 'uMode', cmode: 'uCmode', cmin: 'uCmin', cmax: 'uCmax', alpha: 'uAlpha',
                          minDepth: 'uMinDepth', exag: 'uExag', offset: 'uOffset', borders: 'uBorders',
-                         depthBias: 'uDepthBias' };
+                         depthBias: 'uDepthBias', smooth: 'uSmooth', blend: 'uBlend', shadeExag: 'uShadeExag' };
 
 export class SurfaceMesh {
   /**
@@ -115,6 +131,8 @@ export class SurfaceMesh {
         uCmin: { value: s.cmin }, uCmax: { value: s.cmax }, uAlpha: { value: s.alpha },
         uMinDepth: { value: s.minDepth }, uExag: { value: s.exag },
         uBorders: { value: s.borders }, uDepthBias: { value: s.depthBias },
+        uCorner: { value: floatTexture({ data: new Float32Array(4), width: 1, height: 1 }) }, uCornerW: { value: 1 },
+        uSmooth: { value: s.smooth }, uBlend: { value: s.blend }, uShadeExag: { value: s.shadeExag },
       },
       transparent: role !== 'bed' || s.alpha < 1,     // the bed: opaque unless its opacity is < 1
       depthWrite: role === 'bed' && s.alpha >= 1,
@@ -142,6 +160,26 @@ export class SurfaceMesh {
   setDepth(depth) {
     packCellValues(depth, this.n, this.depthTex.image.data);
     this.depthTex.needsUpdate = true;
+    this.instance.notifyChange();
+  }
+
+  /** Smooth surface: the corners (geometry.js cornerIndex), attached once. */
+  async setCorners(ci) {
+    const g = this.object3d.geometry;
+    if (ci && !g.getAttribute('corner')) g.setAttribute('corner', new THREE.BufferAttribute(ci.vertexCorner, 1));
+  }
+
+  /** Smooth surface: the corner values (geometry.js cornerValues / bedCornerValues, packed). */
+  setCornerValues(p) {
+    const u = this.material.uniforms.uCorner;
+    if (u.value.image.width === p.width && u.value.image.height === p.height) {
+      u.value.image.data.set(p.data);
+      u.value.needsUpdate = true;
+    } else {
+      u.value.dispose();
+      u.value = floatTexture({ data: Float32Array.from(p.data), width: p.width, height: p.height });
+      this.material.uniforms.uCornerW.value = p.width;
+    }
     this.instance.notifyChange();
   }
 
