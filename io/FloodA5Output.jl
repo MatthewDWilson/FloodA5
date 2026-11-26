@@ -296,6 +296,40 @@ function write_summary!(path::AbstractString, summary::AbstractDict)
     return nothing
 end
 
+"""
+    write_statistics!(path, stats::AbstractDict, attrs::AbstractDict)
+
+Write the statistics over the run that the model gathers while it runs
+(`/statistics`, since 0.8.13): one Float32 dataset per statistic
+(`max_water_depth`, `time_max_water_depth`, …; n_cells, file order) and
+attributes saying how they were gathered (`cadence`, `interval_s`,
+`flood_depth`, `n_states`, `t_first`, `t_last`). The model rewrites
+them with every output frame, so a run that stops early keeps the
+statistics of its frames. The datasets are contiguous and overwritten in
+place (a rewritten compressed dataset would leave its old space unused).
+"""
+function write_statistics!(path::AbstractString, stats::AbstractDict, attrs::AbstractDict)
+    h5open(path, "r+") do f
+        g = haskey(f, "statistics") ? f["statistics"] : create_group(f, "statistics")
+        a = attributes(g)
+        for k in collect(keys(a))
+            delete_attribute(g, k)
+        end
+        for (k, v) in attrs
+            a[String(k)] = v isa Symbol ? String(v) : v
+        end
+        for (k, v) in stats
+            name = String(k)
+            if haskey(g, name) && length(g[name]) != length(v)
+                delete_object(g, name)
+            end
+            ds = haskey(g, name) ? g[name] : create_dataset(g, name, Float32, (length(v),))
+            ds[:] = Vector{Float32}(v)
+        end
+    end
+    return nothing
+end
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Reader (format 2 and format 1)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -438,10 +472,26 @@ function run_info(f::HDF5.File)
     d["inputs"] = [attrs_dict(g["inputs"][k]) for k in sort(collect(keys(g["inputs"])))]
     d["mesh_source"] = haskey(f["mesh"], "source") ? attrs_dict(f["mesh/source"]) : Dict{String,Any}()
     d["summary"] = haskey(f, "summary") ? attrs_dict(f["summary"]) : Dict{String,Any}()
+    haskey(f, "statistics") && (d["statistics"] = attrs_dict(f["statistics"]))
     return d
 end
 
 attrs_dict(obj) = Dict{String,Any}(k => read(attributes(obj)[k]) for k in keys(attributes(obj)))
+
+"""
+    read_statistics(f) → (stats, attrs) or nothing
+
+The statistics the model gathered during the run (`/statistics`, since
+0.8.13; `write_statistics!`): `stats` maps each statistic to its values
+(Float32, file order), `attrs` says how they were gathered. `nothing` for
+files without them (earlier versions, runs without output frames yet).
+"""
+function read_statistics(f::HDF5.File)
+    haskey(f, "statistics") || return nothing
+    g = f["statistics"]
+    stats = Dict{String,Vector{Float32}}(k => Vector{Float32}(read(g[k])) for k in keys(g))
+    return (stats, attrs_dict(g))
+end
 
 """
     run_record(f) → Dict
@@ -519,7 +569,7 @@ end
 
 for fn in (:format_version, :n_frames, :frame_times, :frame_at, :frame_vars, :has_var,
            :read_frame, :read_var, :read_series, :cell_table, :cell_area, :cell_polygons,
-           :cell_neighbours, :run_info, :mesh_info, :run_record)
+           :cell_neighbours, :run_info, :mesh_info, :run_record, :read_statistics)
     @eval $fn(path::AbstractString, args...) = _reader(f -> $fn(f, args...), path)
 end
 

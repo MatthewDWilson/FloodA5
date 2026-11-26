@@ -92,6 +92,13 @@ export function renderRun(rec) {
   out.push('<h3>Mesh</h3>', dl(meshRows));
   const f = rec.frames;
   if (f) out.push('<h3>Frames</h3>', dl([['Frames', f.n], ['Time', f.n ? `${duration(f.t_first)} – ${duration(f.t_last)}` : '–']]));
+  const st = rec.statistics;              // the model's statistics over the run (0.8.13)
+  if (st) {
+    const how = st.cadence === 'step' ? 'every time step' : st.cadence === 'output' ? 'at the output frames'
+      : `every ${duration(st.interval_s)}`;
+    out.push('<h3>Statistics over the run</h3>', dl([['Gathered', `by the model, ${how} (${Number(st.n_states).toLocaleString()} states)`],
+                                                   ['Flooded if', `depth ≥ ${st.flood_depth} m`]]));
+  }
   const inputs = rec.inputs || [];
   if (inputs.length) {
     out.push('<h3>Inputs</h3>', dl(inputs.map(i => [i.role || i.flag, [

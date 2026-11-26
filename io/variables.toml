@@ -148,7 +148,7 @@ text = "When zoomed out, coarse 3D tiles can hide shallow water that lies below 
 
 [topics.statistics]
 title = "Statistics over the run"
-text = "The maximum, first-flooding and duration maps are computed from the output frames (for a live run, from the frames the viewer's server has kept), so they are at frame resolution: a peak between two frames is missed and times are rounded to the frame interval. The model does not record per-step maxima yet. With the sub-grid (SGS) model the depth is that of the cell's lowest part, so the depth-based hazards describe the deepest part of the cell, not its average."
+text = "The maximum, first-flooding and duration maps are computed from the output frames (for a live run, from the frames the viewer's server has kept), so they are at frame resolution: a peak between two frames is missed and times are rounded to the frame interval. Since 0.8.13 the model also gathers them while it runs and stores them in the output (Run tab: 'Statistics over the run'): at the output frames by default — the same values, read instead of computed — or more often with --stats-interval (as often as every step), which catches peaks between frames. The viewer uses the model's maximum depth and its time, maximum speed and D·V, the ARR class and — for the flooded threshold they were gathered with (--flood-depth) — the time of first flooding and the duration; the hazard rating and degree depend on the viewer's parameters and always come from the frames. With the sub-grid (SGS) model the depth is that of the cell's lowest part, so the depth-based hazards describe the deepest part of the cell, not its average."
 
 [topics.hazard_parameters]
 title = "Hazard parameters"

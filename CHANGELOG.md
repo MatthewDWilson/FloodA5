@@ -33,6 +33,42 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.13] — 2026-11-26
+
+Statistics over the run written by the model (branch `wpv-stats`; PATCH:
+results unchanged — frames bit-identical with and without them).
+
+- The output gets `/statistics` (DATA_FORMATS §2): maximum depth and its
+  time, maximum speed and D·V, the ARR class, time of first flooding and
+  duration, gathered while the model runs and rewritten with every output
+  frame. `--stats-interval S` sets how often (default: at the output frames,
+  at no extra cost; `0` = every step, catching peaks between frames — cell
+  speeds are then computed, and a GPU state copied to the host, that often);
+  `--flood-depth M` the threshold (default 0.1 m). Hazard rating and degree
+  maxima depend on the viewer's parameters and are not stored.
+- One implementation: `analysis/hazard.jl`'s `run_statistics` is now a loop
+  over `StatsAccumulator` (`accumulate_frame!`, `accumulated_statistics`;
+  exported by FA), which the model uses during the run, on the same Float32
+  values the viewers read — at the default cadence the model's statistics
+  equal those derived from the frames bit for bit (tested), and
+  `run_statistics` gives the same values as before (the local-file fixture
+  is unchanged).
+- Globe viewers: a replay (server, and a local file in the browser) serves
+  those statistics from the file — on the 400 MB Carlisle SGS run the first
+  *Maximum depth* took 2.5 s, now 0.4 s, with identical values; the hazard
+  maxima are still derived. The *Run* tab says how the statistics were
+  gathered.
+- `FA.write_run_statistics!(path)` adds `/statistics` to an earlier file
+  from its frames (18 s for that run; +0.8 MB).
+- `FO.write_statistics!`, `FO.read_statistics`; `run_info` gains `statistics`.
+- Tests: `test/test_run_statistics.jl` (new, in CI): default cadence equals
+  the frames' statistics bit for bit; `--stats-interval 0` and
+  `--flood-depth` change no frame (CPU and the ka-cpu device backend) and
+  give maxima ≥ the frames'; the accumulator part-way and in one pass;
+  `write_run_statistics!`; files without statistics. The local-file fixture
+  has a `/statistics` group with values of its own (the answers show which
+  source was used).
+
 ## [0.8.12] — 2026-11-26
 
 Globe viewer fixes from testing 0.8.8–0.8.9 (branch `wpv-feedback`; PATCH:

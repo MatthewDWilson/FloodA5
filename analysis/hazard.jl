@@ -270,57 +270,146 @@ returns `(depth, velocity)` of frame k (length-`n` vectors; `velocity` may be
   standing for the interval between the midpoints to its neighbours (the
   first and last frames for half an interval).
 
-Non-finite values are skipped; a cell with none gets NaN maxima.
+Non-finite values are skipped; a cell with none gets NaN maxima. The frames
+go through a `StatsAccumulator`, which the model also uses during a run
+(`--stats-interval`), so both give the same values from the same states.
 """
 function run_statistics(times::AbstractVector, frame::Function, n::Integer, p::HazardParams = HazardParams())
-    nf = length(times)
-    mx = Dict{String,Vector{Float32}}()
-    mx["max_water_depth"] = fill(NaN32, n)
-    tfirst = fill(NaN32, n); dur = zeros(Float32, n); tmax = fill(NaN32, n)
-    have_v = false
-    t = debris_table(p.landuse)
-    fd = p.flood_depth
-    for k in 1:nf
+    a = StatsAccumulator(n, p)
+    for k in eachindex(times)
         d, v = frame(k)
         length(d) == n || throw(DimensionMismatch("frame $k has $(length(d)) values, expected $n"))
-        w = nf == 1 ? 0.0 : (Float64(times[min(k + 1, nf)]) - Float64(times[max(k - 1, 1)])) / 2
-        md = mx["max_water_depth"]
-        @inbounds for i in 1:n
-            x = Float64(d[i])
-            isfinite(x) || continue
-            if isnan(md[i]) || x > md[i]
-                md[i] = x
-                x > 0 && (tmax[i] = times[k])
-            end
-            if x >= fd
-                isnan(tfirst[i]) && (tfirst[i] = times[k])
-                dur[i] += w
+        accumulate_frame!(a, times[k], d, v)
+    end
+    return accumulated_statistics(a)
+end
+
+"""
+    StatsAccumulator(n, p = HazardParams(); hazards = true)
+
+The state of `run_statistics` between frames, for statistics gathered while
+a run goes on (the model, `--stats-interval`): add each state with
+`accumulate_frame!(a, t, depth, velocity)` (velocity may be `nothing`) and
+read the statistics so far with `accumulated_statistics(a)`. `hazards =
+false` leaves out the maxima that depend on the viewer's hazard parameters
+(hazard rating: land use; hazard degree: the person) — D·V and the ARR
+class depend on none. `p.flood_depth` sets the flooded threshold.
+
+A frame's duration weight (half the interval between its neighbours) is
+known only when the next frame comes; it is added then, in frame order, so
+the arithmetic is that of a pass over all frames.
+"""
+mutable struct StatsAccumulator
+    n       :: Int
+    p       :: HazardParams
+    table   :: NTuple{3,Float64}
+    hazards :: Bool
+    nf      :: Int                  # frames added
+    t1      :: Float64              # time of the frame before the latest
+    t2      :: Float64              # time of the latest frame
+    pending :: BitVector            # cells flooded at the latest frame (weight not yet known)
+    md      :: Vector{Float32}
+    tmax    :: Vector{Float32}
+    tfirst  :: Vector{Float32}
+    dur     :: Vector{Float32}
+    have_v  :: Bool
+    mv      :: Vector{Float32}
+    mdv     :: Vector{Float32}
+    mar     :: Vector{Float32}
+    mhr     :: Vector{Float32}
+    mhd     :: Vector{Float32}
+end
+
+StatsAccumulator(n::Integer, p::HazardParams = HazardParams(); hazards::Bool = true) =
+    StatsAccumulator(Int(n), p, debris_table(p.landuse), hazards, 0, NaN, NaN, falses(n),
+                     fill(NaN32, n), fill(NaN32, n), fill(NaN32, n), zeros(Float32, n), false,
+                     Float32[], Float32[], Float32[], Float32[], Float32[])
+
+"Add the state at time `t` (depth, velocity or `nothing`; length-n vectors, any real type)."
+function accumulate_frame!(a::StatsAccumulator, t::Real, d::AbstractVector, v = nothing)
+    n = a.n
+    length(d) == n || throw(DimensionMismatch("depth has $(length(d)) values, expected $n"))
+    v === nothing || length(v) == n || throw(DimensionMismatch("velocity has $(length(v)) values, expected $n"))
+    # the previous frame's duration weight is known now
+    if a.nf >= 1
+        w = (Float64(t) - (a.nf >= 2 ? a.t1 : a.t2)) / 2
+        _add_pending!(a, w)
+    end
+    fd = a.p.flood_depth
+    md = a.md; tmax = a.tmax; tfirst = a.tfirst; pend = a.pending
+    @inbounds for i in 1:n
+        x = Float64(d[i])
+        if !isfinite(x)
+            pend[i] = false
+            continue
+        end
+        if isnan(md[i]) || x > md[i]
+            md[i] = x
+            x > 0 && (tmax[i] = t)
+        end
+        f = x >= fd
+        pend[i] = f
+        f && isnan(tfirst[i]) && (tfirst[i] = t)
+    end
+    if v !== nothing
+        if !a.have_v
+            a.have_v = true
+            a.mv = fill(NaN32, n); a.mdv = fill(NaN32, n); a.mar = fill(NaN32, n)
+            if a.hazards
+                a.mhr = fill(NaN32, n); a.mhd = fill(NaN32, n)
             end
         end
-        v === nothing && continue
-        if !have_v
-            have_v = true
-            for s in ("max_velocity", "max_depth_velocity", "max_hazard_rating",
-                      "max_hazard_degree", "max_hazard_class_arr")
-                mx[s] = fill(NaN32, n)
-            end
-        end
-        mv = mx["max_velocity"]; mdv = mx["max_depth_velocity"]; mhr = mx["max_hazard_rating"]
-        mhd = mx["max_hazard_degree"]; mar = mx["max_hazard_class_arr"]
+        mv = a.mv; mdv = a.mdv; mar = a.mar; mhr = a.mhr; mhd = a.mhd
+        tb = a.table; p = a.p; hz = a.hazards
         @inbounds for i in 1:n
             x = Float64(d[i]); u = Float64(v[i])
             (isfinite(x) && isfinite(u)) || continue
             _maxin!(mv, i, u)
             _maxin!(mdv, i, depth_velocity(x, u))
-            _maxin!(mhr, i, hazard_rating(x, u, t))
-            _maxin!(mhd, i, hazard_degree(x, u, p))
+            if hz
+                _maxin!(mhr, i, hazard_rating(x, u, tb))
+                _maxin!(mhd, i, hazard_degree(x, u, p))
+            end
             _maxin!(mar, i, arr_hazard_class(x, u))
         end
     end
-    mx["time_max_water_depth"] = tmax
-    mx["time_first_flooded"] = tfirst
-    mx["flood_duration"] = dur
-    return mx
+    a.t1 = a.t2; a.t2 = Float64(t); a.nf += 1
+    return a
+end
+
+function _add_pending!(a::StatsAccumulator, w::Float64)
+    dur = a.dur; pend = a.pending
+    @inbounds for i in 1:a.n
+        pend[i] && (dur[i] += w)
+    end
+end
+
+"""
+    accumulated_statistics(a) → Dict{String,Vector{Float32}}
+
+The statistics of the frames added so far (as `run_statistics`; copies — the
+accumulator can go on). The latest frame counts for half the interval since
+the one before it.
+"""
+function accumulated_statistics(a::StatsAccumulator)
+    out = Dict{String,Vector{Float32}}("max_water_depth" => copy(a.md), "time_max_water_depth" => copy(a.tmax),
+                                       "time_first_flooded" => copy(a.tfirst))
+    dur = copy(a.dur)
+    if a.nf >= 1
+        w = a.nf >= 2 ? (a.t2 - a.t1) / 2 : 0.0
+        @inbounds for i in 1:a.n
+            a.pending[i] && (dur[i] += w)
+        end
+    end
+    out["flood_duration"] = dur
+    if a.have_v
+        out["max_velocity"] = copy(a.mv); out["max_depth_velocity"] = copy(a.mdv)
+        out["max_hazard_class_arr"] = copy(a.mar)
+        if a.hazards
+            out["max_hazard_rating"] = copy(a.mhr); out["max_hazard_degree"] = copy(a.mhd)
+        end
+    end
+    return out
 end
 
 @inline function _maxin!(a::Vector{Float32}, i::Int, x::Real)

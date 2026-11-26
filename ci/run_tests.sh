@@ -44,6 +44,7 @@ TESTS=(
   test/test_keys.jl
   test/test_vis_live.jl
   test/test_vis_local.jl
+  test/test_run_statistics.jl
   test/test_plots.jl
   test/test_cases.jl
   test/test_notebooks.jl

@@ -202,6 +202,24 @@ export class LocalRun {
     this.cache = new Map();
     this.stats = new Map();
     this.ranges = new Map();
+    // the model's statistics over the run (/statistics, 0.8.13), when the file has them
+    this.fileStats = null;
+    if (r.has('/statistics')) {
+      const st = {};
+      for (const k of r.keys('/statistics')) {
+        if (r.isDataset(`/statistics/${k}`)) st[k] = toF32(r.read(`/statistics/${k}`));
+      }
+      this.fileStats = { stats: st, attrs: r.attrs('/statistics') };
+    }
+  }
+
+  /** file_stat: a statistic from the file when it answers the request (see VisualisationServer.file_stat). */
+  fileStat(name, p) {
+    const fs = this.fileStats;
+    const v = fs?.stats[name];
+    if (!v || v.length !== this.nCells) return null;
+    if ((name === 'time_first_flooded' || name === 'flood_duration') && Number(fs.attrs.flood_depth) !== p.flood_depth) return null;
+    return v;
   }
 
   get nFrames() { return this.t.length; }
@@ -342,6 +360,7 @@ export class LocalRun {
     }
     info.mesh_source = r.has('/mesh/source') ? r.attrs('/mesh/source') : {};
     info.summary = r.has('/summary') ? r.attrs('/summary') : {};
+    if (r.has('/statistics')) info.statistics = r.attrs('/statistics');
     // run_record(info; mesh, n_cells, cell_area, times)
     const rec = {};
     for (const [k, v] of Object.entries(info)) if (!['project', 'manifest', 'git_diff'].includes(k)) rec[k] = v;
@@ -402,7 +421,8 @@ export class LocalRun {
     if (a === 'stats' && parts.length === 3) {
       const name = parts[2];
       if (!STAT_VARS.includes(name)) return text(404, `No statistic ${name}`);
-      const v = this.runStats(hazardParams(q))[name];
+      const p = hazardParams(q);
+      const v = this.fileStat(name, p) || this.runStats(p)[name];
       return v ? bin(v) : text(404, `No statistic ${name} for this run`);
     }
     if (a === 'cell' && parts.length === 3) {

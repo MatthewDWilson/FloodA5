@@ -74,7 +74,8 @@ function web_replay_server(h5::AbstractString; port::Integer = 8080, viewer::Abs
     end
     VS.set_mesh!(vis, payload)
     readseries = (v, c) -> lock(() -> Float32.(FO.read_series(f, v, c)), iolock)
-    VS.set_replay!(vis, run.t, vars, readvar; series = readseries)
+    filestats = lock(() -> FO.read_statistics(f), iolock)    # the model's /statistics (0.8.13), or nothing
+    VS.set_replay!(vis, run.t, vars, readvar; series = readseries, stats = filestats)
     rec = lock(() -> FO.run_record(f), iolock)
     rec["file"] = abspath(h5)
     rec["label"] = run.label

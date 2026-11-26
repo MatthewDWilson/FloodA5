@@ -61,7 +61,7 @@ include("hazard.jl")
 export HazardParams, LAND_USES, LAND_USE_LABELS, PERSON_PRESETS, hazard_params, hazard_key,
        debris_table, debris_factor, depth_velocity, hazard_rating, arr_hazard_class,
        chen_critical_velocity, hazard_degree, HAZARD_VARS, STAT_VARS, derive_hazard,
-       run_statistics
+       run_statistics, StatsAccumulator, accumulate_frame!, accumulated_statistics
 include("hazard_run.jl")
 
 end # module

@@ -207,6 +207,26 @@ series one small read per frame. Against format 1 on existing runs
 3–6× faster; files within 3% of the size, or several times smaller with many
 frames; writing 4–11% slower (tens of ms per frame).
 
+### `/statistics` (since 0.8.13)
+
+Statistics over the run, gathered by the model while it runs
+(`--stats-interval`, `--flood-depth`) and rewritten with every output
+frame — a run that stops early keeps those of its frames. One Float32
+dataset per statistic, (n_cells,), file order, contiguous (overwritten in
+place): `max_water_depth` (m), `time_max_water_depth` (s; the first time
+with the maximum, NaN if never wet), `max_velocity` (m/s),
+`max_depth_velocity` (m²/s), `max_hazard_class_arr` (0–6),
+`time_first_flooded` (s; NaN if never) and `flood_duration` (s). The
+definitions are `analysis/hazard.jl`'s (`run_statistics`,
+`StatsAccumulator`), on the depth and cell speed as Float32: at the default
+cadence the values equal those derived from the frames bit for bit. Attrs:
+`cadence` (`output`: at the output frames, the default; `step`; `interval`),
+`interval_s`, `flood_depth` (m), `n_states` (states added), `t_last` (s),
+`flooda5_version` (`FA.write_run_statistics!`, which adds them to an
+earlier file from its frames, writes `added_by` instead). Read with
+`FO.read_statistics(f)` → `(stats, attrs)` or `nothing`; `run_info`
+includes the attrs as `statistics`.
+
 ### `/summary`
 
 Attrs `completed`, `n_frames`, `n_steps`, `wall_simulation_s`,
@@ -525,7 +545,10 @@ query parameters (`hazard_params`; missing or invalid ones take the
 defaults, numbers are clamped): `landuse` (`fd2320` default, `pasture`,
 `woodland`, `urban`, `none`), `mass` (kg, 75.1), `height` (m, 1.77),
 `theta` (°, 75), `alpha` (3.064), `beta` (0.303), `flood_depth` (m, 0.1).
-Statistics are computed once per parameter set and set of frames. `/api/cell`
+Statistics are computed once per parameter set and set of frames; a replay
+whose file has `/statistics` (§2, 0.8.13) serves those that depend on no
+hazard parameter — and the time of first flooding and the duration when
+`flood_depth` is the file's — from the file instead. `/api/cell`
 adds the hazard variables at `frame` (same query parameters).
 
 `/api/run` (`VisualisationServer.set_run!`, the viewer's *Run* tab):

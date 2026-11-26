@@ -44,6 +44,12 @@ test('Run tab: the record, escaped; empty record', () => {
   assert.match(html, /Options \(2\)/);                       // empty list and null left out
   assert.match(html, /manning_n<\/dt><dd>0\.035/);
   assert.match(html, /n_steps<\/dt><dd>1234/);
+  assert.ok(!html.includes('Statistics over the run'));
+  // the model's statistics (0.8.13)
+  const h2 = renderRun({ label: 'x', statistics: { cadence: 'step', interval_s: 0, flood_depth: 0.05, n_states: 12345 } });
+  assert.match(h2, /by the model, every time step \((12,345|12 345|12 345) states\)/);
+  assert.match(h2, /depth ≥ 0\.05 m/);
+  assert.match(renderRun({ label: 'x', statistics: { cadence: 'interval', interval_s: 30, flood_depth: 0.1, n_states: 5 } }), /every 30 s/);
 });
 
 test('About tab: variables in order, notes, topics', () => {
