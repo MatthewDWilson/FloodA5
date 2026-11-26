@@ -333,6 +333,8 @@ the same cell are summed before flux routing.
 |---|---|---|
 | `--output FILE` | off | Write HDF5 simulation output (`.h5` / `.hdf5`). Since 0.4.0 (format 2) the file also records the version, git commit, command line, resolved options, input files and the mesh, so the run can be reproduced with `--rerun` and replayed or analysed without the mesh file ([DATA_FORMATS.md](DATA_FORMATS.md) §2). |
 | `--output-interval S` | 60 | Seconds of simulation time between output snapshots. |
+| `--stats-interval S` | (the snapshots) | (0.8.13) Statistics over the run in the output (`/statistics`): maximum depth and its time, maximum speed and D·V, the ARR hazard class, time of first flooding and duration of flooding, gathered every S seconds of simulation time (0 = every step). By default at the output snapshots, at no extra cost; a shorter interval catches peaks between snapshots, at the cost of computing cell speeds (and, on a GPU, copying the state to the host) that often. The globe viewers read them instead of deriving them from the frames. |
+| `--flood-depth M` | 0.1 | (0.8.13) Flooded threshold (m) of the time of first flooding and the duration in `/statistics`. |
 | `--embed-mesh full\|geometry` | `full` | `full`: store a copy of the mesh file (GeoParquet) in the output. `geometry`: store only the cell polygons, neighbours and the mesh file's checksum — for sweeps on one large SGS mesh, whose tables would otherwise dominate every output (Carlisle res-18 SGS: 179 MB). `--rerun` then needs the original mesh file, unchanged. |
 | `--rerun FILE.h5` | — | Run again exactly the simulation recorded in `FILE.h5`, from its embedded mesh and input files (output `FILE_rerun.h5` unless `--output` is given). Any other flag given with it replaces the recorded one, e.g. `--rerun a.h5 --backend gpu`. With the same code and backend the frames are bit-identical; a warning is printed if the code differs from the recorded commit. |
 
@@ -637,8 +639,17 @@ whole run: while one is shown the time slider and playback are off, and the
 water is drawn at each cell's maximum depth (cells never flooded are left
 out). They are computed from the output frames (a live run: from the frames
 the server keeps, recomputed as frames arrive), so at frame resolution —
-peaks between frames are missed. In Julia: `FA.statistics_maps(run; params)`
-(`FA.run_statistics` over arrays). With SGS the depth is that of the
+peaks between frames are missed. Since 0.8.13 the model gathers them while
+it runs and writes them to the output (`--stats-interval`, `--flood-depth`):
+the viewers then read the maximum depth and its time, maximum speed and D·V,
+the ARR class and (at the file's flooded threshold) the time of first
+flooding and the duration instead of computing them — the first statistic
+of a replay no longer takes seconds — and, with `--stats-interval` shorter
+than the output interval, at a finer time resolution. The *Run* tab says how
+they were gathered. For a file written earlier,
+`FA.write_run_statistics!("run.h5")` adds them from its frames once (it
+changes the file). In Julia: `FA.statistics_maps(run; params)`
+(`FA.run_statistics` over arrays; `FA.StatsAccumulator` frame by frame). With SGS the depth is that of the
 cell's lowest part, so depth-based hazards describe the deepest part of a
 cell.
 

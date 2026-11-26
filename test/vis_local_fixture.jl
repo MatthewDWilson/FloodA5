@@ -63,6 +63,14 @@ function _sgs_run(path)
     end
     FO.write_summary!(path, Dict{String,Any}("completed" => true, "n_frames" => length(ts),
                                              "mass_balance_error_m3" => 1.5e-9, "vol_added_m3" => 12.0))
+    # the model's statistics (0.8.13), with values of their own: the answers show which were used
+    FO.write_statistics!(path, Dict(
+        "max_water_depth" => [1.5, 2.5, 0.9, 1.8, 1.25, NaN], "time_max_water_depth" => [900, 600, 1800, 300, 900, NaN],
+        "time_first_flooded" => [60, 0, 120, 60, 300, NaN], "flood_duration" => [1500, 1800, 1200, 1700, 900, 0],
+        "max_velocity" => [2.5, 3.1, 0.7, 2.9, 4.6, NaN], "max_depth_velocity" => [2.1, 4.0, 0.5, 3.0, 4.4, NaN],
+        "max_hazard_class_arr" => [5, 5, 2, 5, 6, 0]),
+        Dict("cadence" => "step", "interval_s" => 0.0, "flood_depth" => 0.1, "n_states" => 250,
+             "t_last" => 1800.0, "flooda5_version" => "0.8.13-fixture"))
     return path
 end
 

@@ -209,8 +209,10 @@ struct ReplayFrames
     vars   :: Vector{String}
     read   :: Function                  # (k, var) → Vector{Float32}
     series :: Union{Function,Nothing}   # (var, cell) → Vector{Float32} over all frames, or nothing
+    stats  :: Any                       # the file's /statistics: (stats, attrs) or nothing (0.8.13)
 end
-ReplayFrames(t, vars, read) = ReplayFrames(t, vars, read, nothing)
+ReplayFrames(t, vars, read) = ReplayFrames(t, vars, read, nothing, nothing)
+ReplayFrames(t, vars, read, series) = ReplayFrames(t, vars, read, series, nothing)
 
 _frame_bytes(d) = sum(v -> sizeof(v), values(d); init = 0)
 
@@ -374,7 +376,7 @@ function set_mesh!(s::VisServer, m::MeshPayload)
 end
 
 """
-    set_replay!(s, times, vars, read; series = nothing) → s
+    set_replay!(s, times, vars, read; series = nothing, stats = nothing) → s
 
 Serve a recorded run: `read(k, var)` returns frame k's `var` (in mesh order).
 `series(var, cell)` (optional; cell 1-based, mesh order) returns one cell's
@@ -382,9 +384,9 @@ values over all frames, for `/api/series` — without it a series is read
 frame by frame. The run is complete from the start.
 """
 function set_replay!(s::VisServer, times::AbstractVector, vars::AbstractVector, read::Function;
-                     series::Union{Function,Nothing} = nothing)
+                     series::Union{Function,Nothing} = nothing, stats = nothing)
     lock(s.lock) do
-        s.frames = ReplayFrames(Float64.(times), String.(vars), read, series)
+        s.frames = ReplayFrames(Float64.(times), String.(vars), read, series, stats)
         s.complete = true
         empty!(s.cache); empty!(s.cache_order); empty!(s.ranges); empty!(s.stats)
         _broadcast!(s, (type = "reindex",))
@@ -665,6 +667,29 @@ function run_stats(s::VisServer, p::HazardParams)
     end
 end
 
+"""
+    file_stat(s, name, p) → Vector{Float32} or nothing
+
+Statistic `name` as the model wrote it into the replayed file
+(`/statistics`, `--stats-interval`; 0.8.13), when it answers the request:
+those that depend on no hazard parameter (maximum depth and its time,
+maximum speed and D·V, the ARR class) always, the time of first flooding
+and the duration when `p.flood_depth` is the file's threshold. Otherwise
+(and for older files) `nothing`: `run_stats` derives it from the frames.
+"""
+function file_stat(s::VisServer, name::AbstractString, p::HazardParams)
+    f = s.frames
+    (f isa ReplayFrames && f.stats !== nothing) || return nothing
+    st, at = f.stats
+    v = get(st, name, nothing)
+    v === nothing && return nothing
+    if name in ("time_first_flooded", "flood_duration")
+        Float64(get(at, "flood_depth", NaN)) == p.flood_depth || return nothing
+    end
+    length(v) == (s.mesh === nothing ? -1 : s.mesh.n_cells) || return nothing
+    return Vector{Float32}(v)
+end
+
 function _broadcast!(s::VisServer, msg)
     str = JSON3.write(msg)
     for ch in s.clients
@@ -938,8 +963,9 @@ function _route(s::VisServer, req::HTTP.Request)
         if a == "stats" && length(parts) == 3
             name = String(parts[3])
             name in STAT_VARS || return _text(404, "No statistic $name")
-            st = run_stats(s, hazard_params(HTTP.queryparams(uri)))
-            v = get(st, name, nothing)
+            p = hazard_params(HTTP.queryparams(uri))
+            v = file_stat(s, name, p)
+            v === nothing && (v = get(run_stats(s, p), name, nothing))
             v === nothing && return _text(404, "No statistic $name for this run")
             return _binary(collect(reinterpret(UInt8, htol.(v))))
         end

@@ -32,6 +32,11 @@ Output flags:
                         Extension should be .h5 or .hdf5.
     --output-interval N Write a snapshot every N seconds of simulation time
                         (default: 60.0).
+    --stats-interval S  Statistics over the run (maxima, time of the maximum,
+                        first flooding, duration) every S seconds of
+                        simulation time; 0 = every step (default: at the
+                        output snapshots).
+    --flood-depth M     Flooded threshold of those statistics (default: 0.1 m).
 """
 
 push!(LOAD_PATH, @__DIR__)
@@ -44,7 +49,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.8.12"
+const FLOODA5_VERSION = "0.8.13"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -109,6 +114,13 @@ if !isdefined(Main, :FloodA5Output)
     include(joinpath(@__DIR__, "io", "FloodA5Output.jl"))
 end
 const FO = FloodA5Output
+# Statistics over the run (0.8.13): the accumulator the viewers' statistics
+# use (analysis/hazard.jl), so the model's /statistics and a viewer's
+# statistics from the frames agree.
+module FloodA5Stats
+include(joinpath(@__DIR__, "analysis", "hazard.jl"))
+end
+const HZ = FloodA5Stats
 using Polyester: @batch   # WP4 stage 2: non-allocating threaded loops; always
                          # `per=core` — the default spins on every logical core and
                          # starves the serial parts of a step under --threads auto
@@ -1227,12 +1239,18 @@ mutable struct SimOutput
     # 0.4.0: true once an edge variable (flux_Q) has been written; it is then
     # written at every later frame.
     edge_series      :: Bool
+    # 0.8.13: statistics over the run, gathered while it runs (/statistics)
+    stats_interval   :: Float64    # NaN: at the output frames; 0: every step; S: every S s
+    flood_depth      :: Float64    # their flooded threshold (m)
+    stats            :: Any        # HZ.StatsAccumulator, from the first state on
+    last_stats_t     :: Float64    # sim time of the last state added
 end
 
-SimOutput(; path="", interval=60.0, enabled=false, perm=Int[]) =
-    SimOutput(path, interval, -Inf, 0, enabled, perm, false)
+SimOutput(; path="", interval=60.0, enabled=false, perm=Int[], stats_interval=NaN, flood_depth=0.1) =
+    SimOutput(path, interval, -Inf, 0, enabled, perm, false, Float64(stats_interval), Float64(flood_depth),
+              nothing, -Inf)
 SimOutput(path, interval, last_t, count, enabled, perm = Int[]) =
-    SimOutput(path, interval, last_t, count, enabled, perm, false)
+    SimOutput(path, interval, last_t, count, enabled, perm, false, NaN, 0.1, nothing, -Inf)
 
 # Per-cell array in file order (identity when output.perm is empty).
 function _to_file_order(output::SimOutput, x::AbstractVector)
@@ -1446,6 +1464,7 @@ Variables per frame:
 function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
     output.enabled || return
     output.frame_count += 1
+    _stats_update!(output, state, t)            # (the frame's state; once per time)
     sat = saturation_fraction(state)
     vars = ("water_depth" => _to_file_order(output, state.water_depth),
             "volume"      => _to_file_order(output, state.volume),
@@ -1469,7 +1488,48 @@ function _write_frame!(output::SimOutput, state::FlowState, t::Float64)
     else
         FO.append_frame!(output.path, t, vars)
     end
+    _write_statistics!(output)
     output.last_write_t = t
+end
+
+"""
+    _stats_update!(output, state, t)
+
+Add the state at time `t` to the statistics over the run (0.8.13;
+`HZ.StatsAccumulator`): depth and cell speed in the file's cell order, as
+Float32 — the values a viewer reads from the frames, so at the default
+cadence (the output frames) the statistics equal those derived from the
+frames bit for bit. The hazard rating and degree are left out (they depend
+on the viewer's hazard parameters). Once per time `t`.
+"""
+function _stats_update!(output::SimOutput, state::FlowState, t::Float64)
+    output.enabled || return
+    t <= output.last_stats_t && return
+    a = output.stats
+    if a === nothing
+        a = output.stats = HZ.StatsAccumulator(length(state.water_depth),
+                                               HZ.HazardParams(flood_depth = output.flood_depth); hazards = false)
+    end
+    HZ.accumulate_frame!(a, t, Float32.(_to_file_order(output, state.water_depth)),
+                         Float32.(_to_file_order(output, state.velocity)))
+    output.last_stats_t = t
+    return
+end
+
+"Whether the statistics take the state of this step (`--stats-interval`; the output frames always do)."
+_stats_due(output::SimOutput, t::Float64) =
+    output.enabled && !isnan(output.stats_interval) && (t - output.last_stats_t) >= output.stats_interval
+
+"Write the statistics so far to the output (`/statistics`, FO.write_statistics!)."
+function _write_statistics!(output::SimOutput)
+    a = output.stats
+    (output.enabled && a !== nothing) || return
+    attrs = Dict{String,Any}(
+        "cadence" => isnan(output.stats_interval) ? "output" : output.stats_interval == 0 ? "step" : "interval",
+        "interval_s" => isnan(output.stats_interval) ? output.output_interval : output.stats_interval,
+        "flood_depth" => output.flood_depth, "n_states" => a.nf, "t_last" => a.t2,
+        "flooda5_version" => FLOODA5_VERSION)
+    FO.write_statistics!(output.path, HZ.accumulated_statistics(a), attrs)
 end
 
 """
@@ -3754,13 +3814,17 @@ function run_simulation!(state            :: FlowState,
         vis_due = vis !== nothing &&
             (_web_vis(vis_mode) ? VisualisationServer.wants_frame(vis) : step % VIS_INTERVAL == 0)
 
+        # 0.8.13: statistics over the run at their own cadence (--stats-interval)
+        stats_due = _stats_due(output, t)
+
         # WP5: bring the host state up to date where it is read below
-        dev !== nothing && (vis_due || _should_write_frame(output, t) || step % 50 == 0) &&
+        dev !== nothing && (vis_due || _should_write_frame(output, t) || stats_due || step % 50 == 0) &&
             _device_sync!(dev, state)
 
-        # Velocity only where it is used (visualiser push / HDF5 frame) — WP4
-        (vis_due || _should_write_frame(output, t)) &&
+        # Velocity only where it is used (visualiser push / HDF5 frame / statistics) — WP4
+        (vis_due || _should_write_frame(output, t) || stats_due) &&
             (use_swe ? _swe_velocity!(state) : _compute_velocity!(state))
+        stats_due && _stats_update!(output, state, t)
 
         # Visualiser push
         # The web viewer's server runs on the interactive thread pool, and in
@@ -3840,6 +3904,7 @@ function run_simulation!(state            :: FlowState,
         _write_frame!(output, state, t)
         timing !== nothing && (timing.hdf5_output += time() - t_hdf5)
     end
+    _write_statistics!(output)          # (states added after the last frame)
     output.enabled &&
         @info "HDF5 output: $(output.frame_count) frames → $(output.path)"
 
@@ -4199,6 +4264,8 @@ function run_flood_model(;
     # ── Legacy output params ─────────────────────────────────────────────
     output_path       :: Union{String,Nothing} = nothing,
     output_interval   :: Float64 = 60.0,
+    stats_interval    :: Union{Float64,Nothing} = nothing,   # 0.8.13: nothing = at the output frames
+    flood_depth       :: Float64 = 0.1,
     # ── Run record in the output (0.4.0) ─────────────────────────────────
     run_argv          :: Vector{String} = String[],  # the command line, for --rerun
     embed_mesh        :: Symbol = :full)              # :full | :geometry
@@ -4675,6 +4742,8 @@ function run_flood_model(;
         interval = output_interval,
         enabled  = output_path !== nothing,
         perm     = cell_perm,
+        stats_interval = something(stats_interval, NaN),
+        flood_depth = flood_depth,
     )
     # (the web viewer shows the same record: its Run tab, /api/run)
     if sim_output.enabled || vis !== nothing
@@ -4701,6 +4770,7 @@ function run_flood_model(;
             "inflow_bci" => inflow_bci_path, "inflow_bdy" => inflow_bdy_path,
             "bc_file" => bc_file_path, "closed_boundaries" => closed_boundaries,
             "bc_epsg" => bc_epsg, "output_interval" => output_interval,
+            "stats_interval" => stats_interval, "flood_depth" => flood_depth,
             "mesh_source" => string.(collect(mesh_source)),
             "dem" => dem_source === nothing ? nothing : dem_source.path,
             "dem_method" => dem_method, "dem_samples" => dem_samples,
@@ -5263,6 +5333,14 @@ Output options:
                      with --rerun.
   --output-interval  Seconds of simulation time between output snapshots
                      (default: 60.0).
+  --stats-interval S Statistics over the run in the output (/statistics:
+                     maximum depth and its time, maximum speed and D·V, the
+                     ARR class, time of first flooding, duration): updated
+                     every S seconds of simulation time, 0 = every step
+                     (default: at the output snapshots, at no extra cost;
+                     shorter intervals sync a GPU run and compute speeds
+                     that often).
+  --flood-depth M    Their flooded threshold (m; default 0.1).
   --embed-mesh full|geometry
                      full (default): store a copy of the mesh file in the
                      output. geometry: store only the cell polygons and the
@@ -5941,6 +6019,15 @@ function main(args=String[])
     output_val,     args = _pop_flag(args, "--output")
     output_int_val, args = _pop_flag(args, "--output-interval")
     output_interval = output_int_val !== nothing ? parse(Float64, output_int_val) : 60.0
+    # --stats-interval S / --flood-depth M (0.8.13): statistics over the run in the output
+    stats_int_val, args = _pop_flag(args, "--stats-interval")
+    stats_interval = stats_int_val === nothing ? nothing : parse(Float64, stats_int_val)
+    (stats_interval === nothing || (isfinite(stats_interval) && stats_interval >= 0)) ||
+        (println("ERROR: --stats-interval must be a number ≥ 0 (seconds)\n"); print_help(1))
+    flood_depth_val, args = _pop_flag(args, "--flood-depth")
+    flood_depth = flood_depth_val === nothing ? 0.1 : parse(Float64, flood_depth_val)
+    (isfinite(flood_depth) && flood_depth >= 0) ||
+        (println("ERROR: --flood-depth must be a depth ≥ 0 (m)\n"); print_help(1))
 
     # --injection-point lat,lon,rate  (repeatable)
     # Format: --injection-point -43.386,172.648,0.5  (lat, lon, m³/s)
@@ -6134,6 +6221,8 @@ function main(args=String[])
         bc_epsg          = bc_epsg,
         output_path      = output_val,
         output_interval  = output_interval,
+        stats_interval   = stats_interval,
+        flood_depth      = flood_depth,
         run_argv         = run_argv,
         embed_mesh       = embed_mesh,
     )
