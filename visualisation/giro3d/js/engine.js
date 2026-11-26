@@ -24,6 +24,9 @@ import { TerrariumFormat, TERRARIUM_URL, TERRARIUM_MAX_ZOOM, sampleTerrarium } f
 import { SurfaceMesh } from './water.js';
 import { ecefToGeodetic, WGS84_A, WGS84_B } from '../../viewer-common/js/geometry.js';
 
+/** The official Google Maps logo with a dark outline (Google's attribution assets: viewer-common/img). */
+const GOOGLE_LOGO = new URL('../../viewer-common/img/GoogleMaps_Logo_WithDarkOutline.svg', import.meta.url).href;
+
 const ELL_A2 = WGS84_A * WGS84_A, ELL_B2 = WGS84_B * WGS84_B;   // (the geodetic normal)
 
 export const GIRO3D_VERSION = '2.0.7';         // keep in step with ../index.html
@@ -153,8 +156,9 @@ export class Giro3DEngine {
   credits() {
     const parts = [];
     if (this.tiles) {
-      // Google's terms: "Google Maps" (the logo where possible) and the data
-      // providers of the displayed tiles, kept apart from other credits.
+      // Google's terms (Map Tiles API policies): the Google Maps logo — the official
+      // outlined one, on a map — with the data providers of the displayed tiles
+      // beside it, kept apart from other credits.
       const data = new Set();
       try {
         for (const a of this.tiles.tiles.getAttributions([])) {
@@ -162,7 +166,7 @@ export class Giro3DEngine {
         }
       } catch { /* not loaded yet */ }
       data.delete('Google');
-      parts.push(`<span class="gmaps" aria-label="Google Maps">Google Maps</span>` +
+      parts.push(`<img class="gmaps" src="${GOOGLE_LOGO}" alt="Google Maps" aria-label="Google Maps">` +
                  (data.size ? ` ${escapeHtml(Array.from(data).sort().join(', '))}` : ''));
       if (!this.cfg.google_key) parts.push('Data via <a href="https://cesium.com/ion" target="_blank" rel="noopener">Cesium ion</a>');
     }

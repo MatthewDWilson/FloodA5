@@ -33,6 +33,28 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.16] — 2026-11-27
+
+Globe viewer maintenance (branch `maint-viewer`; PATCH: viewer only, results
+unchanged).
+
+- Giro3D: the Google Maps logo in the credits while the Google
+  Photorealistic 3D Tiles are shown (the words "Google Maps" before), as the
+  Map Tiles API policies ask: the official outlined logo, from Google's
+  attribution assets (`visualisation/viewer-common/img/`, unmodified, with a
+  README on its source and use), 18 px high with the specified clear space,
+  labelled "Google Maps", the data providers beside it.
+- Large meshes: the first request after the mesh was loaded was cancelled by
+  the browser (net::ERR_ABORTED) and only the retry (0.3–1 s later) got
+  through. Found: the request was made at the end of the long task that
+  builds the surfaces (5 s for the 582 000-cell 5 m Carlisle mesh) and was
+  cancelled before it was sent — no connection used (the server keeps idle
+  connections: checked from Node with the same pattern). The viewer now
+  yields a frame after building the surfaces; in three runs per engine on
+  that mesh no request failed (before: every Giro3D run). The retries stay
+  for other transient failures.
+- Tests: `test/test_vis_local.jl` checks the logo is served (image/svg+xml).
+
 ## [0.8.15] — 2026-11-26
 
 Output files on the web in the globe viewers; shared palettes in the

@@ -164,8 +164,10 @@ export function startViewer(engine) {
 
   /**
    * fetch with retries on network errors (not HTTP errors): the browser can
-   * drop a request to the local server, e.g. on a connection reused after the
-   * page was busy for seconds building a large mesh.
+   * drop a request to the local server — it cancelled the first one after
+   * the long task building a large mesh's surfaces, before sending it, which
+   * loadMesh now avoids by yielding a frame (0.8.16); kept for any other
+   * transient failure.
    */
   async function fetchRetry(path, tries = 4) {
     // a local file answers the run's requests itself; without a server, About is a static file
@@ -320,6 +322,11 @@ export function startViewer(engine) {
     log(`Mesh: ${mesh.nCells.toLocaleString()} cells (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
     flyHome(0);
     applyOffset();
+    // Let the browser render (and upload the new surfaces) before the next request: a
+    // request made at the end of the long task that builds a large mesh's surfaces
+    // (seconds) was cancelled by the browser before it was sent (net::ERR_ABORTED; no
+    // connection used; 0.8.16) — fetchRetry recovered, a second or so later.
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
     return true;
   }
 
