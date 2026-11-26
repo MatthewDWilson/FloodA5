@@ -135,14 +135,15 @@ export function buildSurface(mesh, h0 = 0) {
  * X so no axis correction applies).
  * @returns {Uint8Array}
  */
-export function buildGlb(surface) {
+export function buildGlb(surface, corner = null) {
   const { positions, cell, edge, indices, min, max } = surface;
   const pad4 = n => (n + 3) & ~3;
   const posBytes = positions.byteLength, cellBytes = cell.byteLength, edgeBytes = edge.byteLength,
         idxBytes = indices.byteLength;
+  const cornerBytes = corner ? corner.byteLength : 0;
   const posOff = 0, cellOff = pad4(posOff + posBytes), edgeOff = pad4(cellOff + cellBytes),
-        idxOff = pad4(edgeOff + edgeBytes);
-  const binLength = pad4(idxOff + idxBytes);
+        idxOff = pad4(edgeOff + edgeBytes), cornerOff = pad4(idxOff + idxBytes);
+  const binLength = pad4(cornerOff + cornerBytes);
   const nv = positions.length / 3;
   const json = {
     asset: { version: '2.0', generator: 'FloodA5 viewer' },
@@ -171,6 +172,11 @@ export function buildGlb(surface) {
       { bufferView: 3, componentType: 5125, count: indices.length, type: 'SCALAR' },
     ],
   };
+  if (corner) {                       // the smooth surface (0.8.14): each vertex's corner (cornerIndex)
+    json.meshes[0].primitives[0].attributes._FA5CORNER = 4;
+    json.bufferViews.push({ buffer: 0, byteOffset: cornerOff, byteLength: cornerBytes, target: 34962 });
+    json.accessors.push({ bufferView: 4, componentType: 5126, count: nv, type: 'SCALAR' });
+  }
   let jsonText = JSON.stringify(json);
   while (jsonText.length % 4) jsonText += ' ';
   const jsonBytes = new TextEncoder().encode(jsonText);
@@ -191,6 +197,7 @@ export function buildGlb(surface) {
   out.set(new Uint8Array(cell.buffer, cell.byteOffset, cellBytes), bin + cellOff);
   out.set(new Uint8Array(edge.buffer, edge.byteOffset, edgeBytes), bin + edgeOff);
   out.set(new Uint8Array(indices.buffer, indices.byteOffset, idxBytes), bin + idxOff);
+  if (corner) out.set(new Uint8Array(corner.buffer, corner.byteOffset, cornerBytes), bin + cornerOff);
   return out;
 }
 
@@ -300,4 +307,102 @@ export function meshBounds(mesh) {
     y0 = Math.min(y0, mesh.dlat[v]); y1 = Math.max(y1, mesh.dlat[v]);
   }
   return [mesh.originLon + x0, mesh.originLat + y0, mesh.originLon + x1, mesh.originLat + y1];
+}
+
+// ---------------------------------------------------------------------------
+// Smooth surface (0.8.14): the cells' shared corners
+// ---------------------------------------------------------------------------
+
+/**
+ * The corners the cells share. Ring vertices at the same place (to `quantum`
+ * degrees, ~1 cm by default) are one corner; found by sorting, not hashing,
+ * so meshes of millions of cells stay affordable. Built when the smooth
+ * surface is first asked for.
+ * @returns {{vertexCorner: Float32Array, nCorners: number, offsets: Uint32Array, cells: Uint32Array}}
+ *   vertexCorner: for each surface vertex (buildSurface's order) its corner,
+ *   −1 at the cell centres; corner c's cells are cells[offsets[c] … offsets[c+1]).
+ */
+export function cornerIndex(mesh, quantum = 1e-7) {
+  const nv = mesh.nVertices, nc = mesh.nCells;
+  let ext = 0;
+  for (let v = 0; v < nv; v++) ext = Math.max(ext, Math.abs(mesh.dlon[v]), Math.abs(mesh.dlat[v]));
+  const q = Math.max(quantum, ext / 2 ** 24);            // |key parts| < 2^25: the key is exact in a double
+  const OFF = 2 ** 25, MUL = 2 ** 26;
+  const keys = new Float64Array(nv);
+  for (let v = 0; v < nv; v++) {
+    keys[v] = (Math.round(mesh.dlon[v] / q) + OFF) * MUL + (Math.round(mesh.dlat[v] / q) + OFF);
+  }
+  const sorted = Float64Array.from(keys).sort();
+  let nCorners = 0;
+  for (let k = 0; k < nv; k++) if (k === 0 || sorted[k] !== sorted[k - 1]) sorted[nCorners++] = sorted[k];
+  const uniq = sorted.subarray(0, nCorners);
+  const ringCorner = new Uint32Array(nv);
+  for (let v = 0; v < nv; v++) {
+    let lo = 0, hi = nCorners - 1;
+    const key = keys[v];
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (uniq[mid] < key) lo = mid + 1; else hi = mid; }
+    ringCorner[v] = lo;
+  }
+  // corner → cells (CSR); vertex → corner in the surface's vertex order
+  const offsets = new Uint32Array(nCorners + 1);
+  const vertexCorner = new Float32Array(nv + nc).fill(-1);
+  for (let i = 0; i < nc; i++) {
+    for (let v = mesh.offsets[i]; v < mesh.offsets[i + 1]; v++) {
+      offsets[ringCorner[v] + 1]++;
+      vertexCorner[v + i + 1] = ringCorner[v];
+    }
+  }
+  for (let c = 0; c < nCorners; c++) offsets[c + 1] += offsets[c];
+  const fillAt = offsets.slice(0, nCorners), cells = new Uint32Array(nv);
+  for (let i = 0; i < nc; i++) {
+    for (let v = mesh.offsets[i]; v < mesh.offsets[i + 1]; v++) cells[fillAt[ringCorner[v]]++] = i;
+  }
+  return { vertexCorner, nCorners, offsets, cells };
+}
+
+/**
+ * The water at each corner: the means over the corner's wet cells (depth ≥
+ * `minDepth`) of (level = base + depth, bed, depth, colour value), one corner
+ * per RGBA32F texel (packedSize(nCorners, 1)). A corner with no wet cell gets
+ * zeros (its cells are not drawn). `cvals` (optional): the per-cell colour
+ * values; non-finite ones are left out of that mean.
+ */
+export function cornerValues(ci, depth, base, elevation, cvals, minDepth, out) {
+  const { width, height } = packedSize(ci.nCorners, 1);
+  const len = 4 * width * height;
+  const data = out && out.length === len ? out : new Float32Array(len);
+  data.fill(0);
+  const { offsets, cells } = ci;
+  for (let c = 0; c < ci.nCorners; c++) {
+    let n = 0, sl = 0, se = 0, sd = 0, nv = 0, sv = 0;
+    for (let k = offsets[c]; k < offsets[c + 1]; k++) {
+      const i = cells[k], d = depth[i];
+      if (!(d >= minDepth)) continue;
+      const b = base[i], e = elevation[i];
+      if (!Number.isFinite(b)) continue;
+      n++; sl += b + d; sd += d; se += Number.isFinite(e) ? e : b;
+      if (cvals) { const x = cvals[i]; if (Number.isFinite(x)) { nv++; sv += x; } }
+    }
+    if (!n) continue;
+    data[4 * c] = sl / n; data[4 * c + 1] = se / n; data[4 * c + 2] = sd / n;
+    data[4 * c + 3] = nv ? sv / nv : 0;
+  }
+  return { data, width, height };
+}
+
+/** The bed at each corner: the mean elevation of its cells (the base where it is missing), as cornerValues' second component. */
+export function bedCornerValues(ci, elevation, base) {
+  const { width, height } = packedSize(ci.nCorners, 1);
+  const data = new Float32Array(4 * width * height);
+  const { offsets, cells } = ci;
+  for (let c = 0; c < ci.nCorners; c++) {
+    let n = 0, s = 0;
+    for (let k = offsets[c]; k < offsets[c + 1]; k++) {
+      const i = cells[k];
+      const e = Number.isFinite(elevation[i]) ? elevation[i] : base[i];
+      if (Number.isFinite(e)) { n++; s += e; }
+    }
+    if (n) data[4 * c + 1] = s / n;
+  }
+  return { data, width, height };
 }

@@ -15,6 +15,13 @@
 // plus the vertical offset; the fragment shader drops dry cells, colours
 // through a 256-entry colour map and, if `borders` is on, draws the cell
 // borders as white hairlines.
+//
+// Smooth surface (0.8.14, style `smooth`): each ring vertex takes the mean of
+// the wet cells at its corner (a fourth texture, one corner per texel: level,
+// bed, depth, colour value — geometry.js cornerValues), the centre keeps its
+// cell's own value; colours blend too (`blend`, off for classed palettes),
+// and the surface is shaded by its slope (exaggerated `shadeExag` times for
+// the shading only), lit from the north-west.
 
 /** What the surface is coloured by (uniform `cmode`). */
 export const COLOR_MODE = { depth: 0, level: 1, texture: 2, bed: 3 };
@@ -25,6 +32,9 @@ export const SURFACE_MODE = { water: 0, exaggerated: 1, bed: 2 };
 /** Water drawn this fraction of its distance nearer the camera when zoomed out (fa5DepthBias). */
 export const DEPTH_BIAS = 0.015;
 
+/** Slopes are exaggerated this many times for the smooth surface's shading: water slopes are small, the bed's are not. */
+export const SHADE_EXAG = { water: 20, bed: 3 };
+
 /** Default style of a surface. */
 export function defaultStyle(role) {
   const bed = role === 'bed';
@@ -34,6 +44,7 @@ export function defaultStyle(role) {
     cmin: 0, cmax: 1, alpha: bed ? 1 : 0.8, minDepth: 0.05, exag: 10, offset: 0, borders: 0,
     depthBias: bed ? 0 : DEPTH_BIAS,
     colormap: bed ? 'terrain' : 'depth',
+    smooth: 0, blend: 1, shadeExag: bed ? SHADE_EXAG.bed : SHADE_EXAG.water,
   };
 }
 
@@ -73,6 +84,22 @@ float fa5ColorValue(float cmode, float d, vec4 st, float cv) {
   if (cmode < 2.5) return cv;
   return st.x;
 }
+// smooth surface: corner c's values (level, bed, depth, colour value)
+vec4 fa5Corner(sampler2D tex, float w, int c) {
+  int wi = int(w);
+  return texelFetch(tex, ivec2(c - (c / wi) * wi, c / wi), 0);
+}
+float fa5LevelC(float mode, float exag, vec4 cv) {
+  if (mode > 1.5) return cv.y;
+  if (mode > 0.5) return cv.y + cv.z * exag;
+  return cv.x;
+}
+float fa5ColorValueC(float cmode, vec4 cv) {
+  if (cmode < 0.5) return cv.z;
+  if (cmode < 1.5) return cv.x;
+  if (cmode < 2.5) return cv.w;
+  return cv.y;
+}
 // geodetic (ellipsoid) normal at an ECEF position
 vec3 fa5Normal(vec3 p) {
   return normalize(vec3(p.x / FA5_A2, p.y / FA5_A2, p.z / FA5_B2));
@@ -106,6 +133,24 @@ float fa5Border(float edge, float on) {
   float w = max(fwidth(edge), 1e-6);
   if (on < 0.5) return 0.0;
   return (1.0 - smoothstep(0.5 * w, 1.5 * w, edge)) * (1.0 - smoothstep(0.15, 0.3, w));
+}
+// Smooth surface: brightness from the slope (flat ground = 1), from the
+// screen-space derivatives of the position p (metres) with up the local
+// vertical; heights exaggerated k times for the shading; light from the
+// north-west, 45° up, as on hill-shaded maps.
+float fa5Shade(vec3 p, vec3 up, float k) {
+  vec3 t1 = dFdx(p), t2 = dFdy(p);
+  t1 += up * (dot(t1, up) * (k - 1.0));
+  t2 += up * (dot(t2, up) * (k - 1.0));
+  vec3 n = cross(t1, t2);
+  float len = length(n);
+  if (len < 1e-12) return 1.0;
+  n /= len;
+  if (dot(n, up) < 0.0) n = -n;
+  vec3 east = normalize(cross(vec3(0.0, 0.0, 1.0), up));
+  vec3 north = cross(up, east);
+  vec3 l = normalize(up + 0.7071 * (north - east));
+  return clamp(dot(n, l) / dot(up, l), 0.55, 1.35);
 }
 `;
 }

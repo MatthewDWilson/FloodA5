@@ -6,6 +6,7 @@ import { parseMesh } from '../js/protocol.js';
 import {
   geodeticToEcef, ecefToGeodetic, buildSurface, buildGlb, packCellValues, packStatic, packedSize,
   CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile, WGS84_A, WGS84_B,
+  cornerIndex, cornerValues, bedCornerValues,
 } from '../js/geometry.js';
 
 const fixtureMesh = () => {
@@ -164,4 +165,67 @@ test('meshBounds and quantiles', () => {
   assert.ok(Number.isNaN(finiteMedian([NaN])));
   assert.equal(finiteQuantile([0, 10, 20, 30, 40], 0.25), 10);
   assert.equal(finiteQuantile([0, 10], 0.5), 5);
+});
+
+// ---------------------------------------------------------------------------
+// Smooth surface (0.8.14): shared corners and corner values
+// ---------------------------------------------------------------------------
+
+// 2 × 2 squares of 0.001°, rings counter-clockwise: 9 distinct corners, the
+// middle one shared by all four cells
+function quadMesh() {
+  const sq = (c, r) => [[c, r], [c + 1, r], [c + 1, r + 1], [c, r + 1]];
+  const rings = [sq(0, 0), sq(1, 0), sq(0, 1), sq(1, 1)];
+  const offsets = new Uint32Array(5), dlon = [], dlat = [];
+  rings.forEach((ring, i) => {
+    for (const [x, y] of ring) { dlon.push(0.001 * x - 0.001); dlat.push(0.001 * y - 0.001); }
+    offsets[i + 1] = offsets[i] + ring.length;
+  });
+  return { nCells: 4, nVertices: 16, originLon: 172.6, originLat: -43.5, offsets,
+           dlon: Float32Array.from(dlon), dlat: Float32Array.from(dlat),
+           elevation: Float32Array.from([10, 11, 12, 13]), base: Float32Array.from([9, 10, 11, 12]) };
+}
+
+test('cornerIndex: shared corners, centres −1, corner → cells', () => {
+  const m = quadMesh(), ci = cornerIndex(m);
+  assert.equal(ci.nCorners, 9);
+  assert.equal(ci.vertexCorner.length, m.nVertices + m.nCells);
+  const surf = buildSurface(m);
+  for (let v = 0; v < ci.vertexCorner.length; v++) assert.equal(ci.vertexCorner[v] === -1, surf.edge[v] === 1);
+  // the middle corner: cell 0's third ring vertex (surface vertex 0 + 0 + 1 + 2)
+  const mid = ci.vertexCorner[3];
+  assert.deepEqual(Array.from(ci.cells.subarray(ci.offsets[mid], ci.offsets[mid + 1])).sort(), [0, 1, 2, 3]);
+  // every corner's cells hold it; 16 ring vertices in all
+  assert.equal(ci.offsets[ci.nCorners], 16);
+  // vertices within the quantum weld; a different place does not
+  const m2 = quadMesh(); m2.dlon = Float32Array.from(m2.dlon); m2.dlon[6] += 2e-8;   // (cell 1, its third vertex)
+  assert.equal(cornerIndex(m2).nCorners, 9);
+});
+
+test('cornerValues: means over the wet cells; dry corners zero', () => {
+  const m = quadMesh(), ci = cornerIndex(m);
+  const depth = Float32Array.from([0.5, 0, 0.2, 1.0]);
+  const cv = Float32Array.from([1, 2, NaN, 4]);
+  const p = cornerValues(ci, depth, m.base, m.elevation, cv, 0.1);
+  const at = c => Array.from(p.data.subarray(4 * c, 4 * c + 4));
+  const mid = ci.vertexCorner[3];
+  const [lv, bd, dp, cval] = at(mid);           // wet: cells 0, 2, 3
+  assert.ok(Math.abs(lv - (9.5 + 11.2 + 13) / 3) < 1e-5);
+  assert.ok(Math.abs(bd - (10 + 12 + 13) / 3) < 1e-5);
+  assert.ok(Math.abs(dp - 1.7 / 3) < 1e-6);
+  assert.ok(Math.abs(cval - (1 + 4) / 2) < 1e-6);          // (NaN left out)
+  // cell 1's outer corner: only cell 1, dry → zeros
+  const c1 = ci.vertexCorner[1 + 5 + 1];                    // cell 1's second ring vertex
+  assert.deepEqual(at(c1), [0, 0, 0, 0]);
+  const b = bedCornerValues(ci, Float32Array.from([10, NaN, 12, 13]), m.base);
+  assert.ok(Math.abs(b.data[4 * mid + 1] - (10 + 10 + 12 + 13) / 4) < 1e-5);   // (missing elevation: the base)
+});
+
+test('buildGlb: the corner attribute when asked for', () => {
+  const m = quadMesh(), surf = buildSurface(m), ci = cornerIndex(m);
+  const json = glb => JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + new DataView(glb.buffer).getUint32(12, true))));
+  assert.equal(json(buildGlb(surf)).meshes[0].primitives[0].attributes._FA5CORNER, undefined);
+  const j = json(buildGlb(surf, ci.vertexCorner));
+  assert.equal(j.meshes[0].primitives[0].attributes._FA5CORNER, 4);
+  assert.equal(j.accessors[4].count, surf.cell.length);
 });
