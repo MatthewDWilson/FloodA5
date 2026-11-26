@@ -33,6 +33,38 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-27
+
+The SGS checkerboard (MINOR, result-changing for SGS; branch
+`wps4-sgs-stability`; HYDRAULICS §15.15). Every case with SGS runs is
+re-recorded (deliberately); the previous values are kept in
+`cases/expected/v0.8.x/`. Standard flow and SWE are unchanged (bit-identical).
+
+### Fixed
+- ⚠ **SGS: sources enter with the flux update** (`--source-order pre|post`;
+  default `post` for `--flow-model sgs`, `pre` for standard flow, `pre` only
+  for SWE). Sources were added to their cells before the face fluxes were
+  computed, so a large inflow into one cell (the Eden at Carlisle: ≈ 2.4 m of
+  level a step in a 22 m channel cell) lifted the level its faces see by
+  Q·Δt/a, which moves with Δt; the adaptive Δt follows the same levels, and
+  the two drove the cell's gravity mode until the water surface broke into
+  cell-scale noise. This was the SGS checkerboard of notebook 06 §8 on
+  Cartesian, rotated Cartesian, rHEALPix, H3, IGEO7, HEALPix, Voronoi and
+  hexagons (36–42% of wet cells local extrema at the Eden's peak on the
+  first three, maximum depths 11 m against 6.8 m); every onset was next to
+  an inflow. With `post` the sources (rainfall too) are added after the step's
+  flux update and the depth of the cells they touch is brought up to date
+  (`_apply_sources_post!`; device backends `_device_source_depth!`): every
+  mesh family is smooth through the peak (extrema ≤ 1.6%), and the families
+  that were smooth (A5, ISEA3H, jittered Voronoi) are unchanged to the third
+  decimal. Without the noise SGS stores 0.70–0.79 of the 5 m SWE benchmark on
+  every family (levels 0.4–0.55 m low) — the hydraulic gap of §15.14; the
+  noise had raised Cartesian to 1.06. Tests: `test/test_sgs_general.jl` S10
+  (at steady state a source cell's level does not depend on Δt with `post`;
+  with `pre` it moves by Q·ΔΔt/a), `test/test_backend.jl` K2/K5 with both
+  orders (device path = CPU threads).
+- The run record's options include `source_order`.
+
 ## [0.8.16] — 2026-11-27
 
 Globe viewer maintenance (branch `maint-viewer`; PATCH: viewer only, results

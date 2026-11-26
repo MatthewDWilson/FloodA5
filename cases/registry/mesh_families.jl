@@ -343,18 +343,16 @@ let
                         m -> all(d["storage_drop_rel"] == 0 && d["noise_extrema_w1"] < _MF_CARL_EXTREMA
                                  for (k, d) in m if endswith(k, "_li"));
                         detail = m -> _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_li")), "noise_extrema_w1"; digits = 3)),
+                  # An expected failure until the sources moved after the flux
+                  # update (--source-order post, HYDRAULICS §15.15): 0.36–0.42
+                  # on Cartesian, rotated Cartesian and rHEALPix before.
                   Check("SGS smooth on every mesh: storage never falls on the rising limb (40–55.5 h), " *
                         "< $(_MF_CARL_EXTREMA) of the wet cells local level extrema at 55.5 h",
                         m -> all(d["storage_drop_rel"] == 0 && d["noise_extrema_w1"] < _MF_CARL_EXTREMA
                                  for (k, d) in m if endswith(k, "_sgs"));
                         detail = m -> _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "noise_extrema_w1"; digits = 3) *
                                       " | storage drops: " *
-                                      _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "storage_drop_rel"; digits = 3),
-                        xfail = "SGS checkerboards on most meshes (docs/TEST_CASES.md §8; notebook 06 §8): smooth " *
-                                "only on A5, ISEA3H and jittered Voronoi; checkerboarded on hex and centroidal " *
-                                "Voronoi (0.08–0.14), H3, IGEO7, HEALPix (0.17–0.23), rHEALPix, Cartesian and " *
-                                "rotated Cartesian (0.36–0.42, with storage oscillating on the rising limb); " *
-                                "local-inertial is smooth on all. An open SGS finding (PROJECT_STATE)")],
+                                      _mf_list(Dict(k => d for (k, d) in m if endswith(k, "_sgs")), "storage_drop_rel"; digits = 3))],
         rtol = Dict("*" => 1e-6), atol = Dict("*" => 1e-9),
     ))
 end

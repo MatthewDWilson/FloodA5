@@ -1,35 +1,35 @@
 # Expected metrics for case "sgs_strip" — written by `julia --project=. cases/run.jl baseline sgs_strip`.
 # Tolerances are in cases/registry (Case.rtol / Case.atol).
 [a5r18_sgs_q20]
-dSdt_rel_end = 1.1083450574412886e-5
-delta_channel = 0.3403448124935969
-delta_floodplain = 0.3400177575349185
-delta_slope_per_km = 0.006651414112426179
-delta_spread = 0.043789366702174704
-input_error_rel = -3.735283431596402e-5
-mass_balance_rel = 2.2466917817971734e-15
+dSdt_rel_end = 1.5055093604153766e-5
+delta_channel = 0.34034481249129017
+delta_floodplain = 0.3400177575326057
+delta_slope_per_km = 0.006651414111938242
+delta_spread = 0.043789366702306154
+input_error_rel = -3.886750298552215e-5
+mass_balance_rel = 1.0008021915803807e-14
 n_wet_reach = 193.0
-store_above_mean_per_m = 37.33528157245623
-store_per_m = 37.34847847694839
-stored_m3 = 141638.8171037594
-t_arrive_x1000 = 2414.5130212292784
-t_arrive_x2000 = 4519.4521414630235
-t_end = 28800.045825670863
+store_above_mean_per_m = 37.3352815722364
+store_per_m = 37.34847847672854
+stored_m3 = 141715.23772550974
+t_arrive_x1000 = 2415.1379994554613
+t_arrive_x2000 = 4520.021764831273
+t_end = 28800.0
 
 [a5r18_sgs_q3]
-dSdt_rel_end = 3.233244777342414e-6
-delta_channel = -0.2771811833503098
-delta_floodplain = -0.2763667905755698
-delta_slope_per_km = -0.0020340595290562905
-delta_spread = 0.010569710336708837
-input_error_rel = -6.05449920648856e-5
-mass_balance_rel = 5.276452469549185e-15
+dSdt_rel_end = 7.564276787117819e-6
+delta_channel = -0.2771811833333416
+delta_floodplain = -0.2763667905585159
+delta_slope_per_km = -0.0020340595273553347
+delta_spread = 0.010569710336699956
+input_error_rel = -6.24178006769531e-5
+mass_balance_rel = 5.106253888985467e-15
 n_wet_reach = 79.0
 store_above_mean_per_m = 0.0
-store_per_m = 3.5000570100326573
-stored_m3 = 13462.0481197075
-t_arrive_x1000 = 1511.414367642299
-t_arrive_x2000 = 2713.370972745061
+store_per_m = 3.5000570101207673
+stored_m3 = 13465.611286793435
+t_arrive_x1000 = 1511.8148328125635
+t_arrive_x2000 = 2713.7722503042514
 t_end = 28800.0
 
 [a5r18_std_q20]
@@ -102,67 +102,67 @@ t_arrive_lumped20_q3_x2000 = 2686.0445241128828
 width_a5 = 95.15639225664886
 
 [cart20_sgs_q20]
-dSdt_rel_end = 4.531339941827115e-5
-delta_channel = 0.3618694775888451
-delta_floodplain = 0.3618694817176711
-delta_slope_per_km = -2.4104636989442303e-6
-delta_spread = 3.29877861560135e-6
-input_error_rel = -7.576575802124449e-5
-mass_balance_rel = 1.6871288060498551e-13
+dSdt_rel_end = 0.00014757458478467355
+delta_channel = 0.3618694775888452
+delta_floodplain = 0.36186948171767097
+delta_slope_per_km = -2.410463699413376e-6
+delta_spread = 3.2987786173777067e-6
+input_error_rel = -7.462122535185987e-5
+mass_balance_rel = 6.740337393794994e-14
 n_wet_reach = 150.0
-store_above_mean_per_m = 26.720471245912698
+store_above_mean_per_m = 26.7204712459127
 store_per_m = 26.709204702688197
-stored_m3 = 101432.70935492817
-t_arrive_x1000 = 1819.9934060265382
-t_arrive_x2000 = 3335.0948866787285
+stored_m3 = 101521.36716063855
+t_arrive_x1000 = 1817.3205508386852
+t_arrive_x2000 = 3332.4259686363557
 t_end = 28800.0
 
 [cart20_sgs_q3]
-dSdt_rel_end = 4.364902593524187e-5
-delta_channel = -0.2792046982095113
+dSdt_rel_end = 7.766300762278462e-5
+delta_channel = -0.2792046982095112
 delta_floodplain = "NaN"
-delta_slope_per_km = -2.7216414068154623e-5
-delta_spread = 3.398481355265659e-5
-input_error_rel = -0.00011397848886741347
-mass_balance_rel = 7.829993041475004e-14
+delta_slope_per_km = -2.7216414067996817e-5
+delta_spread = 3.398481355176841e-5
+input_error_rel = -0.0001115911611796994
+mass_balance_rel = 5.651198876263133e-14
 n_wet_reach = 50.0
 store_above_mean_per_m = 0.0
 store_per_m = 3.4988553778675553
-stored_m3 = 13360.862352351294
-t_arrive_x1000 = 1519.7491895972823
-t_arrive_x2000 = 2724.596400804034
+stored_m3 = 13373.085297684729
+t_arrive_x1000 = 1518.4202832089884
+t_arrive_x2000 = 2723.043690466632
 t_end = 28800.0
 
 [cart20_sgslumped_q20]
-dSdt_rel_end = 0.00012477229081760146
-delta_channel = 0.3986045573456531
-delta_floodplain = 0.39860455831430647
-delta_slope_per_km = -1.213016054739679e-6
+dSdt_rel_end = 0.00013928694628788447
+delta_channel = 0.3986045573456532
+delta_floodplain = 0.3986045583143066
+delta_slope_per_km = -1.2130160557206205e-6
 delta_spread = 1.7082266214885067e-6
-input_error_rel = -7.625666946303427e-5
-mass_balance_rel = 2.514354212926492e-13
+input_error_rel = -7.50838601481774e-5
+mass_balance_rel = 1.9567412760076744e-13
 n_wet_reach = 150.0
-store_above_mean_per_m = 28.92457675508222
-store_per_m = 28.913310211857727
-stored_m3 = 109740.80525421847
-t_arrive_x1000 = 1823.5442317073293
-t_arrive_x2000 = 3635.628394257453
+store_above_mean_per_m = 28.924576755082228
+store_per_m = 28.913310211857723
+stored_m3 = 109821.4144116685
+t_arrive_x1000 = 2123.2622407216504
+t_arrive_x2000 = 3633.0144136054155
 t_end = 28800.0
 
 [cart20_sgslumped_q3]
-dSdt_rel_end = 7.638667376012492e-5
-delta_channel = -0.27053827871962133
+dSdt_rel_end = 7.197377749195107e-5
+delta_channel = -0.2705382787196215
 delta_floodplain = "NaN"
-delta_slope_per_km = -2.692480132465789e-5
-delta_spread = 3.3555059649970076e-5
-input_error_rel = -0.00011392694616748826
-mass_balance_rel = 6.24697238715427e-14
+delta_slope_per_km = -2.6924801324975628e-5
+delta_spread = 3.3555059650858254e-5
+input_error_rel = -0.0001114900707201188
+mass_balance_rel = 5.634176623275825e-14
 n_wet_reach = 50.0
 store_above_mean_per_m = 0.0
 store_per_m = 3.5453581345309977
-stored_m3 = 13536.400440633472
-t_arrive_x1000 = 1517.0557499674594
-t_arrive_x2000 = 2729.5790269369236
+stored_m3 = 13548.134623279444
+t_arrive_x1000 = 1519.450723159047
+t_arrive_x2000 = 2731.740898117783
 t_end = 28800.0
 
 [cart20_std_q20]
@@ -294,11 +294,11 @@ t_arrive_x2000 = 2710.5504077789633
 t_end = 14400.0
 
 [meta]
-flooda5_version = "0.7.1"
-git_commit = "4f397aea1c95ff457c674d1b3b6d9dc08c968848"
+flooda5_version = "0.8.9"
+git_commit = "2eb57f933caf6c77aa2b7e400d26779aba8b4fd6"
 git_dirty = true
 platform = "NT x86_64"
-recorded_utc = "2026-11-23T04:32:36Z"
+recorded_utc = "2026-11-26T09:29:19Z"
 
 [tables_a5r18]
 edge_A_ratio_channel_1m = 0.9999869274127078

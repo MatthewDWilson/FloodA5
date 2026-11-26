@@ -669,6 +669,15 @@ end
 const SGS_DEFAULT_COURANT = 0.5
 
 """
+    SGS_DEFAULT_SOURCE_ORDER
+
+When sources enter a step under `--flow-model sgs` if `--source-order` is not
+given: `:post`, with the flux update (`_apply_sources_post!`, FloodModel.jl).
+Standard flow keeps `:pre`; SWE always uses `:pre`.
+"""
+const SGS_DEFAULT_SOURCE_ORDER = :post
+
+"""
     SGS_PATH[]
 
 Whether the SGS kernel applies the flow-path geometry of `_sgs_path`

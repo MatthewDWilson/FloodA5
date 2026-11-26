@@ -1,0 +1,176 @@
+# Expected metrics for case "carlisle_peak_fine" — written by `julia --project=. cases/run.jl baseline carlisle_peak_fine`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[cart5_li]
+input_error_rel = -2.1339515720731327e-6
+mass_balance_rel = 5.5963181727758186e-14
+storage_w1_m3 = 7.065839221892672e6
+t_end = 199800.0
+
+[cart5_swe]
+input_error_rel = -3.155209231470174e-7
+mass_balance_rel = 2.1836945052958852e-13
+storage_w1_m3 = 8.380159105744778e6
+t_end = 199800.0
+
+[meta]
+flooda5_version = "0.6.0"
+git_commit = "ebf9c78bb2eccde2486f685eba743d7529276fb4"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-23T10:25:02Z"
+
+["vs5:a5_li"]
+li5_csi_w0 = 0.7961387691330695
+li5_csi_w1 = 0.8401237068140831
+li5_csi_wmid = 0.8229319881563287
+li5_level_median_w0 = 0.2570356951556594
+li5_level_median_w1 = 0.23597969818448128
+li5_level_median_wmid = 0.25302381645476046
+li5_level_rms_w0 = 0.3709027490374132
+li5_level_rms_w1 = 0.3403387621997436
+li5_level_rms_wmid = 0.35919751177613307
+li5_storage_ratio_w0 = 1.162846796860019
+li5_storage_ratio_w1 = 1.1182394480981097
+li5_storage_ratio_wmid = 1.1318307266313004
+swe5_csi_w0 = 0.8285147489583631
+swe5_csi_w1 = 0.8483572057669229
+swe5_csi_wmid = 0.8297204562790649
+swe5_level_median_w0 = -0.0760377973941413
+swe5_level_median_w1 = -0.17610269586121774
+swe5_level_median_wmid = -0.1317053478489747
+swe5_level_rms_w0 = 0.2714310798314356
+swe5_level_rms_w1 = 0.25371952007478943
+swe5_level_rms_wmid = 0.25690532906621977
+swe5_storage_ratio_w0 = 0.9748705262558083
+swe5_storage_ratio_w1 = 0.9429717935045883
+swe5_storage_ratio_wmid = 0.9611179321576551
+
+["vs5:a5_sgs"]
+li5_csi_w0 = 0.8291953691198899
+li5_csi_w1 = 0.8529669897912984
+li5_csi_wmid = 0.8446357696645246
+li5_level_median_w0 = -0.0936309597726499
+li5_level_median_w1 = -0.11804234316483342
+li5_level_median_wmid = -0.10489471969272746
+li5_level_rms_w0 = 0.1560810063086077
+li5_level_rms_w1 = 0.15853760006652734
+li5_level_rms_wmid = 0.16716798867074814
+li5_storage_ratio_w0 = 0.8726518962781855
+li5_storage_ratio_w1 = 0.8719844856604272
+li5_storage_ratio_wmid = 0.8705316649897918
+swe5_csi_w0 = 0.8036850935350222
+swe5_csi_w1 = 0.8125982984577871
+swe5_csi_wmid = 0.8059588471374637
+swe5_level_median_w0 = -0.39594703333003345
+swe5_level_median_w1 = -0.47301923113322353
+swe5_level_median_wmid = -0.4374234154344281
+swe5_level_rms_w0 = 0.4693599153618127
+swe5_level_rms_w1 = 0.515274303917831
+swe5_level_rms_wmid = 0.4924628375465735
+swe5_storage_ratio_w0 = 0.7315861518989522
+swe5_storage_ratio_w1 = 0.735313689523183
+swe5_storage_ratio_wmid = 0.739230323091682
+
+["vs5:a5_sgs_nocrit"]
+li5_csi_w0 = 0.7876565338408168
+li5_csi_w1 = 0.8075512649209617
+li5_csi_wmid = 0.7904083359900019
+li5_level_median_w0 = -0.10259342575877994
+li5_level_median_w1 = -0.14150320965834773
+li5_level_median_wmid = -0.12019982057028322
+li5_level_rms_w0 = 0.18382954138193527
+li5_level_rms_w1 = 0.2282907633376682
+li5_level_rms_wmid = 0.2045569997372004
+li5_storage_ratio_w0 = 0.8394728705041258
+li5_storage_ratio_w1 = 0.8356406412541358
+li5_storage_ratio_wmid = 0.8371870218456774
+swe5_csi_w0 = 0.7602269713516374
+swe5_csi_w1 = 0.7701094092395099
+swe5_csi_wmid = 0.763294006093133
+swe5_level_median_w0 = -0.40763598404366963
+swe5_level_median_w1 = -0.4941391642790549
+swe5_level_median_wmid = -0.44791419680920797
+swe5_level_rms_w0 = 0.44826369614979655
+swe5_level_rms_w1 = 0.5283855578137556
+swe5_level_rms_wmid = 0.4819241033543122
+swe5_storage_ratio_w0 = 0.7037705751571552
+swe5_storage_ratio_w1 = 0.7046662103979022
+swe5_storage_ratio_wmid = 0.7109150161176506
+
+["vs5:a5_swe"]
+li5_csi_w0 = 0.73125582133129
+li5_csi_w1 = 0.7778986766619004
+li5_csi_wmid = 0.7635519535455609
+li5_level_median_w0 = 0.7962630726772559
+li5_level_median_w1 = 0.8153546919758172
+li5_level_median_wmid = 0.8250741494806952
+li5_level_rms_w0 = 0.8728457726429355
+li5_level_rms_w1 = 0.8380542908151204
+li5_level_rms_wmid = 0.8544948375031003
+li5_storage_ratio_w0 = 1.590479083419673
+li5_storage_ratio_w1 = 1.4911742234030787
+li5_storage_ratio_wmid = 1.5189430579560403
+swe5_csi_w0 = 0.7629910184824158
+swe5_csi_w1 = 0.8121916291123235
+swe5_csi_wmid = 0.7855398241390942
+swe5_level_median_w0 = 0.47736899877979777
+swe5_level_median_w1 = 0.3853639138167555
+swe5_level_median_wmid = 0.43029590926969874
+swe5_level_rms_w0 = 0.6090100576793108
+swe5_level_rms_w1 = 0.5634369219473778
+swe5_level_rms_wmid = 0.5771670874127578
+swe5_storage_ratio_w0 = 1.3333752866146815
+swe5_storage_ratio_w1 = 1.2574545051703847
+swe5_storage_ratio_wmid = 1.2898425326135357
+
+["vs5:cart_li"]
+li5_csi_w0 = 0.813272387853077
+li5_csi_w1 = 0.8512215818854006
+li5_csi_wmid = 0.831916239836918
+li5_level_median_w0 = 0.2128887427404802
+li5_level_median_w1 = 0.1960695694844823
+li5_level_median_wmid = 0.21102207284811492
+li5_level_rms_w0 = 0.3442497550430069
+li5_level_rms_w1 = 0.31742648210543667
+li5_level_rms_wmid = 0.33370913574535044
+li5_storage_ratio_w0 = 1.1694209078585882
+li5_storage_ratio_w1 = 1.121761960694326
+li5_storage_ratio_wmid = 1.1409263891736126
+swe5_csi_w0 = 0.8289608831252122
+swe5_csi_w1 = 0.8534744934129712
+swe5_csi_wmid = 0.8300265828142052
+swe5_level_median_w0 = -0.11739782667326182
+swe5_level_median_w1 = -0.21539454338976505
+swe5_level_median_wmid = -0.17439338875152188
+swe5_level_rms_w0 = 0.288070151577487
+swe5_level_rms_w1 = 0.2891625662330617
+swe5_level_rms_wmid = 0.2886911300382076
+swe5_storage_ratio_w0 = 0.9798537253511362
+swe5_storage_ratio_w1 = 0.9455806970412736
+swe5_storage_ratio_wmid = 0.9683756630664646
+
+["vs5:cart_swe"]
+li5_csi_w0 = 0.7826724519478973
+li5_csi_w1 = 0.82134171979602
+li5_csi_wmid = 0.8125958672385585
+li5_level_median_w0 = 0.49301035613448896
+li5_level_median_w1 = 0.5477718952603157
+li5_level_median_wmid = 0.527538545417487
+li5_level_rms_w0 = 0.5713928285960599
+li5_level_rms_w1 = 0.5806359362465491
+li5_level_rms_wmid = 0.5769383678161165
+li5_storage_ratio_w0 = 1.365064459268653
+li5_storage_ratio_w1 = 1.3256012220511901
+li5_storage_ratio_wmid = 1.3319498023669734
+swe5_csi_w0 = 0.815103136431953
+swe5_csi_w1 = 0.8512432770710899
+swe5_csi_wmid = 0.8324290082531208
+swe5_level_median_w0 = 0.1781510283495802
+swe5_level_median_w1 = 0.1507667365982055
+swe5_level_median_wmid = 0.1631825335915238
+swe5_level_rms_w0 = 0.3308655205868204
+swe5_level_rms_w1 = 0.2900938729949509
+swe5_level_rms_wmid = 0.31070416720436783
+swe5_storage_ratio_w0 = 1.1437827789552129
+swe5_storage_ratio_w1 = 1.1174054491650658
+swe5_storage_ratio_wmid = 1.1305091943509193

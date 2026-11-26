@@ -1,0 +1,95 @@
+# Expected metrics for case "carlisle" — written by `julia --project=. cases/run.jl baseline carlisle`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[a5_li]
+arrival_s = 9646.966857377498
+bias = 1.0610938040844582
+csi = 0.6078034291886054
+input_error_rel = -2.388549762494584e-5
+mass_balance_log_rel = 2.391214748292997e-5
+mass_balance_rel = 8.102410193433277e-15
+rms_dh = 0.2808265411357428
+speed_ratio_deep = 1.103935875667826
+storage_m3 = 3.29660489559122e6
+storage_ratio = 1.2484173635473403
+t = 21600.0
+vol_added_m3 = 5.8924026e6
+vol_removed_m3 = 2.6009973e6
+wet_area_0p1_km2 = 3.0201611695964288
+
+[a5_li_norain]
+arrival_s = 7066.509480671612
+input_error_rel = -3.144263268935011e-5
+mass_balance_log_rel = 3.144218364396278e-5
+mass_balance_rel = 7.582552765958877e-15
+storage_m3 = 1.9168530988084832e6
+t = 21600.0
+vol_added_m3 = 5.034637600000001e6
+vol_removed_m3 = 3.1177572e6
+wet_area_0p1_km2 = 1.1925965379485888
+
+[a5_sgs]
+arrival_s = 3570.4649889685606
+input_error_rel = -1.2283218031711137e-5
+mass_balance_log_rel = 1.2282607158303452e-5
+mass_balance_rel = 7.3707478312054e-14
+storage_m3 = 1.7752254773162312e6
+t = 21600.0
+vol_added_m3 = 5.910797199999999e6
+vol_removed_m3 = 4.1364564e6
+wet_area_0p1_km2 = 1.814749753237339
+
+[a5_swe]
+arrival_s = 6676.094574218267
+input_error_rel = -3.4688100269510747e-6
+mass_balance_log_rel = 3.4631127809133494e-6
+mass_balance_rel = 9.439508468134058e-16
+storage_m3 = 2.640627238813802e6
+t = 21600.0
+vol_added_m3 = 5.91953e6
+vol_removed_m3 = 3.2789161e6
+wet_area_0p1_km2 = 2.846272115309491
+
+[cart_li]
+arrival_s = 5988.784520546506
+bias = 0.8507223113964687
+csi = 0.6872422508979646
+input_error_rel = -2.5594642517784277e-5
+mass_balance_log_rel = 2.563236884832302e-5
+mass_balance_rel = 2.9880472424371704e-14
+rms_dh = 0.12959546164218735
+speed_ratio_deep = 1.058862697839594
+storage_m3 = 2.3020531093658945e6
+storage_ratio = 0.9875744454509077
+t = 21600.0
+vol_added_m3 = 5.8714823e6
+vol_removed_m3 = 3.574191e6
+wet_area_0p1_km2 = 2.32304173763662
+
+[cart_li_norain]
+arrival_s = 6194.624316405336
+input_error_rel = -3.0098494080941872e-5
+mass_balance_log_rel = 3.012787300780933e-5
+mass_balance_rel = 2.7741009415793347e-16
+storage_m3 = 1.6578235519736041e6
+t = 21600.0
+vol_added_m3 = 5.0219277e6
+vol_removed_m3 = 3.365038e6
+wet_area_0p1_km2 = 0.9491397197229466
+
+[cart_swe]
+arrival_s = 5726.833625668449
+input_error_rel = -2.8160579317824352e-6
+mass_balance_log_rel = 2.8118051845181945e-6
+mass_balance_rel = 2.9564437784551205e-14
+storage_m3 = 2.3310172918810397e6
+t = 21600.0
+vol_added_m3 = 5.903680699999999e6
+vol_removed_m3 = 3.5730526e6
+wet_area_0p1_km2 = 2.7306696201394365
+
+[meta]
+flooda5_version = "0.7.1"
+git_commit = "4f397aea1c95ff457c674d1b3b6d9dc08c968848"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-23T10:23:56Z"

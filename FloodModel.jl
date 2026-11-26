@@ -3627,6 +3627,51 @@ function _web_vis_mesh(mesh::A5Mesh, flow_method::Symbol)
         lon = [c.center_lon for c in mesh.cells], lat = [c.center_lat for c in mesh.cells])
 end
 
+"""
+    _apply_sources_post!(state, rainfall_rate, sources, t, dt, sgs)
+
+The sources of a step under `--source-order post`: added after the step's
+flux update (as if with it, from the same levels) rather than before the face
+fluxes are computed, and the depth of the cells they touch brought up to date.
+
+Added before, a point source of discharge Q raises its cell by Q·Δt/a just
+before the fluxes see it, and the outflow takes it back within the step: the
+level the faces see sits Q·Δt/a above the level stored at the end of the step,
+so it moves with Δt itself. Where Q·Δt/a is large (an inflow into one channel
+cell: ≈ 2.4 m a step on 22 m Carlisle meshes) the adaptive Δt, which follows
+those levels, and the levels feed back on each other and the cell's gravity
+mode grows; it seeded the SGS checkerboard on every mesh family
+(HYDRAULICS §15.15). Added after, the faces see the level after the whole of
+the previous step, which at equilibrium does not depend on Δt.
+"""
+function _apply_sources_post!(state::FlowState, rainfall_rate::Float64, sources, t::Float64,
+                              dt::Float64, sgs::Bool)
+    if rainfall_rate > 0.0
+        for i in eachindex(state.cell_ids)
+            state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+            _sync_cell_depth!(state, i, sgs)
+        end
+    end
+    for src in sources
+        apply_source!(state, src, t, dt)
+        hasproperty(src, :cell_index) && _sync_cell_depth!(state, src.cell_index, sgs)
+    end
+    return nothing
+end
+
+"The depth of cell `i` from its volume (SGS: through its table; else V/A, as the step's gather)."
+@inline function _sync_cell_depth!(state::FlowState, i::Int, sgs::Bool)
+    if sgs
+        tbl = state.sgs_tables[i]
+        state.water_depth[i] = isnan(tbl.z_min) ? 0.0 :
+                               max(0.0, wse_from_volume(tbl, state.volume[i]) - tbl.z_min)
+    else
+        A = state.cell_area[i]
+        A >= 1.0 && (state.water_depth[i] = state.volume[i] / A)
+    end
+    return nothing
+end
+
 "Frame variables for the web viewer: names as in the output file, simulation cell order."
 _web_vis_frame(state::FlowState) = Dict("water_depth" => state.water_depth,
                                         "velocity"    => state.velocity,
@@ -3642,8 +3687,10 @@ Time-stepping loop.  Advances the model for `sim_duration` seconds using
 adaptive dt (CFL-limited, capped at `dt_max`).
 
 Water sources (`all_sources`) are applied before each flux step so injected
-volume participates in that timestep's routing.  Open boundary outflow (Phase D)
-is applied after routing.
+volume participates in that timestep's routing (`source_order = :pre`), or
+with the flux update, after the step (`:post`, `_apply_sources_post!`; the
+SGS default since 0.9.0). Open boundary outflow (Phase D) is applied after
+routing.
 
 Arguments
 ---------
@@ -3668,6 +3715,7 @@ function run_simulation!(state            :: FlowState,
                          output           :: SimOutput = SimOutput();
                          method           :: FlowMethod = StandardFlow(),
                          courant          :: Float64   = 0.7,
+                         source_order     :: Symbol    = :pre,
                          rainfall_rate    :: Float64   = 0.0,
                          all_sources      :: Vector{<:AbstractSource} = AbstractSource[],
                          injection_points :: Vector{InjectionPoint} = InjectionPoint[],
@@ -3679,6 +3727,11 @@ function run_simulation!(state            :: FlowState,
     step = 0
     use_sgs = method isa SGSFlow
     use_swe = method isa SWEFlow
+    source_order in (:pre, :post) ||
+        throw(ArgumentError("source_order must be :pre or :post (got :$source_order)"))
+    use_swe && source_order === :post &&
+        throw(ArgumentError("--source-order post is not available with --flow-model swe"))
+    post_sources = source_order === :post
 
     # Merge legacy injection_points / rain_points into all_sources.
     # Callers that still pass the old keyword args continue to work unchanged.
@@ -3734,20 +3787,22 @@ function run_simulation!(state            :: FlowState,
                  dt_max, sim_duration - t)
         use_swe || (dt = max(dt, 0.1))      # R1: the reference solver keeps its CFL step
 
-        # ── Apply all water sources (before routing) ────────────────────────
-        if dev === nothing
-            # Uniform rainfall
-            if rainfall_rate > 0.0
-                for i in eachindex(state.cell_ids)
-                    state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+        # ── Apply all water sources (before routing; --source-order pre) ────
+        if !post_sources
+            if dev === nothing
+                # Uniform rainfall
+                if rainfall_rate > 0.0
+                    for i in eachindex(state.cell_ids)
+                        state.volume[i] += rainfall_rate * dt * state.cell_area[i]
+                    end
                 end
+                # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
+                for src in merged_sources
+                    apply_source!(state, src, t, dt)
+                end
+            else
+                _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
             end
-            # AbstractSource dispatch (InjectionPoint, RainPoint, InflowPoint, ...)
-            for src in merged_sources
-                apply_source!(state, src, t, dt)
-            end
-        else
-            _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
         end
         # accounting only: the volume the sources just added (as applied above)
         vol_applied += rainfall_rate * dt * area_total
@@ -3800,6 +3855,15 @@ function run_simulation!(state            :: FlowState,
             step_swe!(state, dt; courant = courant)      # sub-steps if the sources need it
         else
             step_standard!(state, dt; velocity = false)
+        end
+        # --source-order post: the sources enter with the flux update
+        if post_sources
+            if dev === nothing
+                _apply_sources_post!(state, rainfall_rate, merged_sources, t, dt, use_sgs)
+            else
+                _device_sources!(dev, rainfall_rate, merged_sources, t, dt)
+                _device_source_depth!(dev)
+            end
         end
 
         t    += dt
@@ -4239,6 +4303,7 @@ function run_flood_model(;
     sim_duration      :: Float64 = 3600.0,
     dt_max            :: Float64 = 60.0,
     courant           :: Float64 = 0.7,
+    source_order      :: Union{Symbol,Nothing}  = nothing,  # :pre | :post; nothing: the flow model's default
     limiter_stats     :: Bool    = false,     # D1b: record limiter/switch activity
     # D1b/D4/D6′ (0.3.0): `nothing` takes the scheme's value
     boundary_limiter  :: Union{Symbol,Nothing}  = nothing,  # :legacy | :positivity
@@ -4548,6 +4613,12 @@ function run_flood_model(;
     flow_method in (:sgs, :standard, :swe) ||
         throw(ArgumentError("flow_method must be :sgs, :standard or :swe (got :$flow_method)"))
     method_obj = flow_method === :sgs ? SGSFlow() : flow_method === :swe ? SWEFlow() : StandardFlow()
+    source_order_r = source_order !== nothing ? source_order :
+                     flow_method === :sgs ? SGS_DEFAULT_SOURCE_ORDER : :pre
+    source_order_r in (:pre, :post) ||
+        throw(ArgumentError("source_order must be :pre or :post (got :$source_order_r)"))
+    flow_method === :swe && source_order_r === :post &&
+        throw(ArgumentError("--source-order post is not available with --flow-model swe"))
     @info "Initialising flow model ($(flow_method)) on $(length(mesh)) cells..."
     t0 = time()
     flow_state = initialise_flow_model(mesh, method_obj;
@@ -4762,6 +4833,7 @@ function run_flood_model(;
             "swe_order" => swe_order, "swe_viscosity" => swe_viscosity,
             "manning_n" => manning_n, "friction" => friction_source,
             "sim_duration" => sim_duration, "dt_max" => dt_max, "courant" => courant,
+            "source_order" => source_order_r,
             "cell_order" => cell_order, "backend" => backend, "precision" => precision,
             "limiter_stats" => limiter_stats,
             "rainfall_rate_m_per_s" => rainfall_rate,
@@ -4827,6 +4899,7 @@ function run_flood_model(;
                       vis, vis_mode, sim_output;
                       method        = method_obj,
                       courant       = courant,
+                      source_order  = source_order_r,
                       rainfall_rate = rainfall_rate,
                       all_sources   = all_sources,
                       sgs_diag      = sgs_diag,
@@ -5193,6 +5266,13 @@ Flow model options:
                      (default: 0.7, the LISFLOOD-FP/CAESAR value; 0.5 with
                      --flow-model sgs, which is not stable at 0.7 in deep
                      channel flow).
+  --source-order pre|post
+                     When rainfall and point sources (inflows, injections)
+                     enter a step. pre: before the face fluxes are computed;
+                     post: with the flux update, after it, so that a large
+                     inflow into a small cell does not lift the level its
+                     faces see by Q·dt/area (default: post with --flow-model
+                     sgs, pre otherwise; swe: pre only).
   --limiter-stats    (diagnostic, D1b) Record how often each limiter and switch
                      binds — Froude cap, volume limiter, donor cap, positivity,
                      diamond wet/dry fallback — by flow-depth band, with an hourly
@@ -5959,6 +6039,7 @@ function main(args=String[])
     sim_dur_val,  args = _pop_flag(args, "--sim-duration")
     dt_max_val,   args = _pop_flag(args, "--dt-max")
     courant_val,  args = _pop_flag(args, "--courant")
+    source_order_val, args = _pop_flag(args, "--source-order")
     cell_order_val, args = _pop_flag(args, "--cell-order")
     limiter_stats,  args = _pop_bool(args, "--limiter-stats")
     boundary_lim_val, args = _pop_flag(args, "--boundary-limiter")
@@ -6008,6 +6089,11 @@ function main(args=String[])
                     (flow_method === :sgs ? SGS_DEFAULT_COURANT : 0.7)
     (0.0 < courant <= 1.0) ||
         (println("ERROR: --courant must be in (0, 1]\n"); print_help(1))
+    source_order = source_order_val === nothing ? nothing :
+                   source_order_val in ("pre", "post") ? Symbol(source_order_val) :
+                   (println("ERROR: --source-order requires 'pre' or 'post'\n"); print_help(1))
+    source_order === :post && flow_method === :swe &&
+        (println("ERROR: --source-order post is not available with --flow-model swe\n"); print_help(1))
     cell_order = cell_order_val === nothing ? :spatial :
                  cell_order_val in ("spatial", "file") ? Symbol(cell_order_val) :
                  (println("ERROR: --cell-order requires 'spatial' or 'file'\n"); print_help(1))
@@ -6198,6 +6284,7 @@ function main(args=String[])
         sim_duration    = sim_duration,
         dt_max          = dt_max,
         courant         = courant,
+        source_order    = source_order,
         cell_order      = cell_order,
         limiter_stats   = limiter_stats,
         boundary_limiter = boundary_limiter,

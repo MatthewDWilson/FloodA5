@@ -1145,20 +1145,20 @@ CSI at 0.1 m); "rms vs 5 m LI" is SGS against the 5 m local-inertial run,
 which SGS approximates; "extrema" is the fraction of fully wet cells that are
 local water-level extrema (`FA.noise_metrics`; a checkerboard).
 
-| Mesh (√ mean area) | LI storage | LI rms (m) | LI CSI | SGS storage | SGS rms (m) | SGS CSI | SGS rms vs 5 m LI | SGS extrema |
+| Mesh (√ mean area) | LI storage | LI rms (m) | LI CSI | SGS storage | SGS rms (m) | SGS CSI | SGS rms vs 5 m LI | SGS extrema (before 0.9.0) |
 |---|---|---|---|---|---|---|---|---|
-| cart (22.2 m) | 0.935 | 0.274 | 0.849 | 1.064 | 0.453 | 0.895 | 0.723 | **0.41** |
+| cart (22.2 m) | 0.935 | 0.274 | 0.849 | 0.740 | 0.482 | 0.883 | 0.127 | 0.007 (0.41) |
 | cart (20.0 m, `carlisle_peak`) | 0.946 | 0.289 | 0.853 | – | – | – | – | – |
-| rotcart (22.2 m) | 0.953 | 0.291 | 0.845 | 0.959 | 0.417 | 0.882 | 0.526 | **0.42** |
-| hex (22.2 m) | 0.920 | 0.265 | 0.841 | 0.774 | 0.492 | 0.872 | 0.159 | 0.08 |
-| voronoi (22.2 m) | 0.929 | 0.275 | 0.840 | 0.749 | 0.544 | 0.842 | 0.209 | 0.14 |
-| voronoi_jit (22.2 m) | 0.970 | 0.268 | 0.831 | 0.756 | 0.530 | 0.843 | 0.204 | 0.008 |
-| a5 (22.2 m) | 0.943 | 0.254 | 0.848 | 0.735 | 0.515 | 0.813 | 0.159 | 0.009 |
-| h3 (16.4 m) | 0.868 | 0.283 | 0.877 | 0.714 | 0.564 | 0.815 | 0.325 | 0.18 |
-| igeo7 (22.9 m) | 0.943 | 0.269 | 0.832 | 0.823 | 0.598 | 0.829 | 0.564 | 0.17 |
-| isea3h (23.2 m) | 0.915 | 0.277 | 0.833 | 0.703 | 0.547 | 0.799 | 0.234 | 0.006 |
-| healpix (24.8 m) | 0.995 | 0.300 | 0.823 | 0.761 | 0.446 | 0.825 | 0.217 | 0.23 |
-| rhealpix (17.3 m) | 0.939 | 0.261 | 0.874 | 0.763 | 0.549 | 0.850 | 0.267 | **0.36** |
+| rotcart (22.2 m) | 0.953 | 0.291 | 0.845 | 0.748 | 0.519 | 0.819 | 0.238 | 0.016 (0.42) |
+| hex (22.2 m) | 0.920 | 0.265 | 0.841 | 0.786 | 0.461 | 0.875 | 0.116 | 0.005 (0.08) |
+| voronoi (22.2 m) | 0.929 | 0.275 | 0.840 | 0.752 | 0.536 | 0.843 | 0.200 | 0.005 (0.14) |
+| voronoi_jit (22.2 m) | 0.970 | 0.268 | 0.831 | 0.756 | 0.529 | 0.843 | 0.200 | 0.008 (0.008) |
+| a5 (22.2 m) | 0.943 | 0.254 | 0.848 | 0.735 | 0.515 | 0.813 | 0.155 | 0.005 (0.009) |
+| h3 (16.4 m) | 0.868 | 0.283 | 0.877 | 0.716 | 0.509 | 0.816 | 0.221 | 0.004 (0.18) |
+| igeo7 (22.9 m) | 0.943 | 0.269 | 0.832 | 0.718 | 0.561 | 0.800 | 0.269 | 0.005 (0.17) |
+| isea3h (23.2 m) | 0.915 | 0.277 | 0.833 | 0.703 | 0.545 | 0.799 | 0.230 | 0.006 (0.006) |
+| healpix (24.8 m) | 0.995 | 0.300 | 0.823 | 0.766 | 0.436 | 0.826 | 0.244 | 0.012 (0.23) |
+| rhealpix (17.3 m) | 0.939 | 0.261 | 0.874 | 0.763 | 0.500 | 0.851 | 0.182 | 0.004 (0.36) |
 
 Local-inertial: on a real event the mesh family matters little at matched
 cell size — storage 0.92–0.97 of the benchmark's, level rms 0.25–0.30 m, CSI
@@ -1166,26 +1166,20 @@ cell size — storage 0.92–0.97 of the benchmark's, level rms 0.25–0.30 m, C
 best extents (CSI 0.88); A5 the lowest level rms, by a few centimetres. All
 of them are smooth (extrema ≤ 0.008, storage rising throughout).
 
-SGS stores 0.70–0.82 of the benchmark's volume where it is well behaved, as
-on A5 (§15.14: it is local-inertial on the 5 m geometry, and close to the
-5 m local-inertial run). **But SGS checkerboards on most meshes, the
-Cartesian grid included** — a finding of this case, recorded as an expected
-failure (`xfail`) until it is fixed: smooth on A5, ISEA3H and the jittered
-Voronoi mesh (a few isolated cells apart); a checkerboard over 8–23% of the
-wet cells on hexagons, centroidal Voronoi, H3, IGEO7 and HEALPix, following
-the river channels, where the water is deepest; and over 36–42% on
-rHEALPix and the rotated and plain Cartesian grids. There the stored volume
-also oscillates on the rising limb (its falls add up to 36% of the peak
-storage on rHEALPix, 3% on the square grids) and Δt and the maximum depth
-jump (to 11 m, against 7 m for local-inertial). On the Cartesian grid the
-checkerboard sets in at about 46 h, over the floodplain too, and the stored
-volume then runs away (1.06 of the benchmark at the peak); the rotated
-grid's SGS storage (0.96) is noise as well, not accuracy. On the smooth
-meshes SGS stays within 0.16–0.23 m rms of the 5 m local-inertial run; on
-the noisy ones up to 0.72 m. The pattern follows neither regularity nor
-orthogonality alone (ISEA3H's hexagons are smooth, the planar ones are not);
-it is open (PROJECT_STATE), for the SGS work. Notebook 06 §8 maps it per
-mesh and is the re-check after SGS changes (`RERUN_SGS = true`).
+SGS stores 0.70–0.79 of the benchmark's volume on every mesh, with levels
+0.44–0.56 m rms from it (§15.14: it is local-inertial on the 5 m geometry),
+and stays within 0.12–0.27 m rms of the 5 m local-inertial run, which it
+approximates. Until 0.9.0 SGS checkerboarded on most meshes, the Cartesian
+grid included (extrema in brackets; 36–42% of the wet cells on rHEALPix and
+the plain and rotated Cartesian grids, with the stored volume oscillating
+on the rising limb and maximum depths of 11 m): the sources were added
+before the face fluxes were computed, so the Eden's inflow cell, lifted
+≈ 2.4 m a step, and the adaptive Δt drove each other (HYDRAULICS §15.15).
+The noise had raised the levels on the Cartesian grids (storage 1.06 and
+0.96 then). With the sources added after the flux update (`--source-order
+post`, the SGS default) every mesh is smooth (extrema ≤ 0.016, storage
+rising throughout; the check is no longer an expected failure). Notebook 06
+§8 maps it per mesh and is the re-check after SGS changes (`RERUN_SGS = true`).
 
 ---
 

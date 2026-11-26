@@ -23,6 +23,12 @@
 #       (a family whose library is not installed is skipped, except in CI)
 #   S9  the command line builds SGS tables for a loaded mesh without them
 #       when --dem is given (0.8.1), and refuses without --dem
+#   S10 sources with the flux update (--source-order post, the SGS default):
+#       at steady state a point source's cell holds the same level whatever
+#       Δt is; added before the fluxes, its level moves by ≈ Q·ΔΔt/area —
+#       the coupling that let the adaptive Δt drive the SGS checkerboard
+#       (HYDRAULICS §15.15). Mass balance either way; the defaults resolve
+#       (sgs: post, standard: pre)
 #
 #   FLOODA5_NO_VIS=1 julia --project=. test/test_sgs_general.jl
 
@@ -360,6 +366,38 @@ end
             main(["--meshload", HEX, "--flow-model", "sgs", "--rainfall", "10", "--sim-duration", "10"])
         end
     end
+end
+
+@testset "S10 — sources with the flux update (--source-order post)" begin
+    # A point source on the slope below the ridge, draining to the open west
+    # side; Δt fixed by dt_max (the CFL step is ~10 s), run to steady state.
+    Q = 40.0; T = 2700.0
+    function src_run(order, dtmax)
+        st = _quiet(() -> initialise_flow_model(MESH, SGSFlow(); scheme_options(:recommended, :sgs)...))
+        c = argmin(hypot.(st.cell_lons .- 0.0011, st.cell_lats .- 0.0015))
+        src = InjectionPoint(c, st.cell_ids[c], Q, st.cell_lons[c], st.cell_lats[c])
+        _quiet() do
+            run_simulation!(st, MESH, T, dtmax, nothing, :none; method = SGSFlow(),
+                            courant = 0.5, all_sources = AbstractSource[src], source_order = order)
+        end
+        t = st.sgs_tables[c]
+        return (wse = t.z_min + st.water_depth[c], a = t.cell_area, c = c, st = st)
+    end
+    pre1 = src_run(:pre, 0.5);  pre2 = src_run(:pre, 1.0)
+    post1 = src_run(:post, 0.5); post2 = src_run(:post, 1.0)
+    d_pre = pre1.wse - pre2.wse; d_post = post1.wse - post2.wse
+    @test isapprox(d_pre, Q * 0.5 / pre1.a; rtol = 0.1)        # pre: the level follows Δt (8.6 mm) …
+    @test abs(d_post) < 0.05 * abs(d_pre)                       # … post: it does not (< 0.1 mm)
+    @test post1.st.vol_removed > 0.8 * Q * T                    # (steady: nearly all of it drains)
+    for r in (pre1, pre2, post1, post2)                         # mass balance
+        @test isapprox(sum(r.st.volume) + r.st.vol_removed, Q * T; rtol = 1e-9)
+        @test minimum(r.st.volume) >= 0.0
+        @test r.st.water_depth[r.c] ≈ wse_from_volume(r.st.sgs_tables[r.c], r.st.volume[r.c]) -
+                                      r.st.sgs_tables[r.c].z_min   # depth kept in step with the source
+    end
+    @test_throws ArgumentError run_simulation!(_quiet(() -> initialise_flow_model(MESH, SGSFlow())),
+                                               MESH, 1.0, 1.0, nothing, :none; source_order = :middle)
+    @test SGS_DEFAULT_SOURCE_ORDER === :post
 end
 
 println("\nGeneral-mesh SGS tests complete.")
