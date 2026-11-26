@@ -145,7 +145,8 @@ export function deriveHazard(name, depth, velocity, p = HAZARD_DEFAULTS) {
 
 /** The statistics runStatistics returns (STAT_VARS). */
 export const STAT_VARS = ['max_water_depth', 'max_velocity', 'max_depth_velocity', 'max_hazard_rating',
-                          'max_hazard_degree', 'max_hazard_class_arr', 'time_first_flooded', 'flood_duration'];
+                          'max_hazard_degree', 'max_hazard_class_arr', 'time_max_water_depth',
+                          'time_first_flooded', 'flood_duration'];
 
 /**
  * run_statistics: per-cell statistics over frames at `times` (s), in one
@@ -156,7 +157,7 @@ export const STAT_VARS = ['max_water_depth', 'max_velocity', 'max_depth_velocity
 export function runStatistics(times, frame, n, p = HAZARD_DEFAULTS) {
   const nf = times.length;
   const mx = { max_water_depth: new Float32Array(n).fill(NaN) };
-  const tfirst = new Float32Array(n).fill(NaN), dur = new Float32Array(n);
+  const tfirst = new Float32Array(n).fill(NaN), dur = new Float32Array(n), tmax = new Float32Array(n).fill(NaN);
   let haveV = false;
   const t = DEBRIS_TABLES[p.landuse];
   const fd = p.flood_depth;
@@ -172,7 +173,10 @@ export function runStatistics(times, frame, n, p = HAZARD_DEFAULTS) {
     for (let i = 0; i < n; i++) {
       const x = d[i];
       if (!Number.isFinite(x)) continue;
-      if (Number.isNaN(md[i]) || x > md[i]) md[i] = x;
+      if (Number.isNaN(md[i]) || x > md[i]) {
+        md[i] = x;
+        if (x > 0) tmax[i] = times[k];
+      }
       if (x >= fd) {
         if (Number.isNaN(tfirst[i])) tfirst[i] = times[k];
         dur[i] += w;
@@ -197,6 +201,7 @@ export function runStatistics(times, frame, n, p = HAZARD_DEFAULTS) {
       maxin(mar, i, arrHazardClass(x, u));
     }
   }
+  mx.time_max_water_depth = tmax;
   mx.time_first_flooded = tfirst;
   mx.flood_duration = dur;
   return mx;

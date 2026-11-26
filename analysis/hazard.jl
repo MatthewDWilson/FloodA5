@@ -250,7 +250,8 @@ The statistics `run_statistics` returns, by name, with the frame variable or
 hazard each one summarises.
 """
 const STAT_VARS = ("max_water_depth", "max_velocity", "max_depth_velocity", "max_hazard_rating",
-                   "max_hazard_degree", "max_hazard_class_arr", "time_first_flooded", "flood_duration")
+                   "max_hazard_degree", "max_hazard_class_arr", "time_max_water_depth",
+                   "time_first_flooded", "flood_duration")
 
 """
     run_statistics(times, frame, n, p = HazardParams()) → Dict{String,Vector{Float32}}
@@ -261,6 +262,8 @@ returns `(depth, velocity)` of frame k (length-`n` vectors; `velocity` may be
 
 - `max_water_depth`, `max_velocity`, `max_<hazard>` (`HAZARD_VARS`): maxima over
   the frames — at frame resolution, so peaks between output frames are missed;
+- `time_max_water_depth` (s): the time of the (first) frame with the
+  maximum depth (NaN where the depth never exceeds 0);
 - `time_first_flooded` (s): the time of the first frame with depth ≥
   `p.flood_depth` (NaN if never);
 - `flood_duration` (s): the time with depth ≥ `p.flood_depth`, each frame
@@ -273,7 +276,7 @@ function run_statistics(times::AbstractVector, frame::Function, n::Integer, p::H
     nf = length(times)
     mx = Dict{String,Vector{Float32}}()
     mx["max_water_depth"] = fill(NaN32, n)
-    tfirst = fill(NaN32, n); dur = zeros(Float32, n)
+    tfirst = fill(NaN32, n); dur = zeros(Float32, n); tmax = fill(NaN32, n)
     have_v = false
     t = debris_table(p.landuse)
     fd = p.flood_depth
@@ -285,7 +288,10 @@ function run_statistics(times::AbstractVector, frame::Function, n::Integer, p::H
         @inbounds for i in 1:n
             x = Float64(d[i])
             isfinite(x) || continue
-            (isnan(md[i]) || x > md[i]) && (md[i] = x)
+            if isnan(md[i]) || x > md[i]
+                md[i] = x
+                x > 0 && (tmax[i] = times[k])
+            end
             if x >= fd
                 isnan(tfirst[i]) && (tfirst[i] = times[k])
                 dur[i] += w
@@ -311,6 +317,7 @@ function run_statistics(times::AbstractVector, frame::Function, n::Integer, p::H
             _maxin!(mar, i, arr_hazard_class(x, u))
         end
     end
+    mx["time_max_water_depth"] = tmax
     mx["time_first_flooded"] = tfirst
     mx["flood_duration"] = dur
     return mx

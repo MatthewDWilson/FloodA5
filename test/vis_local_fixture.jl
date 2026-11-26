@@ -85,7 +85,7 @@ end
 const _HZ = "landuse=woodland&mass=40&height=1.4&theta=70&alpha=3&beta=0.3&flood_depth=0.3"
 const _HAZ = ("depth_velocity", "hazard_rating", "hazard_degree", "hazard_class_arr")
 const _STATS = ("max_water_depth", "max_velocity", "max_depth_velocity", "max_hazard_rating",
-                "max_hazard_degree", "max_hazard_class_arr", "time_first_flooded", "flood_duration")
+                "max_hazard_degree", "max_hazard_class_arr", "time_max_water_depth", "time_first_flooded", "flood_duration")
 
 function _sgs_requests()
     r = ["/api/info", "/api/frames", "/api/mesh", "/api/run"]
@@ -117,6 +117,7 @@ end
 _depth_requests() = ["/api/info", "/api/frames", "/api/mesh", "/api/run", "/api/frames/1/water_depth",
                      "/api/frames/3/water_depth", "/api/frames/1/hazard_rating", "/api/ranges", "/api/ranges?wet=0",
                      "/api/stats/max_water_depth", "/api/stats/max_velocity", "/api/stats/time_first_flooded",
+                     "/api/stats/time_max_water_depth",
                      "/api/stats/flood_duration?flood_depth=0.05", "/api/cell/3?frame=2", "/api/series/3",
                      "/api/series/1?var=depth_velocity"]
 

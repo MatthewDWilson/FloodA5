@@ -364,7 +364,7 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             VS.set_mesh!(vis, small_mesh())
             VS.push_frame!(vis, 0.0, Dict("water_depth" => [0.0, 0.2, 0.4]))
             @test isempty(json_(port, "/api/info")["derived"])            # no velocity: no hazard
-            @test String.(json_(port, "/api/info")["stats"]) == ["max_water_depth", "time_first_flooded", "flood_duration"]
+            @test String.(json_(port, "/api/info")["stats"]) == ["max_water_depth", "time_max_water_depth", "time_first_flooded", "flood_duration"]
             @test reinterpret(Float32, get_(port, "/api/stats/max_water_depth").body) == Float32[0, 0.2, 0.4]
             @test get_(port, "/api/stats/max_velocity").status == 404
             VS.push_frame!(vis, 10.0, Dict("water_depth" => [0.5, 0.1, 0.4]))

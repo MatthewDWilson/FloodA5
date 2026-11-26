@@ -46,6 +46,10 @@ import { LocalSource, ABOUT_URL, DEFAULTS_URL } from './local/source.js';
 // classes: its class set (classes.js), shown classed by default if
 // classedDefault, always if classedOnly; time: values are times (s).
 const T = COLOR_MODE.texture;
+
+/** The hazard parameters each layer depends on (groups of the Parameters section). */
+const VAR_PARAMS = { hr: ['landuse'], max_hr: ['landuse'], hd: ['person'], max_hd: ['person'],
+                     t_first: ['flood'], duration: ['flood'] };
 const VARS = {
   depth:      { label: 'Water depth',     unit: 'm',   source: 'water_depth', stat: 'water_depth', cmode: COLOR_MODE.depth, colormap: 'depth',   fixed: null, kind: 'frame', classes: 'depth' },
   level:      { label: 'Water level',     unit: 'm',   source: 'water_depth', stat: 'level',       cmode: COLOR_MODE.level, colormap: 'viridis', fixed: null, kind: 'frame' },
@@ -61,6 +65,7 @@ const VARS = {
   max_hr:     { label: 'Maximum hazard rating (Defra)', unit: '', source: 'max_hazard_rating', cmode: T, colormap: 'turbo', fixed: null, kind: 'static', classes: 'hazard_rating', classedDefault: true },
   max_arr:    { label: 'Maximum hazard class (ARR)', unit: '', source: 'max_hazard_class_arr', cmode: T, colormap: 'turbo', fixed: null, kind: 'static', classes: 'hazard_class_arr', classedOnly: true },
   max_hd:     { label: 'Maximum hazard degree (Chen et al.)', unit: '', source: 'max_hazard_degree', cmode: T, colormap: 'magma', fixed: [0, 1], kind: 'static' },
+  t_max:      { label: 'Time of maximum depth', unit: 's', source: 'time_max_water_depth', cmode: T, colormap: 'viridis', fixed: null, kind: 'static', time: true },
   t_first:    { label: 'Time of first flooding', unit: 's', source: 'time_first_flooded', cmode: T, colormap: 'viridis', fixed: null, kind: 'static', time: true },
   duration:   { label: 'Duration of flooding', unit: 's', source: 'flood_duration', cmode: T, colormap: 'viridis', fixed: null, kind: 'static', time: true },
 };
@@ -305,6 +310,7 @@ export function startViewer(engine) {
   function setBed(on, user = true) {
     if (user) app.bedUser = on;
     $('show-bed').checked = on;
+    $('bed-controls').hidden = !on;
     if (app.bed) app.bed.show = on;
   }
 
@@ -574,7 +580,22 @@ export function startViewer(engine) {
     }
     sel.value = avail.includes(cur) ? cur : 'depth';
     app.varName = sel.value;
-    $('hazard-section').hidden = !avail.some(k => VARS[k].kind !== 'frame');
+    updateParams();
+  }
+
+  /**
+   * Show only the parameters the layer shown uses (and the plot's variable,
+   * while the plot is open): land use for the hazard rating, the person for
+   * the hazard degree, the flooded threshold for first flooding and duration.
+   */
+  function updateParams() {
+    const names = [app.varName];
+    if (!$('plot').hidden) names.push(plotVar());
+    const want = new Set(names.flatMap(n => VAR_PARAMS[n] || []));
+    for (const g of ['landuse', 'person', 'flood']) $(`hz-g-${g}`).hidden = !want.has(g);
+    $('hazard-section').hidden = want.size === 0;
+    $('hz-for').textContent = want.size ? `· ${[...new Set(names.filter(n => VAR_PARAMS[n]))].map(n => VARS[n].label).join(', ')}` : '';
+    status.params = [...want];
   }
 
   // -------------------------------------------------------------------------
@@ -698,6 +719,7 @@ export function startViewer(engine) {
     status.palette = cmap; status.classed = classed;
     if (v.kind !== 'static') status.static = null;
     renderClassLegend();
+    updateParams();
     updateTimeline();
   }
 
@@ -1118,7 +1140,7 @@ export function startViewer(engine) {
 
   function pick(x, y, cx, cy) {
     const tip = $('tooltip');
-    if (!app.mesh) { tip.hidden = true; return; }
+    if (!app.mesh || !$('ctx-menu').hidden) { tip.hidden = true; return; }
     let ll = null;
     try { ll = engine.pickLonLat(x, y); } catch { ll = null; }
     const i = ll ? app.locator.find(ll.lon, ll.lat) : -1;
@@ -1242,6 +1264,7 @@ export function startViewer(engine) {
     setPlotDock(app.plot.dock);
     if (app.plot.chart) return;
     populatePlotVars();
+    updateParams();
     try {
       const Chart = await loadChart();
       app.plot.chart ??= new TimePlot($('plot-canvas'), Chart, { onPick: t => goToTime(t) });
@@ -1259,6 +1282,7 @@ export function startViewer(engine) {
     p.chart?.destroy(); p.chart = null;
     renderMarkers();
     status.plot = { cells: [], var: plotVar(), points: 0 };
+    updateParams();
   }
 
   /** Show the frame nearest to time t (a click on the plot). */
@@ -1371,6 +1395,8 @@ export function startViewer(engine) {
     $('ctx-add').textContent = `Add cell ${i} to plot`;
     $('ctx-add').disabled = has;
     $('ctx-remove').hidden = !has;
+    $('tooltip').hidden = true;                 // (it would sit on the menu)
+    closePaletteMenu(); closePaletteMenu('bed');
     menu.hidden = false;
     menu.style.left = `${Math.min(cx, window.innerWidth - menu.offsetWidth - 4)}px`;
     menu.style.top = `${Math.min(cy, window.innerHeight - menu.offsetHeight - 4)}px`;
@@ -1380,15 +1406,19 @@ export function startViewer(engine) {
   function closeCtxMenu() { $('ctx-menu').hidden = true; app.plot.ctxCell = -1; }
 
   function setupContextMenu() {
-    const canvas = engine.canvas;
+    const canvas = engine.canvas, map = $('viewer');
     let down = null;
-    // right-drag turns or zooms the view in both engines: only a right *click* opens the menu
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
-    canvas.addEventListener('pointerdown', e => {
+    // right-drag turns or zooms the view in both engines: only a right *click* opens the menu.
+    // The browser's own menu is suppressed over the whole map (engines put layers over the
+    // canvas: credits, labels), or it would open on top of this one.
+    map.addEventListener('contextmenu', e => e.preventDefault(), true);
+    $('markers').addEventListener('contextmenu', e => e.preventDefault());
+    $('ctx-menu').addEventListener('contextmenu', e => e.preventDefault());
+    map.addEventListener('pointerdown', e => {
       down = e.button === 2 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
       if (!$('ctx-menu').hidden) closeCtxMenu();
     }, true);
-    canvas.addEventListener('pointerup', e => {
+    map.addEventListener('pointerup', e => {
       if (e.button !== 2) return;
       const up = { x: e.clientX, y: e.clientY, t: performance.now() };
       if (isClick(down, up)) {
@@ -1459,7 +1489,7 @@ export function startViewer(engine) {
       refreshRanges(true);
       if (app.plot.series.length && plotVar() === 'level') drawPlot();
     };
-    $('plot-var').onchange = () => { app.plot.varName = $('plot-var').value; return reloadSeries(); };
+    $('plot-var').onchange = () => { app.plot.varName = $('plot-var').value; updateParams(); return reloadSeries(); };
     $('plot-dock').onclick = () => setPlotDock(app.plot.dock === 'bottom' ? 'right' : 'bottom');
     $('plot-close').onclick = () => closePlot();
     $('plot-csv').onclick = () => downloadCsv();

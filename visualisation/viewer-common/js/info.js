@@ -116,7 +116,7 @@ export function renderRun(rec) {
 /** Order of the variables in the About tab (others follow). */
 const ABOUT_ORDER = ['water_depth', 'level', 'velocity', 'saturation', 'elevation',
   'depth_velocity', 'hazard_rating', 'hazard_class_arr', 'hazard_degree',
-  'max_water_depth', 'max_velocity', 'max_hazard', 'time_first_flooded', 'flood_duration'];
+  'max_water_depth', 'max_velocity', 'max_hazard', 'time_max_water_depth', 'time_first_flooded', 'flood_duration'];
 
 /** Order of the general notes (others follow). */
 const TOPIC_ORDER = ['colour_range', 'wet_threshold', 'vertical_offset', 'depth_bias', 'hazard_parameters', 'statistics'];
