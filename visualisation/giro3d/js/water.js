@@ -24,7 +24,7 @@ uniform sampler2D uDepth;
 uniform sampler2D uCvar;
 uniform sampler2D uStatic;
 uniform sampler2D uCorner;
-uniform float uTexW, uStaticW, uCornerW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias, uSmooth, uBlend;
+uniform float uTexW, uStaticW, uCornerW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias, uBiasNear, uBiasFar, uSmooth, uBlend;
 uniform vec3 uCentre;
 varying float vDepth;
 varying float vCval;
@@ -46,7 +46,7 @@ void main() {
   vec3 n = fa5Normal(position + uCentre);
   // (the mesh's matrix is a translation to uCentre: model = world − uCentre)
   vec3 p0 = position + n * (level + uOffset - uH0);
-  vec3 p = fa5DepthBias(p0, cameraPosition - uCentre, uDepthBias);
+  vec3 p = fa5DepthBias(p0, cameraPosition - uCentre, uDepthBias, vec2(uBiasNear, uBiasFar));
   vDepth = d;
   vEdge = edge;
   vCval = cval;
@@ -82,7 +82,7 @@ void main() {
 
 const STYLE_UNIFORMS = { mode: 'uMode', cmode: 'uCmode', cmin: 'uCmin', cmax: 'uCmax', alpha: 'uAlpha',
                          minDepth: 'uMinDepth', exag: 'uExag', offset: 'uOffset', borders: 'uBorders',
-                         depthBias: 'uDepthBias', smooth: 'uSmooth', blend: 'uBlend', shadeExag: 'uShadeExag' };
+                         depthBias: 'uDepthBias', biasNear: 'uBiasNear', biasFar: 'uBiasFar', smooth: 'uSmooth', blend: 'uBlend', shadeExag: 'uShadeExag' };
 
 export class SurfaceMesh {
   /**
@@ -131,6 +131,7 @@ export class SurfaceMesh {
         uCmin: { value: s.cmin }, uCmax: { value: s.cmax }, uAlpha: { value: s.alpha },
         uMinDepth: { value: s.minDepth }, uExag: { value: s.exag },
         uBorders: { value: s.borders }, uDepthBias: { value: s.depthBias },
+        uBiasNear: { value: s.biasNear }, uBiasFar: { value: s.biasFar },
         uCorner: { value: floatTexture({ data: new Float32Array(4), width: 1, height: 1 }) }, uCornerW: { value: 1 },
         uSmooth: { value: s.smooth }, uBlend: { value: s.blend }, uShadeExag: { value: s.shadeExag },
       },

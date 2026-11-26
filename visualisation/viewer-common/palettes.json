@@ -2,7 +2,7 @@
   "flooda5_palettes": 1,
   "palettes": [
     {
-      "name": "Shallow to deep (example)",
+      "name": "Shallow to deep",
       "stops": [
         { "pos": 0, "color": "#e6f5d0" },
         { "pos": 0.3, "color": "#7fcdbb" },
@@ -11,7 +11,7 @@
       ]
     },
     {
-      "name": "Bed: lowland to upland (example)",
+      "name": "Bed: lowland to upland",
       "stops": [
         { "pos": 0, "color": "#3b5b3a" },
         { "pos": 0.5, "color": "#c2b280" },

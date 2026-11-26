@@ -30,7 +30,8 @@ ${corners ? `  float corner = vsInput.attributes.fa5corner;
   }
 ` : ''}  vec3 n = fa5Normal(vsInput.attributes.positionMC + u_centre);
   vec3 p = vsInput.attributes.positionMC + n * (level + u_offset - u_h0);
-  vsOutput.positionMC = fa5DepthBias(p, (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz, u_depthBias);
+  vsOutput.positionMC = fa5DepthBias(p, (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz, u_depthBias,
+                                     vec2(u_biasNear, u_biasFar));
   v_depth = d;
   v_fa5Edge = vsInput.attributes.fa5edge;
   v_cval = cval;
@@ -54,7 +55,7 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
 const STYLE_UNIFORMS = [
   ['u_offset', 'offset'], ['u_mode', 'mode'], ['u_cmode', 'cmode'], ['u_cmin', 'cmin'], ['u_cmax', 'cmax'],
   ['u_alpha', 'alpha'], ['u_minDepth', 'minDepth'], ['u_exag', 'exag'], ['u_borders', 'borders'],
-  ['u_depthBias', 'depthBias'], ['u_smooth', 'smooth'], ['u_blend', 'blend'], ['u_shadeExag', 'shadeExag'],
+  ['u_depthBias', 'depthBias'], ['u_biasNear', 'biasNear'], ['u_biasFar', 'biasFar'], ['u_smooth', 'smooth'], ['u_blend', 'blend'], ['u_shadeExag', 'shadeExag'],
 ];
 
 export class SurfaceLayer {
@@ -116,6 +117,10 @@ export class SurfaceLayer {
         upAxis: C.Axis.Z,
         forwardAxis: C.Axis.X,
         customShader: this.shader,
+        // (unlit: no image-based lighting; CesiumJS's dynamic environment map would
+        // be computed per model for nothing, and its clean-up could fail when models
+        // are replaced: "e._va is undefined" in DynamicEnvironmentMapManager, Firefox)
+        environmentMapOptions: { enabled: false },
         shadows: C.ShadowMode.DISABLED,
         backFaceCulling: false,
         allowPicking: false,

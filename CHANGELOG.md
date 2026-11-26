@@ -33,6 +33,57 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.15] — 2026-11-26
+
+Output files on the web in the globe viewers; shared palettes in the
+repository (branch `wpv-remote`; PATCH: viewer only, results unchanged).
+
+- Files on a web server: `?file=URL` (absolute, or relative to the page:
+  a static host with the viewer and the outputs) or *Open…* → *or from a
+  link*. Read in the browser like a local file (0.8.10), through HTTP range
+  requests where the server serves them: `js/local/rangefile.js`
+  (`RangeCache`: 64 KiB blocks fetched on demand by synchronous range
+  requests in the worker, adjacent blocks in one request, an LRU cache of at
+  most 256 MiB) behind a read-only file in h5wasm's file system; otherwise
+  the whole file is downloaded (with progress in the log). The 400 MB
+  Carlisle A5 run opened from another origin with 17 MB fetched (1.7 s);
+  the maximum depth over all 112 frames brought it to 33 MB. Errors name
+  the cause (HTTP status; CORS/offline). The page's address then carries
+  `?file=…` (a shareable link to the run); a failed link stays in the
+  *Open* panel to be corrected. `/api/info` adds `remote`.
+- The top bar's *Open…* shows the *Open* panel (file or link) instead of
+  the file chooser directly.
+- `visualisation/viewer-common/palettes.json` is in the repository (no
+  longer git-ignored; the template `palettes.example.json` became it, with
+  its two palettes); without a server the viewer reads it directly, so a
+  static host offers the *Shared* palettes too.
+- Fixes from testing 0.8.14:
+  - CesiumJS (Firefox): "e._va is undefined" when opening a file — from
+    CesiumJS's dynamic environment map, which every glTF model computes by
+    default (image-based lighting) and whose clean-up can run twice when
+    models are replaced; the surfaces are unlit: it is now off for them
+    (`environmentMapOptions: { enabled: false }`), which also saves the work.
+  - Terrain basemaps: water hidden at a few hundred metres — the depth bias
+    (0.8.6) came in only from 800 m, for 3D tiles; terrain tiles are coarse
+    at middle distances too: there it comes in from 30 m, full from 600 m
+    (`surface.js` `DEPTH_BIAS_RANGE`, uniforms biasNear/biasFar, set per
+    basemap).
+  - Vertical offset: an estimate beyond ±120 m (from tiles too coarse at the
+    view, e.g. a basemap switched while zoomed out) is refused, not saved;
+    such a value saved before is ignored.
+  - Giro3D: a sky — a gradient near the ground (Giro3D's physical SkyDome is
+    almost white at the low angles of an oblique view, and takes the
+    camera's up, which these controls keep on the Earth's axis), the
+    Atmosphere entity's halo from space only (inside its shell it whitens
+    the view; its veil washes out light basemaps and is off).
+- Tests: `viewer-common/test/rangefile.test.js` (reads across blocks and at
+  the end, one request for adjacent blocks, the request size limit, cache
+  hits, the cache limit and LRU order, short answers and failures, file
+  names from URLs, which links may be opened — http(s) and relative only).
+  Browser smoke: a cross-origin range server, a server without ranges (full
+  download), a 404, a static host with a relative link and the shared
+  palettes.
+
 ## [0.8.14] — 2026-11-26
 
 Smooth water and bed surfaces in the globe viewers (branch `wpv-smooth`;

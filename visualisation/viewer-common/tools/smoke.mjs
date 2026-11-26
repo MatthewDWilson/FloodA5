@@ -7,6 +7,7 @@
 //                                    screenshot shot_1.png, shot_2.png, …)
 //        [--file RUN.h5 ...]        open local files in the page, in turn (as "Open file…"):
 //                                   for pages started without a run, or to replace it
+//        [--files-last]             open them after the --eval steps (default: before)
 //
 // Starts Edge/Chrome headless with a DevTools port, opens the viewer, waits
 // until it reports a rendered frame (window.__flooda5), takes screenshots and
@@ -124,7 +125,8 @@ try {
     if (st && (st.state === 'error' || (st.shownFrame !== null && st.renders > 0))) break;
     if (localFile && st && st.state === 'ready') break;           // (no run yet: open the file)
   }
-  for (const f of (st && st.state !== 'error' ? localFiles : [])) {       // one after another, as a user would
+  const filesLast = args.includes('--files-last');
+  const openFiles = async () => { for (const f of (st && st.state !== 'error' ? localFiles : [])) {   // one after another, as a user would
     const { root } = await send('DOM.getDocument');
     const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#file-input' });
     await evaluate("window.__flooda5.local && (window.__flooda5.local.state = 'chosen'), 0");
@@ -137,7 +139,8 @@ try {
       if (st.state === 'error' || l?.state === 'error' || (l?.state === 'open' && st.shownFrame !== null)) break;
     }
     console.error(`local file: ${f} → ${JSON.stringify(st.local)}`);
-  }
+  } };
+  if (!filesLast) await openFiles();
   await sleep(settle);
   await shot(out);
   for (let k = 0; k < evals.length; k++) {
@@ -153,6 +156,7 @@ try {
     await sleep(settle);
     await shot(out.replace(/\.png$/i, `_${k + 1}.png`));
   }
+  if (filesLast) { await openFiles(); await sleep(settle); await shot(out.replace(/\.png$/i, '_files.png')); }
   const profSecs = +opt('--profile', '0');        // --profile N: CPU profile, top self time
   let profile;
   if (profSecs > 0) {

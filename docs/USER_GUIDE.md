@@ -570,7 +570,18 @@ When zoomed out, 3D tiles and terrain are drawn from coarse levels of
 detail that stand metres above the ground they simplify; the water is
 therefore drawn slightly nearer the camera than it is — up to 1.5 % of its
 distance, from 800 m away (nothing closer, so close views keep exact
-occlusion) — so that shallow water is not hidden in large triangles.
+occlusion) — so that shallow water is not hidden in large triangles. Terrain
+basemaps (Cesium World Terrain, Terrarium) are coarse at middle distances
+too, so there the shift comes in from 30 m and is full from 600 m (0.8.15;
+before, water disappeared when zooming in to a few hundred metres).
+An offset estimate beyond ±120 m (no geoid height is) means the basemap was
+too coarse at that view — e.g. switching basemap while zoomed out to the
+whole globe — and is neither used nor saved (0.8.15): zoom in to the domain
+and press *Estimate*.
+
+The Giro3D viewer draws a sky near the ground (pale blue at the horizon to
+deeper blue overhead) and the atmosphere's halo around the globe from space
+(0.8.15; it was black).
 
 **Colours.** Colour by water depth, water level, speed or (SGS) wetted
 fraction. The range is, by default, fixed for the whole run: the 2nd to
@@ -609,13 +620,13 @@ such a file (read in the browser, nothing is uploaded; a name in use gets
 that fails any check is refused as a whole. Editing a palette that is in
 use recolours the map when it is saved.
 
-A group can share palettes: put a palette file named `palettes.json` in
-`visualisation/viewer-common/` (beside `config.json`; git-ignored; template
-`palettes.example.json`). The server checks it on each page load (same
-rules, at most 256 KiB) and offers its palettes as the read-only *Shared*
-group (`/api/palettes`); a file that fails is ignored, with a warning in the
-viewer's log. The file itself is never served, nor any other file of that
-directory beyond the viewer's own code.
+A group can share palettes: `visualisation/viewer-common/palettes.json`
+(in the repository since 0.8.15, with two palettes to start from; edit it
+and commit it). The server checks it on each page load (same rules, at most
+256 KiB) and offers its palettes as the read-only *Shared* group
+(`/api/palettes`); a file that fails is ignored, with a warning in the
+viewer's log. Without a server (a static host) the viewer reads the file
+itself, with the same checks.
 
 **Hazard variables** (since 0.8.9; runs with depth and speed). The variable
 menu also offers, for each frame: *Depth × velocity* (m²/s); the Defra/EA
@@ -691,7 +702,7 @@ long runs). The plots use Chart.js, loaded from jsDelivr when the first
 plot opens; for offline use point `FLOODA5_CHARTJS_URL` at a local copy of
 `chart.umd.min.js` (from the `chart.js` package, served by any local web server).
 
-**Files from this computer** (since 0.8.10). *Open file…* (top bar), or a
+**Files from this computer** (since 0.8.10). *Open…* (top bar) → *Choose a file…*, or a
 file dropped anywhere on the page, opens a FloodA5 output file (format 2:
 FloodA5 0.4 or later) from your computer in this page. The browser reads it
 itself — HDF5 compiled to WebAssembly (h5wasm 0.10.3) in a background worker,
@@ -716,6 +727,24 @@ loaded from jsDelivr the first time; for offline use copy `hdf5_hl.js` and
 `FLOODA5_H5WASM_URL=/viz/viewer-common/vendor/hdf5_hl.js`);
 a statistic over its 112 frames about half a second. Format-1 files (≤ 0.3.x)
 have no cell polygons: replay them with `web_replay.jl --mesh`.
+
+**Files on the web** (since 0.8.15). *Open…* → *or from a link* (an
+http(s) URL, or a path relative to the page), or a link to the page with
+`?file=URL` — e.g. `…/viz/giro3d/index.html?file=https://example.org/runs/event.h5`
+or, with the viewer and the outputs on one static web host,
+`?file=../../data/event.h5` — opens an output file on a web server in the
+same way: read in this browser, from that server. Where the server answers
+HTTP range requests (most do: static hosts, object stores) only the parts
+needed are fetched — the 400 MB Carlisle run opened with 17 MB, and its
+maximum-depth map over all 112 frames needed 33 MB in all; a server that
+does not gets the whole file downloaded first. A server on another site
+must allow the page to read the file (CORS: `Access-Control-Allow-Origin`);
+the file's size is read from `Content-Range` or, where the browser hides
+that header from other sites, from a HEAD request. Once open, the page's
+address carries `?file=…`, so it can be shared as a link to that run; a
+link that fails leaves the *Open* panel up with the link to correct. The
+viewer needs no server of its own for this (a static host of
+`visualisation/`; above).
 
 **Vertical offset.** Model heights are in the DEM's datum (usually mean sea
 level: a geoid); Google tiles and Cesium World Terrain use heights above the

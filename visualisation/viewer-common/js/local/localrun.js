@@ -156,12 +156,14 @@ export function depthDatum(flowModel, elevation, stat) {
 export class LocalRun {
   /**
    * @param reader  the file (see the header)
-   * @param name    the file's name (label, source)
+   * @param name    the file's name (label)
+   * @param source  where it is (default: the name; a URL for a file on a web server)
    * @param viewer  the viewer page ("cesium" / "giro3d"), as the server's info
    */
-  constructor(reader, { name = 'run.h5', viewer = 'cesium' } = {}) {
+  constructor(reader, { name = 'run.h5', viewer = 'cesium', source = null } = {}) {
     this.r = reader;
     this.name = name;
+    this.source = source || name;       // where the file is (a URL for a file on a web server)
     this.viewer = viewer;
     const r = reader;
     if (!r.has('/results')) {
@@ -263,7 +265,7 @@ export class LocalRun {
 
   info() {
     return {
-      label: this.name, flow_model: this.flowModel, source: this.name, id_scheme: this.idScheme,
+      label: this.name, flow_model: this.flowModel, source: this.source, id_scheme: this.idScheme,
       flooda5_version: String(this.rootAttrs.flooda5_version ?? ''), viewer: this.viewer,
       protocol: PROTOCOL, mode: 'replay', complete: true, frames: this.t.length, vars: this.vars.slice(),
       derived: this.derivedNames(), stats: this.statNames(), mesh_ready: true, n_cells: this.nCells,
@@ -378,7 +380,7 @@ export class LocalRun {
     rec.mesh = mesh;
     rec.frames = { n: this.t.length, t_first: this.t[0] ?? null, t_last: this.t[this.t.length - 1] ?? null };
     const out = plain(rec);
-    out.file = this.name;
+    out.file = this.source;
     out.label = this.name;
     return out;
   }

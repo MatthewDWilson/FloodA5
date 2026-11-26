@@ -32,13 +32,20 @@ import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile,
          cornerIndex, cornerValues, bedCornerValues } from './geometry.js';
 import { cssGradient, colormapKey, colormapLabel } from './colormaps.js';
 import { initPalettes, isPalette, fillPaletteMenu, openPaletteEditor, paletteApi } from './palette-editor.js';
-import { COLOR_MODE } from './surface.js';
+import { COLOR_MODE, DEPTH_BIAS_RANGE } from './surface.js';
 import { UI_HTML } from './ui.js';
 import { renderRun, renderAbout, shellLine, esc } from './info.js';
 import { TimePlot, SERIES_COLORS, MAX_SERIES, freeSlot, isClick, seriesValues, seriesCsv, nearestIndex } from './plot.js';
 import { CLASS_SETS, classify, classOf, classLabels, classedName, classColors, parseBreaks } from './classes.js';
 import { DEFAULT_HAZARD, LAND_USES, PERSON_PRESETS, normalizeHazard, hazardQuery, describeHazard } from './hazard.js';
 import { LocalSource, ABOUT_URL, DEFAULTS_URL } from './local/source.js';
+import { urlFileName, resolveRunUrl } from './local/rangefile.js';
+
+/** Largest plausible vertical offset (m): geoid heights are about −107 to +86 m worldwide. */
+const MAX_OFFSET = 120;
+
+/** A group's shared palettes without a server (the server offers them at /api/palettes). */
+const PALETTES_URL = new URL('../palettes.json', import.meta.url).href;
 
 // source: the variable read from the server; stat: its name in /api/ranges;
 // colormap: the default palette; kind: 'frame' (a frame variable), 'derived'
@@ -143,7 +150,7 @@ export function startViewer(engine) {
 
   function refreshStatus() {
     if (status.state === 'error') return;
-    if (app.source) return setStatus('replay', 'local file');
+    if (app.source) return setStatus('replay', app.sourceUrl ? 'web file' : 'local file');
     if (app.standalone || app.cfg?.no_data) return setStatus('', 'no data');
     if (app.wsDown) return setStatus('disconnected', app.mode === 'replay' || app.complete ? 'offline (cached)' : 'disconnected');
     if (app.mode === 'replay') return setStatus('replay', 'replay');
@@ -164,6 +171,7 @@ export function startViewer(engine) {
     // a local file answers the run's requests itself; without a server, About is a static file
     if (app.source && path.startsWith('/api/') && !path.startsWith('/api/config')) return app.source.fetch(path);
     if (app.standalone && path.startsWith('/api/about')) return fetch(ABOUT_URL, { cache: 'no-cache' });
+    if (app.standalone && path.startsWith('/api/palettes')) return fetch(PALETTES_URL, { cache: 'no-cache' });
     for (let k = 0; ; k++) {
       try {
         return await fetch(path, { cache: 'no-store' });
@@ -256,8 +264,17 @@ export function startViewer(engine) {
     // the bed surface stands in for terrain on the flat basemaps
     if (app.bed && app.bedUser === null) setBed(got === 'osm' || got === 'none', false);
     if (app.mesh) applyOffset();
+    app.water?.setStyle(biasStyle(got));
     log(`Basemap: ${$('basemap').selectedOptions[0]?.textContent || got}`);
     updateCredits();
+  }
+
+  /** The depth bias's distances for basemap `name` (surface.js DEPTH_BIAS_RANGE): terrain from nearer. */
+  function biasStyle(name = app.basemap) {
+    const terrain = name && heightDatum(name) !== 'flat' && !engine.photoreal(name);
+    const [biasNear, biasFar] = terrain ? DEPTH_BIAS_RANGE.terrain : DEPTH_BIAS_RANGE.tiles;
+    status.depthBiasRange = [biasNear, biasFar];
+    return { biasNear, biasFar };
   }
 
   function updateCredits() {
@@ -288,6 +305,7 @@ export function startViewer(engine) {
     for (const t of ['water', 'bed']) if (app.smooth[t]) await setSmooth(t, true, false);
     app.bed.setStyle({ offset: app.offset });
     applyBedStyle();
+    app.water.setStyle(biasStyle());
     app.water.setStyle({ offset: app.offset, alpha: +$('opacity').value,
                          minDepth: Math.max(+$('min-depth').value || 0, 0),
                          mode: +$('display-mode').value, exag: +$('exag').value });
@@ -378,7 +396,8 @@ export function startViewer(engine) {
       return { value: +cli, source: 'from the command line (--offset)', estimate: false };
     }
     const saved = store.get(offsetKey());
-    if (saved !== null && saved !== '' && Number.isFinite(+saved)) {
+    // (a saved value beyond any geoid height came from a coarse view before 0.8.15: estimated again)
+    if (saved !== null && saved !== '' && Number.isFinite(+saved) && Math.abs(+saved) <= MAX_OFFSET) {
       return { value: +saved, source: 'saved in this browser', estimate: false };
     }
     if (datum === 'flat') return { value: flatOffset(), source: 'flat basemap: lowest bed at the map', estimate: false };
@@ -439,6 +458,15 @@ export function startViewer(engine) {
       log(`Offset ≈ ${est.toFixed(2)} m from ${d.length} cells ` +
           `(basemap − bed: p10 ${status.calibration.p10.toFixed(1)}, p50 ${status.calibration.p50.toFixed(1)}, ` +
           `p90 ${status.calibration.p90.toFixed(1)} m)`);
+      // A geoid height is between about −107 and +86 m: anything else came from tiles too
+      // coarse for the domain (the view far away, e.g. from space) — not saved
+      if (!(Math.abs(est) <= MAX_OFFSET)) {
+        log(`Offset estimate ${est.toFixed(0)} m is not a plausible geoid height (|offset| ≤ ${MAX_OFFSET} m): ` +
+            'the basemap is too coarse at this view — zoom in to the domain and press Estimate.', 'warn');
+        status.calibration.rejected = true;
+        if (auto) setOffset(app.offset, { save: false, source: 'not estimated (view too far): zoom in and Estimate' });
+        return null;
+      }
       setOffset(Math.round(est * 10) / 10, { source: `estimated from the basemap (${d.length} cells)` });
       return status.calibration;
     } catch (e) {
@@ -1038,31 +1066,45 @@ export function startViewer(engine) {
 
   const viewerName = () => (/giro3d/i.test(engine.name) ? 'giro3d' : 'cesium');
 
+  const mbText = bytes => (bytes >= 2 ** 20 ? `${(bytes / 2 ** 20).toFixed(0)} MB` : `${(bytes / 1024).toFixed(0)} kB`);
+
   /**
-   * Open `file` (a File) in this page: it replaces the server's run here
-   * (other pages are not affected; reload to return to the server's run).
+   * Open `what` in this page — a File from this computer, or the URL of a
+   * file on a web server (0.8.15; read in pieces where the server allows) —
+   * replacing the server's run here (other pages are not affected; reload
+   * to return to the server's run).
    */
-  async function openLocalFile(file) {
-    if (!file) return false;
+  async function openRun(what) {
+    if (!what) return false;
     if (!app.cfg?.h5wasm_url) { log('Cannot open files: no h5wasm_url in the configuration', 'err'); return false; }
-    const src = app.source || new LocalSource({ h5wasmUrl: app.cfg.h5wasm_url, viewer: viewerName() });
-    const mb = file.size / 2 ** 20;
-    log(`Opening ${file.name} (${mb >= 1 ? `${mb.toFixed(0)} MB` : `${(file.size / 1024).toFixed(0)} kB`}) — read in this browser, not uploaded…`);
-    status.local = { file: file.name, state: 'opening' };
+    const url = typeof what === 'string' ? what : null;
+    const name = url ? urlFileName(url) : what.name;
+    const src = app.source || new LocalSource({ h5wasmUrl: app.cfg.h5wasm_url, viewer: viewerName(),
+      onProgress: (loaded, total) => log(`${name}: ${mbText(loaded)}${total ? ` of ${mbText(total)}` : ''} downloaded…`) });
+    log(url ? `Opening ${url} — read in this browser from its server…`
+            : `Opening ${name} (${mbText(what.size)}) — read in this browser, not uploaded…`);
+    status.local = { file: name, url, state: 'opening' };
     $('open-file').disabled = true;
     const t0 = performance.now();
-    let fileMs;
+    let fileMs, info;
     try {
-      await src.open(file);
+      info = await src.open(what);
       fileMs = Math.round(performance.now() - t0);
     } catch (e) {
       if (!app.source) src.close();               // (else the file open before stays open)
-      status.local = { file: file.name, state: 'error', error: String(e.message || e) };
-      log(`Cannot open ${file.name}: ${e.message || e}`, 'err');
+      status.local = { file: name, url, state: 'error', error: String(e.message || e) };
+      log(`Cannot open ${url || name}: ${e.message || e}`, 'err');
+      if (url) $('open-url').value = url;           // (to correct it)
       return false;
     } finally {
       $('open-file').disabled = false;
     }
+    app.sourceUrl = url;
+    if (info.remote) {
+      log(info.remote.ranged ? `${name}: ${mbText(info.remote.size)}, read in pieces (range requests)`
+                             : `${name}: ${mbText(info.remote.size)} downloaded (the server does not serve ranges)`);
+    }
+    setFileParam(url);
     const first = !app.source;
     app.source = src;
     if (first && app.ws) { app.ws.onclose = null; app.ws.close(); app.ws = null; }
@@ -1081,13 +1123,36 @@ export function startViewer(engine) {
     refreshRanges(true);
     if (app.tab !== 'layers') showTab(app.tab);
     status.state = 'ready';
-    status.local = { file: file.name, state: 'open', fileMs, openMs: Math.round(performance.now() - t0) };
+    status.local = { file: name, url, state: 'open', fileMs, openMs: Math.round(performance.now() - t0),
+                     remote: info.remote || null };
     refreshStatus();
-    log(`Local file: ${file.name}, ${app.frames.length} frames`);
+    log(`${url ? 'Web' : 'Local'} file: ${name}, ${app.frames.length} frames`);
     return true;
   }
 
+  /** The page's address links to the file on the web (?file=…), or no longer does (a local file). */
+  function setFileParam(url) {
+    try {
+      const u = new URL(location.href);
+      if (url) u.searchParams.set('file', url); else u.searchParams.delete('file');
+      history.replaceState(null, '', u.href);
+    } catch { /* (an embedded page may refuse) */ }
+  }
+
+  function showOpenPrompt(on = true) {
+    $('open-prompt').hidden = !on;
+    $('open-prompt-close').hidden = !app.mesh;          // (nothing behind it to go back to without a run)
+    if (on && !$('open-url').value) $('open-url').value = app.sourceUrl || '';
+  }
+
+  function openUrlText() {
+    const u = resolveRunUrl($('open-url').value, location.href);
+    if (!u) { log('Not a link to open: give an http(s) URL (or a path relative to this page).', 'warn'); return; }
+    openRun(u);
+  }
+
   function chooseFile() {
+    showOpenPrompt(false);
     const inp = $('file-input');
     inp.value = '';
     inp.click();
@@ -1104,7 +1169,7 @@ export function startViewer(engine) {
       if (!hasFiles(e)) return;
       e.preventDefault(); depth = 0; $('drop-hint').hidden = true;
       const f = e.dataTransfer.files?.[0];
-      if (f) openLocalFile(f);
+      if (f) openRun(f);
     });
   }
 
@@ -1493,11 +1558,14 @@ export function startViewer(engine) {
   // -------------------------------------------------------------------------
 
   function wireControls() {
-    $('open-file').onclick = chooseFile;
+    $('open-file').onclick = () => showOpenPrompt($('open-prompt').hidden);
     $('smooth-water').onchange = () => setSmooth('water', $('smooth-water').checked);
     $('smooth-bed').onchange = () => setSmooth('bed', $('smooth-bed').checked);
     $('open-prompt-btn').onclick = chooseFile;
-    $('file-input').onchange = () => { const f = $('file-input').files?.[0]; if (f) openLocalFile(f); };
+    $('open-prompt-close').onclick = () => showOpenPrompt(false);
+    $('open-url-btn').onclick = openUrlText;
+    $('open-url').addEventListener('keydown', e => { if (e.key === 'Enter') openUrlText(); });
+    $('file-input').onchange = () => { const f = $('file-input').files?.[0]; if (f) openRun(f); };
     setupDrop();
     $('panel-toggle').onclick = () => $('panel').classList.toggle('collapsed');
     $('var').onchange = () => {
@@ -1606,7 +1674,7 @@ export function startViewer(engine) {
     $('btn-live').onclick = () => setLive(!app.live);
     window.addEventListener('keydown', e => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
-          e.target.closest?.('.palette-menu, .palette-editor, .legend, .tabs, #plot, .ctx-menu')) return;
+          e.target.closest?.('.palette-menu, .palette-editor, .legend, .tabs, #plot, .ctx-menu, .open-prompt')) return;
       if (e.key === ' ') { e.preventDefault(); app.playing ? stopPlay() : startPlay(); }
       else if (e.key === 'ArrowRight') { stopPlay(); step(1); }
       else if (e.key === 'ArrowLeft') { stopPlay(); step(-1); }
@@ -1657,7 +1725,9 @@ export function startViewer(engine) {
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setHazard: p => setHazard(p || {}),
     setSmooth: (target, on) => setSmooth(target === 'bed' ? 'bed' : 'water', on),
-    openFile: file => openLocalFile(file),               // a File (tests: from an <input type=file>)
+    openFile: file => openRun(file),                      // a File (tests: from an <input type=file>)
+    openUrl: url => openRun(resolveRunUrl(url, location.href)),
+    remoteStats: () => (app.source ? app.source.stats() : null),
     localFetch: path => (app.source ? app.source.fetch(path).then(async r => ({ status: r.status,
                                        body: r.headers.get('Content-Type')?.startsWith('application/json') ? await r.json()
                                            : Array.from(new Uint8Array(await r.arrayBuffer())) })) : null),
@@ -1713,13 +1783,18 @@ export function startViewer(engine) {
       populateBasemaps();
       const want = q.get('basemap') || app.cfg.default_basemap || engine.defaultBasemap(app.cfg);
       await setBasemap(want);
-      if (app.standalone || app.cfg.no_data) {
+      // ?file=URL: a file on a web server (0.8.15), instead of the server's run
+      const fileParam = q.get('file');
+      const fileUrl = fileParam ? resolveRunUrl(fileParam, location.href) : null;
+      if (fileParam && !fileUrl) log(`?file=: not a link to open (${fileParam})`, 'warn');
+      const opened = fileUrl ? await openRun(fileUrl) : false;
+      if (!opened && (app.standalone || app.cfg.no_data)) {
         status.state = 'ready'; refreshStatus();
         $('run-label').textContent = 'no run open';
-        $('open-prompt').hidden = false;
-        log(app.standalone ? 'No server: open a FloodA5 output file from this computer.'
-                           : 'Started without a run: open a FloodA5 output file from this computer.');
-      } else connectWs();
+        showOpenPrompt(true);
+        log(app.standalone ? 'No server: open a FloodA5 output file from this computer or a link.'
+                           : 'Started without a run: open a FloodA5 output file from this computer or a link.');
+      } else if (!opened) connectWs();
       requestAnimationFrame(tick);
       setInterval(updateCredits, 2000);
     } catch (e) {

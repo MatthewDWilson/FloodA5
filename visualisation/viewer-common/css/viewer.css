@@ -143,6 +143,10 @@ select, input[type=number] { background: #0d1318; color: var(--text); border: 1p
 .open-prompt h2 { margin: 0 0 8px; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: .08em; }
 .open-prompt p { margin: 0 0 12px; }
 .open-prompt .help { margin: 8px 0 0; color: var(--dim); }
+.open-prompt h3 { margin: 14px 0 4px; font: 11px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.open-prompt .row input[type=url] { flex: 1; min-width: 0; background: #0d1318; color: var(--text);
+  border: 1px solid var(--border); font: 12px var(--mono); padding: 3px 6px; }
+.open-prompt .prompt-close { position: absolute; top: 8px; right: 8px; }
 .drop-hint { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
   background: rgba(8,12,15,.72); border: 2px dashed var(--accent); color: var(--accent);
   font: 600 14px var(--mono); letter-spacing: .06em; pointer-events: none; }

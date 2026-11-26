@@ -11,6 +11,7 @@ import Instance from '@giro3d/giro3d/core/Instance.js';
 import CoordinateSystem from '@giro3d/giro3d/core/geographic/CoordinateSystem.js';
 import Ellipsoid from '@giro3d/giro3d/core/geographic/Ellipsoid.js';
 import Globe from '@giro3d/giro3d/entities/Globe.js';
+import Atmosphere from '@giro3d/giro3d/entities/Atmosphere.js';
 import Tiles3D from '@giro3d/giro3d/entities/Tiles3D.js';
 import ColorLayer from '@giro3d/giro3d/core/layer/ColorLayer.js';
 import ElevationLayer from '@giro3d/giro3d/core/layer/ElevationLayer.js';
@@ -21,7 +22,9 @@ import XYZ from 'ol/source/XYZ.js';
 import { CesiumIonAuthPlugin, GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import { TerrariumFormat, TERRARIUM_URL, TERRARIUM_MAX_ZOOM, sampleTerrarium } from './terrarium.js';
 import { SurfaceMesh } from './water.js';
-import { ecefToGeodetic } from '../../viewer-common/js/geometry.js';
+import { ecefToGeodetic, WGS84_A, WGS84_B } from '../../viewer-common/js/geometry.js';
+
+const ELL_A2 = WGS84_A * WGS84_A, ELL_B2 = WGS84_B * WGS84_B;   // (the geodetic normal)
 
 export const GIRO3D_VERSION = '2.0.7';         // keep in step with ../index.html
 const GOOGLE_ION_ASSET = '2275207';
@@ -50,6 +53,13 @@ export class Giro3DEngine {
     if (!this.webgl2) throw new Error('This viewer needs WebGL 2.');
     this.globe = new Globe({ backgroundColor: '#1b2731' });
     await instance.add(this.globe);
+    // sky (0.8.15): the atmosphere's halo seen from afar, the sky dome near the ground
+    this.atmosphere = new Atmosphere();
+    this.atmosphere.inner.visible = false;     // (its veil over the globe washes the light basemaps out: the halo only)
+    await instance.add(this.atmosphere);
+    this.sky = skyGradient();
+    await instance.add(this.sky);
+    this.setSun(0, 30);
     const camera = instance.view.camera;
     camera.up.set(0, 0, 1);
     camera.position.set(2.5e7, 0, 0);
@@ -62,6 +72,14 @@ export class Giro3DEngine {
       this.controls.update();
       const alt = ecefToGeodetic(camera.position.x, camera.position.y, camera.position.z).h;
       instance.view.minNearPlane = Math.min(Math.max(alt / 200, 0.5), 500);
+      // the sky: the local vertical at the camera; gone above ~150 km (space: the atmosphere's halo)
+      const u = this.sky.material.uniforms;
+      u.uUp.value.set(camera.position.x / ELL_A2, camera.position.y / ELL_A2, camera.position.z / ELL_B2).normalize();
+      u.uAlpha.value = 1 - THREE.MathUtils.smoothstep(alt, 30e3, 150e3);
+      this.sky.visible = u.uAlpha.value > 0;
+      // the atmosphere's halo is for views from space: inside its shell it would whiten the sky
+      const space = alt > 120e3;
+      if (this.atmosphere.visible !== space) { this.atmosphere.visible = space; instance.notifyChange(); }
       if (this.tiles) instance.notifyChange(this.tiles);    // keep tiles streaming
       requestAnimationFrame(loop);
     };
@@ -176,8 +194,24 @@ export class Giro3DEngine {
     this.instance.notifyChange(cam);
   }
 
+  /**
+   * The sun of the sky and the atmosphere: over (lon, lat), 45° up in the
+   * south-west (north-west in the southern hemisphere) — the light of
+   * hill-shaded maps, not the sun of a date (that is on the wish list).
+   */
+  setSun(lon, lat) {
+    const { east, north, up } = this._enu(lon, lat);
+    const toward = north.clone().multiplyScalar(lat >= 0 ? -1 : 1);       // the equator side
+    const dir = up.clone().multiplyScalar(Math.SQRT1_2)
+      .addScaledVector(toward, 0.5).addScaledVector(east, -0.5).normalize();
+    const sun = ELL.toCartesian(lat, lon, 0).addScaledVector(dir, 1.5e11);
+    this.atmosphere?.setSunPosition(sun);
+    this.instance.notifyChange();
+  }
+
   flyToBounds([w, s, e, n], h) {
     const lon = (w + e) / 2, lat = (s + n) / 2;
+    this.setSun(lon, lat);
     const dx = (e - w) * DEG * 6371000 * Math.cos(lat * DEG), dy = (n - s) * DEG * 6371000;
     const r = Math.hypot(dx, dy) / 2, dist = Math.max(r * 2.2, 500), pitch = 40 * DEG;
     const target = ELL.toCartesian(lat, lon, h);
@@ -294,4 +328,36 @@ function rayEllipsoid(ray) {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/**
+ * A sky for views near the ground (0.8.15): pale blue at the horizon, deeper
+ * blue overhead — a sphere around the camera, drawn first, the elevation of
+ * each direction from the local vertical (uniform uUp, set every frame).
+ * Giro3D's physical SkyDome renders almost white at the low angles an
+ * oblique map view shows.
+ */
+function skyGradient() {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1e5, 32, 16), new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthTest: false, depthWrite: false,      // opaque: drawn first (renderOrder)
+    uniforms: { uUp: { value: new THREE.Vector3(0, 0, 1) }, uAlpha: { value: 1 } },
+    vertexShader: `varying vec3 vDir;
+void main() {
+  vDir = position;
+  gl_Position = projectionMatrix * viewMatrix * vec4(cameraPosition + position, 1.0);
+}`,
+    fragmentShader: `uniform vec3 uUp;
+uniform float uAlpha;
+varying vec3 vDir;
+void main() {
+  float e = dot(normalize(vDir), uUp);                    // sine of the elevation
+  vec3 horizon = vec3(0.74, 0.84, 0.93), zenith = vec3(0.20, 0.42, 0.74);
+  vec3 c = mix(horizon, zenith, pow(clamp(e, 0.0, 1.0), 0.5));
+  gl_FragColor = vec4(mix(vec3(0.043, 0.067, 0.086), c, uAlpha), 1.0);   // (toward the background in space)
+}`,
+  }));
+  mesh.name = 'flooda5-sky';
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -10000;
+  return mesh;
 }
