@@ -87,6 +87,8 @@ end
     @test s["max_velocity"] == Float32[1.0, 0.0, 3.0]
     @test s["max_depth_velocity"] ≈ Float32[0.25, 0.0, 3.0]
     @test s["max_hazard_class_arr"] == Float32[2, 0, 5]      # d 1, v 3: H5
+    # time of the maximum: frame 3 for cell 1; never wet: NaN; constant: the first frame
+    @test s["time_max_water_depth"][1] == 120 && isnan(s["time_max_water_depth"][2]) && s["time_max_water_depth"][3] == 0
     @test s["time_first_flooded"][1] == 60 && isnan(s["time_first_flooded"][2]) && s["time_first_flooded"][3] == 0
     # midpoint weights 30, 60, 60, 30: cell 1 flooded at frames 2 and 3
     @test s["flood_duration"] == Float32[120, 0, 180]

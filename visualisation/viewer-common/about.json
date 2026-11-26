@@ -118,6 +118,11 @@
    "label": "Time of first flooding",
    "unit": "s"
   },
+  "time_max_water_depth": {
+   "definition": "Simulation time of the output frame at which the cell's depth is largest (the first such frame). Cells never wet have none.",
+   "label": "Time of maximum depth",
+   "unit": "s"
+  },
   "velocity": {
    "definition": "Magnitude of the depth-averaged velocity at the cell centre: the unit discharge vector reconstructed from the fluxes through the cell's faces (a least-squares fit), divided by the depth.",
    "label": "Speed",

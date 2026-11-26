@@ -209,7 +209,7 @@ export class LocalRun {
   derivedNames() { return this.hasDerived ? HAZARD_NAMES.slice() : []; }
   statNames() {
     return this.hasDerived ? STAT_VARS.slice()
-      : this.vars.includes('water_depth') ? ['max_water_depth', 'time_first_flooded', 'flood_duration'] : [];
+      : this.vars.includes('water_depth') ? ['max_water_depth', 'time_max_water_depth', 'time_first_flooded', 'flood_duration'] : [];
   }
 
   /** Frame `id` (1-based) of frame variable `v` as Float32 (cached), or null. */

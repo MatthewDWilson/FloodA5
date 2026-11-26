@@ -168,5 +168,6 @@ test('runStatistics: duration weights and the first flooded time', () => {
   const st = runStatistics(t, k => [d[k], null], 2, { ...HAZARD_DEFAULTS, flood_depth: 0.1 });
   assert.deepEqual(Array.from(st.flood_duration), [15, 20]);       // frame 2 stands for (30 − 0)/2; cell 2: 10/2 + 15
   assert.deepEqual(Array.from(st.time_first_flooded), [10, 0]);
+  assert.deepEqual(Array.from(st.time_max_water_depth), [10, 0]);     // the first frame with the maximum
   assert.equal(st.max_velocity, undefined);
 });

@@ -472,7 +472,7 @@ _has_derived(s::VisServer) = all(in(_vars(s)), DERIVED_INPUTS)
 "Names of the hazard variables and statistics the run supports (for /api/info)."
 _derived_names(s::VisServer) = _has_derived(s) ? sort!(collect(keys(HAZARD_VARS))) : String[]
 _stat_names(s::VisServer) = _has_derived(s) ? collect(STAT_VARS) :
-    ("water_depth" in _vars(s) ? ["max_water_depth", "time_first_flooded", "flood_duration"] : String[])
+    ("water_depth" in _vars(s) ? ["max_water_depth", "time_max_water_depth", "time_first_flooded", "flood_duration"] : String[])
 
 # Frame data (Float32, mesh order), or nothing. Hazard variables are derived
 # (not cached: elementwise, cheap) from the cached inputs.

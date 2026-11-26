@@ -609,14 +609,17 @@ Australian combined hazard curves; and the *Hazard degree* of Chen et al.
 height is toppled (0–1; 1 = swept off their feet). The viewer's server
 computes them from each frame's depth and speed with the same code as
 `FloodA5Analysis` (`analysis/hazard.jl`: `FA.hazard_rating`,
-`FA.hazard_degree`, …). *Hazard parameters* (in the Layers tab, kept in the
-browser) set the land use for the debris factor — one for the whole run:
+`FA.hazard_degree`, …). *Parameters* (in the Layers tab, kept in the
+browser; since 0.8.12 only those of the layer shown and of the plot's
+variable appear) set the land use for the debris factor (hazard rating) —
+one for the whole run:
 *any* (FD2320's precautionary 0.5 / 1, the default), *pasture/arable*,
 *woodland*, *urban* (FD2321 Table 3.1) or *no debris*; a land-use map is a
 later development — the person (adult 75.1 kg, 1.77 m; child 25.5 kg,
 1.26 m; or your own) and the calibration of Chen et al. (θ = 75°,
-α = 3.064, β = 0.303 recommended), and the depth from which a cell counts as
-flooded (default 0.1 m). The *About* tab gives the definitions, classes,
+α = 3.064, β = 0.303 recommended) for the hazard degree, and the depth from
+which a cell counts as flooded (default 0.1 m) for the time of first
+flooding and the duration. The *About* tab gives the definitions, classes,
 references and limitations (Chen et al.: toppling only).
 
 **Classes.** Water depth, D·V and the hazard rating can be drawn in classes
@@ -627,7 +630,8 @@ some, for most, for all). The legend then lists the classes; the breaks can
 be edited (*Reset* restores them) and are remembered in the browser.
 
 **Statistics over the run** (since 0.8.9). *Maximum depth*, *maximum speed*,
-the maximum of each hazard variable, the *time of first flooding* and the
+the maximum of each hazard variable, the *time of maximum depth* (0.8.12),
+the *time of first flooding* and the
 *duration of flooding* (depth ≥ the flooded threshold) are maps over the
 whole run: while one is shown the time slider and playback are off, and the
 water is drawn at each cell's maximum depth (cells never flooded are left

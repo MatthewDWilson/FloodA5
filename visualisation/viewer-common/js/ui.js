@@ -59,12 +59,14 @@ export const UI_HTML = `
     </section>
 
     <section id="hazard-section" hidden>
-      <details>
-        <summary><h2>Hazard parameters</h2></summary>
+      <h2 title="The parameters of the layer shown (and of the plot's variable); kept in this browser. See About.">Parameters <span id="hz-for" class="for"></span></h2>
+      <div id="hz-g-landuse">
         <div class="row">
           <label for="hz-landuse" title="Defra hazard rating: the debris factor's land use (one for the whole run)">Land use</label>
           <select id="hz-landuse"></select>
         </div>
+      </div>
+      <div id="hz-g-person">
         <div class="row">
           <label for="hz-person" title="Hazard degree (Chen et al. 2019): the person">Person</label>
           <select id="hz-person"></select>
@@ -84,13 +86,13 @@ export const UI_HTML = `
           <div class="row"><label for="hz-beta">β</label><input id="hz-beta" type="number" min="0" step="0.001"></div>
           <div class="row"><button id="hz-reset" class="btn" type="button" title="θ = 75°, α = 3.064, β = 0.303">Recommended</button></div>
         </details>
+      </div>
+      <div id="hz-g-flood">
         <div class="row">
           <label for="hz-flood_depth" title="Time of first flooding and duration of flooding">Flooded if depth ≥</label>
           <input id="hz-flood_depth" type="number" min="0" step="0.01"><span class="val">m</span>
         </div>
-        <p class="help">For the hazard variables and the statistics over the run;
-          kept in this browser. See About.</p>
-      </details>
+      </div>
     </section>
 
     <section>
@@ -124,11 +126,8 @@ export const UI_HTML = `
     </section>
 
     <section>
-      <h2>Bed surface</h2>
-      <div class="row">
-        <label for="show-bed">Show</label>
-        <input id="show-bed" type="checkbox">
-      </div>
+      <h2><label class="h2-check"><input id="show-bed" type="checkbox"> Bed surface</label></h2>
+      <div id="bed-controls">
       <button id="bed-legend" class="legend" type="button" title="Bed colour palette: click to change"
               aria-haspopup="listbox" aria-expanded="false"></button>
       <div id="bed-palette-menu" class="palette-menu" role="listbox" aria-label="Bed colour palette" hidden></div>
@@ -150,25 +149,19 @@ export const UI_HTML = `
         <input id="bed-opacity" type="range" min="0.1" max="1" step="0.05" value="1">
         <span id="bed-opacity-val" class="val">1.00</span>
       </div>
+      </div>
     </section>
 
     <section>
       <h2>Basemap</h2>
       <select id="basemap"></select>
-    </section>
-
-    <section>
-      <h2>Vertical offset</h2>
       <div class="row">
+        <label for="offset" class="short">Offset <span class="info" tabindex="0"
+          title="Vertical offset (m), added to the model's heights to give the basemap's. For a DEM on a mean-sea-level datum and a basemap with ellipsoidal heights (3D tiles) it is the geoid height there: between about −107 and +86 m worldwide. Each basemap keeps its own; it is estimated from the basemap when not given (--offset). Estimate redoes it.">ⓘ</span></label>
         <input id="offset" type="number" step="0.1" value="0" aria-label="Vertical offset in metres">
-        <span class="val">m</span>
+        <span class="val short">m</span>
         <button id="calibrate" class="btn" title="Estimate from the basemap's heights under the mesh">Estimate</button>
       </div>
-      <p class="help">Added to the model's heights to give the basemap's. For
-        a DEM on a mean-sea-level datum and a basemap with ellipsoidal heights
-        (3D tiles), it is the geoid height there: between about −107 and +86 m
-        worldwide. Each basemap keeps its own; it is estimated from the
-        basemap when not given (<code>--offset</code>) — Estimate redoes it.</p>
       <p id="offset-source" class="help"></p>
     </section>
 

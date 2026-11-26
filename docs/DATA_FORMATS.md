@@ -517,8 +517,10 @@ FD2321), `hazard_class_arr` (ARR H1–H6 as 1–6; 0 dry) and `hazard_degree`
 (Chen et al. 2019). Statistics (`run_statistics`, over every replay frame
 or the live frames kept): `max_water_depth`, `max_velocity`,
 `max_depth_velocity`, `max_hazard_rating`, `max_hazard_degree`,
-`max_hazard_class_arr`, `time_first_flooded` (s; NaN if never) and
-`flood_duration` (s); without velocity only the three depth statistics. The
+`max_hazard_class_arr`, `time_max_water_depth` (s; the first frame with the
+maximum depth, NaN if never wet; since 0.8.12), `time_first_flooded` (s; NaN
+if never) and `flood_duration` (s); without velocity only the four depth
+statistics. The
 query parameters (`hazard_params`; missing or invalid ones take the
 defaults, numbers are clamped): `landuse` (`fd2320` default, `pasture`,
 `woodland`, `urban`, `none`), `mass` (kg, 75.1), `height` (m, 1.77),

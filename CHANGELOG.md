@@ -33,6 +33,32 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.8.12] — 2026-11-26
+
+Globe viewer fixes from testing 0.8.8–0.8.9 (branch `wpv-feedback`; PATCH:
+viewer only, results unchanged).
+
+- The right-click menu could be covered: the browser's own menu is now
+  suppressed over the whole map (not only the engine's canvas, which other
+  layers can cover), the right click is taken anywhere on the map, the
+  hover tooltip and palette menus close while the menu is open, and the
+  menu is above every other panel.
+- *Parameters* (was *Hazard parameters*) shows only what the layer shown —
+  and the plot's variable, while the plot is open — depends on: land use
+  for the hazard rating, the person and Chen et al. calibration for the
+  hazard degree, the flooded threshold for the time of first flooding and
+  the duration; hidden for the other layers. The heading names the layers.
+- New statistic *Time of maximum depth* (`time_max_water_depth`: the first
+  output frame with the cell's largest depth; `run_statistics`, the
+  server's `/api/stats` and the browser's port alike; `io/variables.toml`).
+- A shorter side panel: the bed's controls show only while the bed is
+  shown (its checkbox is in the heading); basemap and vertical offset in one
+  section, the offset's explanation in a tooltip (ⓘ); tighter spacing; the
+  panel ends higher, clear of the logos and credits.
+- Tests: `test/analysis/test_hazard.jl` (time of the maximum),
+  `test_vis_server.jl` (depth-only statistics), the local-file fixture
+  regenerated (`test/vis_local_fixture.jl --write`), `local.test.js`.
+
 ## [0.8.11] — 2026-11-26
 
 Palettes in the globe viewers: scientific colour maps, user-defined palettes

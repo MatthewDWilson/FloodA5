@@ -114,6 +114,11 @@ label = "Maximum hazard"
 unit = ""
 definition = "The largest D·V, hazard rating, ARR hazard class or hazard degree of each cell over the run's output frames, each with the current hazard parameters."
 
+[variables.time_max_water_depth]
+label = "Time of maximum depth"
+unit = "s"
+definition = "Simulation time of the output frame at which the cell's depth is largest (the first such frame). Cells never wet have none."
+
 [variables.time_first_flooded]
 label = "Time of first flooding"
 unit = "s"
