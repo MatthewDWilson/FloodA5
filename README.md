@@ -1,5 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
-![Version 0.9.0](https://img.shields.io/badge/Version-0.9.0-lightgrey)
+![Version 0.9.1](https://img.shields.io/badge/Version-0.9.1-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 

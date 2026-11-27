@@ -1262,14 +1262,23 @@ export function startViewer(engine) {
       const r = canvas.getBoundingClientRect();
       pick(ev.clientX - r.left, ev.clientY - r.top, ev.clientX, ev.clientY);
     });
-    canvas.addEventListener('mouseleave', () => { $('tooltip').hidden = true; });
+    canvas.addEventListener('mouseleave', () => { $('tooltip').hidden = true; $('cursor-pos').textContent = ''; });
+  }
+
+  /** "54.89123° N  2.93124° W" (0.9.1: the readout at the bottom-right edge). */
+  function formatLonLat(ll) {
+    if (!ll || !Number.isFinite(ll.lon) || !Number.isFinite(ll.lat)) return '–';
+    const ns = ll.lat >= 0 ? 'N' : 'S', ew = ll.lon >= 0 ? 'E' : 'W';
+    return `${Math.abs(ll.lat).toFixed(5)}° ${ns}  ${Math.abs(ll.lon).toFixed(5)}° ${ew}`;
   }
 
   function pick(x, y, cx, cy) {
     const tip = $('tooltip');
-    if (!app.mesh || !$('ctx-menu').hidden) { tip.hidden = true; return; }
     let ll = null;
     try { ll = engine.pickLonLat(x, y); } catch { ll = null; }
+    $('cursor-pos').textContent = formatLonLat(ll);
+    status.cursor = ll;
+    if (!app.mesh || !$('ctx-menu').hidden) { tip.hidden = true; return; }
     const i = ll ? app.locator.find(ll.lon, ll.lat) : -1;
     if (i < 0) { tip.hidden = true; return; }
     const m = app.mesh, d = app.depth ? app.depth[i] : NaN;
@@ -1731,6 +1740,7 @@ export function startViewer(engine) {
     rightClick: (x, y) => { const r = engine.canvas.getBoundingClientRect(); openCtxMenu(r.left + x, r.top + y, x, y); },
     setRangeMode: mode => { $('range-mode').value = mode; $('range-mode').onchange(); },
     setHazard: p => setHazard(p || {}),
+    hover: (x, y) => { const r = engine.canvas.getBoundingClientRect(); pick(x, y, r.left + x, r.top + y); return $('cursor-pos').textContent; },
     setSmooth: (target, on) => setSmooth(target === 'bed' ? 'bed' : 'water', on),
     openFile: file => openRun(file),                      // a File (tests: from an <input type=file>)
     openUrl: url => openRun(resolveRunUrl(url, location.href)),
@@ -1775,6 +1785,7 @@ export function startViewer(engine) {
         app.cfg = await standaloneConfig();
         app.standalone = true; status.standalone = true;
       }
+      if (app.cfg.version) $('app-version').textContent = String(app.cfg.version);
       const q = new URLSearchParams(location.search);
       app.autoplay = q.has('autoplay') ? !['0', 'false', 'no'].includes(q.get('autoplay')) : !!app.cfg.autoplay;
       if (app.cfg.protocol !== PROTOCOL) log(`Server protocol ${app.cfg.protocol}, viewer ${PROTOCOL}`, 'warn');

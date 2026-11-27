@@ -782,8 +782,10 @@ waiting for Ctrl-C (scripted runs).
 
 **Controls.** Timeline slider; first / previous / play / next / last
 (keys: space, ←, →); playback speed in frames per second or simulation time
-per second; *LIVE* follows the newest frame while the run goes on. A replay,
-or a run that has finished, opens at the first frame.
+per second, including *real time (1:1)* (0.9.1); *LIVE* follows the newest frame while the run goes on. A replay,
+or a run that has finished, opens at the first frame. The pointer's latitude and
+longitude show at the bottom-right edge of the map, and the top bar gives the
+viewer's FloodA5 version (0.9.1).
 
 **Basemaps and the Cesium ion token.** Both viewers: *Google
 Photorealistic 3D*, *OpenStreetMap (flat)*, *None*. Terrain: *Cesium World

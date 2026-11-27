@@ -33,6 +33,20 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-11-27
+
+Globe viewer, small items from the stage-2 plan (branch `wpv-small`; PATCH:
+viewer only, results unchanged; `projectinstructions/FloodA5_GlobeViewer_Plan_Stage2_2026-11.md` A1, A3, A4).
+
+- The FloodA5 version after the logo ("FloodA5 0.9.1"): `/api/config` gives
+  `version`, read from the repository's `VERSION` (no file of the viewer's
+  own to bump); a static host may put `version` in `defaults.json`.
+- The pointer's position (latitude, longitude, 5 decimals) at the
+  bottom-right edge of the map, from the same pick as the hover tooltip;
+  "–" off the globe.
+- *Real time (1:1)* playback speed: one second of simulation per second.
+- Tests: `test/test_vis_server.jl` (the version in `/api/config`).
+
 ## [0.9.0] — 2026-11-27
 
 The SGS checkerboard (MINOR, result-changing for SGS; branch
