@@ -109,9 +109,12 @@ When you're ready to cut the next version:
 1. Decide PATCH vs. MINOR using the rules above — the test is whether
    default results change. When in doubt, treat it as MINOR (semver's
    guidance: "if in doubt, bump the more significant number").
-2. Every merged PR bumps the version (usually PATCH). Update `VERSION` and
-   `FLOODA5_VERSION` together in the PR's **final** commit, not when the
+2. Every merged PR bumps the version (usually PATCH). Update `VERSION`,
+   `FLOODA5_VERSION` and the `README.md` version badge (its alt text *and*
+   its image URL) together in the PR's **final** commit, not when the
    branch starts, so parallel branches do not conflict on the version.
+   `test/test_version.jl` (in CI) checks that these and the CHANGELOG
+   entry agree.
 3. Give the version its own `CHANGELOG.md` entry (`## [0.2.1] — date`);
    `[Unreleased]` collects work on branches not yet merged.
 4. Tag the merge commit (`git tag -a v0.2.1 …`) so every version string is
