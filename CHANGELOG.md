@@ -33,9 +33,11 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-11-28
+
 What separates SGS from the 5 m runs at Carlisle (branch
-`wps5-sgs-hydraulics`; HYDRAULICS §15.16). No default result changes: the new
-table sampling is opt-in, and existing cases are unchanged.
+`wps5-sgs-hydraulics`; PATCH: no default result changes — the new table
+sampling is opt-in, and existing cases are unchanged; HYDRAULICS §15.16).
 
 ### Added
 - **SGS tables from the DEM's pixels** (`--sgs-sampling bilinear|pixels`,
@@ -68,6 +70,20 @@ table sampling is opt-in, and existing cases are unchanged.
 - `test/test_version.jl` (CI): `VERSION`, `FLOODA5_VERSION`, the README
   badge (alt text and image) and the CHANGELOG entry agree; VERSIONING.md's
   bump step names the badge.
+
+## [0.9.1] — 2026-11-27
+
+Globe viewer, small items from the stage-2 plan (branch `wpv-small`; PATCH:
+viewer only, results unchanged; `projectinstructions/FloodA5_GlobeViewer_Plan_Stage2_2026-11.md` A1, A3, A4).
+
+- The FloodA5 version after the logo ("FloodA5 0.9.1"): `/api/config` gives
+  `version`, read from the repository's `VERSION` (no file of the viewer's
+  own to bump); a static host may put `version` in `defaults.json`.
+- The pointer's position (latitude, longitude, 5 decimals) at the
+  bottom-right edge of the map, from the same pick as the hover tooltip;
+  "–" off the globe.
+- *Real time (1:1)* playback speed: one second of simulation per second.
+- Tests: `test/test_vis_server.jl` (the version in `/api/config`).
 
 ## [0.9.0] — 2026-11-27
 

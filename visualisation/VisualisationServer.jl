@@ -83,6 +83,10 @@ const MESH_VERSION = UInt32(1)
 const _DEFAULTS = Dict{String,Any}(String(k) => v for (k, v) in
     JSON3.read(read(joinpath(@__DIR__, "viewer-common", "defaults.json"), String)) if k != :_comment)
 const DEFAULT_CESIUM_URL = String(_DEFAULTS["cesium_url"])
+"The FloodA5 version (the repository's VERSION file), shown by the viewer (0.9.1)."
+const FLOODA5_VERSION_TEXT = let f = joinpath(@__DIR__, "..", "VERSION")
+    isfile(f) ? strip(read(f, String)) : ""
+end
 # Chart.js (the time-series plots), an ES module loaded when the first plot opens
 const DEFAULT_CHARTJS_URL = String(_DEFAULTS["chartjs_url"])
 "The h5wasm ES module (HDF5 in WebAssembly) the viewer reads local files with (0.8.10)."
@@ -716,7 +720,8 @@ Chart.js ES module) and `FLOODA5_H5WASM_URL` (the h5wasm ES module, for
 local files) from the environment. The defaults are viewer-common/defaults.json.
 """
 function viewer_config(s::VisServer)
-    c = merge(Dict{String,Any}(_DEFAULTS), Dict{String,Any}("protocol" => PROTOCOL, "ion_token" => "", "google_key" => ""))
+    c = merge(Dict{String,Any}(_DEFAULTS), Dict{String,Any}("protocol" => PROTOCOL, "ion_token" => "", "google_key" => "",
+                                                         "version" => FLOODA5_VERSION_TEXT))
     f = joinpath(s.viz_dir, "viewer-common", "config.json")
     if isfile(f)
         try

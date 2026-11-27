@@ -126,6 +126,8 @@ json_(port, path) = JSON3.read(String(get_(port, path).body))
             @test cfg["protocol"] == 2 && cfg["vertical_offset"] == 1.5
             @test endswith(cfg["cesium_url"], "/") && haskey(cfg, "ion_token")
             @test occursin("chart.js@", cfg["chartjs_url"])
+            # the viewer shows the FloodA5 version (0.9.1): the repository's VERSION file
+            @test cfg["version"] == strip(read(joinpath(@__DIR__, "..", "VERSION"), String))
 
             # a cell's series over the live frames (time-series plots)
             sr = json_(port, "/api/series/1?var=water_depth")

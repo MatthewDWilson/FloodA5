@@ -3,7 +3,7 @@
 
 export const UI_HTML = `
 <header id="topbar">
-  <div class="logo">Flood<span>A5</span></div>
+  <div class="logo">Flood<span>A5</span><span id="app-version" class="ver" title="FloodA5 version of this viewer"></span></div>
   <div id="status-dot" class="dot"></div>
   <div id="status-label" class="status">starting</div>
   <div id="run-label" class="run" title="Run"></div>
@@ -195,6 +195,7 @@ export const UI_HTML = `
       <option value="fps:2">2 frames/s</option>
       <option value="fps:4" selected>4 frames/s</option>
       <option value="fps:10">10 frames/s</option>
+      <option value="x:1">real time (1:1)</option>
       <option value="x:60">1 min/s</option>
       <option value="x:600">10 min/s</option>
       <option value="x:3600">1 h/s</option>
@@ -222,6 +223,7 @@ export const UI_HTML = `
 </div>
 
 <div id="credits"></div>
+<div id="cursor-pos" class="cursor-pos" title="Position of the mouse pointer" aria-live="off"></div>
 <div id="tooltip" hidden></div>
 <div id="log"></div>
 <div id="fatal" hidden></div>
