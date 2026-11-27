@@ -1,0 +1,164 @@
+# Expected metrics for case "oblique_channel" — written by `julia --project=. cases/run.jl baseline oblique_channel`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[li25_a0]
+W_raster = 15.0
+angle_deg = 0.0
+err_max = 0.7724323854217907
+err_mean = 0.7709925988030729
+err_min = 0.7647046249513885
+h_normal = 1.1728462340247165
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -9.523809523809524e-5
+mass_balance_rel = 2.0180577743120427e-14
+n_cells = 24.0
+stored_m3 = 40359.4940739218
+
+["li25_a26.565"]
+W_raster = 15.708333333333334
+angle_deg = 26.565
+err_max = 1.117361044961907
+err_mean = 1.102308941550817
+err_min = 1.0849947961137367
+h_normal = 1.1408216856892943
+inflow_mismatch_deg = 4.140687792641984e-10
+input_error_rel = -9.523809523809524e-5
+mass_balance_rel = 2.2952635125417188e-14
+n_cells = 22.0
+stored_m3 = 71190.68883249925
+
+[li25_a45]
+W_raster = 17.625
+angle_deg = 45.0
+err_max = 1.248168678018164
+err_mean = 1.2472801908653146
+err_min = 1.2433257574474759
+h_normal = 1.0646781902639295
+inflow_mismatch_deg = 2.41051623106614e-10
+input_error_rel = -9.523809523809524e-5
+mass_balance_rel = 4.4352918116748193e-16
+n_cells = 17.0
+stored_m3 = 80951.20621487191
+
+[li5_a0]
+W_raster = 15.0
+angle_deg = 0.0
+err_max = -0.0009960565020925571
+err_mean = -0.011673986582519833
+err_min = -0.04188804881742669
+h_normal = 1.1728462340247165
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -6.938516721085069e-5
+mass_balance_rel = 8.205077706110689e-15
+n_cells = 363.0
+stored_m3 = 27399.724119637685
+
+["li5_a26.565"]
+W_raster = 15.708333333333334
+angle_deg = 26.565
+err_max = 0.1510395409368357
+err_mean = 0.13500168829779105
+err_min = 0.09688690334566985
+h_normal = 1.1408216856892943
+inflow_mismatch_deg = 4.140687792641984e-10
+input_error_rel = -6.731081968528174e-5
+mass_balance_rel = 2.295199407770193e-14
+n_cells = 377.0
+stored_m3 = 31124.37018717392
+
+[li5_a45]
+W_raster = 17.625
+angle_deg = 45.0
+err_max = 0.126581269944964
+err_mean = 0.1153953303423535
+err_min = 0.08413288618359971
+h_normal = 1.0646781902639295
+inflow_mismatch_deg = 2.41051623106614e-10
+input_error_rel = -6.984841774883014e-5
+mass_balance_rel = 5.4996221995431086e-14
+n_cells = 423.0
+stored_m3 = 32191.017631745406
+
+[meta]
+flooda5_version = "0.9.0"
+git_commit = "a147cdf8ad00188a249736695169a772f294a597"
+git_dirty = false
+platform = "NT x86_64"
+recorded_utc = "2026-11-27T11:04:54Z"
+
+[sgs25_a0]
+W_raster = 15.0
+angle_deg = 0.0
+err_max = -0.021661477726631517
+err_mean = -0.029778944443174044
+err_min = -0.050281353764425774
+h_normal = 1.1728462340247165
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -9.376314830899771e-5
+mass_balance_rel = 8.292874632164e-13
+n_cells = 24.0
+stored_m3 = 24961.993813727604
+
+["sgs25_a26.565"]
+W_raster = 15.708333333333334
+angle_deg = 26.565
+err_max = 0.09270069146452897
+err_mean = 0.08219241543782761
+err_min = 0.056703086953369564
+h_normal = 1.1408216856892943
+inflow_mismatch_deg = 4.140687792641984e-10
+input_error_rel = -9.523809523809524e-5
+mass_balance_rel = 1.7264373376944234e-13
+n_cells = 22.0
+stored_m3 = 27566.71309264916
+
+[sgs25_a45]
+W_raster = 17.625
+angle_deg = 45.0
+err_max = 0.06943001510241231
+err_mean = 0.06026577192973067
+err_min = 0.036884654712082465
+h_normal = 1.0646781902639295
+inflow_mismatch_deg = 2.41051623106614e-10
+input_error_rel = -9.523809523809524e-5
+mass_balance_rel = 1.0866464938603307e-14
+n_cells = 17.0
+stored_m3 = 28245.812273149142
+
+[swe5_a0]
+W_raster = 15.0
+angle_deg = 0.0
+err_max = -0.002143015854269237
+err_mean = -0.0072230913163634424
+err_min = -0.024849344083428093
+h_normal = 1.1728462340247165
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -1.4562500815927273e-5
+mass_balance_rel = 9.017329528377765e-13
+n_cells = 363.0
+stored_m3 = 26570.33242764872
+
+["swe5_a26.565"]
+W_raster = 15.708333333333334
+angle_deg = 26.565
+err_max = 0.9030522822761711
+err_mean = 0.8500168679787276
+err_min = 0.7610835922265373
+h_normal = 1.1408216856892943
+inflow_mismatch_deg = 4.140687792641984e-10
+input_error_rel = -1.3950178716109977e-5
+mass_balance_rel = 6.098030497645177e-15
+n_cells = 377.0
+stored_m3 = 46009.10956226735
+
+[swe5_a45]
+W_raster = 17.625
+angle_deg = 45.0
+err_max = 0.2290153349826234
+err_mean = 0.2203305101546244
+err_min = 0.19459020326081955
+h_normal = 1.0646781902639295
+inflow_mismatch_deg = 2.41051623106614e-10
+input_error_rel = -1.490696865577428e-5
+mass_balance_rel = 1.796148883322099e-14
+n_cells = 423.0
+stored_m3 = 33882.42221306136
