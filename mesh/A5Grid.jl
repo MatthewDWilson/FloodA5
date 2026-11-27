@@ -2687,7 +2687,7 @@ for everything below, so the tables of a cell and of its faces describe the
 same surface. (Until 0.7.0: 512 Halton candidates per cell whatever its size
 or the DEM's resolution, about two thirds of them inside a pentagon.)
 
-**Pixel sampling** (`sampling = :pixels`, 0.9.1; `--sgs-sampling pixels`).
+**Pixel sampling** (`sampling = :pixels`, 0.9.2; `--sgs-sampling pixels`).
 For a Cartesian mesh whose cells are whole blocks of the DEM's pixels (a
 raster-aligned grid from a block average of the DEM,
 `cases/scripts/block_dem.jl`), the tables are built from the pixels
@@ -3090,7 +3090,7 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     mesh.static_vars["sgs_layout"]       = fill(4.0, n)   # 4 (0.8.0): + critical integral, pixel-centre DEM; 3: face tables; 2: per-cell edge curves
     mesh.static_vars["sgs_connectivity"] = fill(connectivity ? 1.0 : 0.0, n)
     mesh.static_vars["sgs_n_grid"]       = n_grid
-    mesh.static_vars["sgs_sampling"]     = fill(pix === nothing ? 0.0 : 1.0, n)   # 1: pixels (0.9.1)
+    mesh.static_vars["sgs_sampling"]     = fill(pix === nothing ? 0.0 : 1.0, n)   # 1: pixels (0.9.2)
 
     n_ok = count(isfinite, z_mins)
     @info "SGS tables built in $(round(time()-t0, digits=1))s: $n_ok / $n cells with valid curves; " *

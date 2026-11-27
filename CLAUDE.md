@@ -12,7 +12,7 @@ A5 pentagonal DGGS (plus a Cartesian backend). The core is a flat script,
 Physics plan of record: `projectinstructions/FloodA5_Review_and_ForwardPlan_2026-10.md`
 (work packages WP0–WP7). Branch per work package (CI runs on `main`, `wp*` and
 `maint-*` pushes); every merged PR bumps the version and is tagged
-(`VERSIONING.md`). Status (2026-11-27): 0.9.1 — the default engine is
+(`VERSIONING.md`). Status (2026-11-28): 0.9.2 — the default engine is
 `--flow-model standard` (SGS opt-in; `swe` a full option). Before: WP0–WP5, the SWE engine, the
 Δt-consistent 0.3.0 scheme, CPU/GPU backends, the channel series, output
 format 2 (0.4.0). The **consolidation** phase
@@ -85,9 +85,18 @@ Q·Δt/a just before the faces saw it, and the adaptive Δt and those levels
 drove each other (HYDRAULICS §15.15). SGS cases re-recorded (old values in
 `cases/expected/v0.8.16/`); SGS is smooth on all eleven families and stores
 0.70–0.79 of 5 m SWE — the remaining gap is the hydraulics.
+0.9.2 (HYDRAULICS §15.16): SGS tables from the DEM's pixels on a mesh of whole
+blocks of them (`--sgs-sampling pixels`, `cases/scripts/block_dem.jl`) — exact
+volumes; cases `sgs_pool` (volume right), `oblique_channel` (5 m SWE's
+staircase banks cost head on oblique channels), `channel_constriction` (SWE
+loses physical head at an opening; standard flow and SGS, local-inertial,
+lose none). 5 m **standard flow** is the like-for-like reference for SGS
+(second bar in `carlisle_peak_fine`); the 5 m runs move with the grid's
+alignment (Nguyen et al. 2025, doi:10.1029/2024WR038919). Next for SGS:
+momentum (convective terms / form losses).
 Next and open findings: `projectinstructions/PROJECT_STATE.md`
 "Pending Work → Current plan". Physics results: `docs/HYDRAULICS.md` §15
-(§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.15 SGS). SGS meshes
+(§15.11 the 0.3.0 defaults, §15.12 channel series, §15.13–15.16 SGS). SGS meshes
 built before 0.8.0 (table layout < 4) are refused until rebuilt. Edge orientation (`cell_i < cell_j`)
 is not geometric on A5: never combine stored edge fluxes of different edges
 without `_orient_collinear!`-style signs.

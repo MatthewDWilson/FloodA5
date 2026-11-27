@@ -49,7 +49,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.9.1"
+const FLOODA5_VERSION = "0.9.2"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -4281,7 +4281,7 @@ function run_flood_model(;
     sgs_bins         :: Int     = 100,
     sgs_samples      :: Int     = 1600,
     sgs_connectivity :: Bool    = true,     # 0.7.0: face activation levels (mesh generation)
-    sgs_sampling     :: Symbol  = :bilinear, # 0.9.1: :pixels = tables from the DEM's pixels (mesh generation)
+    sgs_sampling     :: Symbol  = :bilinear, # 0.9.2: :pixels = tables from the DEM's pixels (mesh generation)
     sgs_path         :: Bool    = true,     # 0.7.0: flow-path geometry of partly wet cells
     sgs_critical     :: Bool    = true,     # 0.8.0: critical-flow limit on SGS faces
     manning_n        :: Float64 = 0.03,
@@ -4466,7 +4466,7 @@ function run_flood_model(;
 
     # 3. DEM sampling (if requested)
     mesh_modified = false     # the run changed the mesh it acquired (DEM, SGS tables)
-    # SGS pixel sampling (0.9.1): a mesh of whole blocks of the DEM's pixels keeps
+    # SGS pixel sampling (0.9.2): a mesh of whole blocks of the DEM's pixels keeps
     # its own elevation (the block means, from the raster it was made from);
     # --dem is the fine DEM its tables are built from
     keep_elev = sgs_sampling === :pixels && flow_method === :sgs && haskey(mesh.static_vars, "elevation")

@@ -1857,7 +1857,7 @@ third decimal. The noise had raised the levels where it was strong
 §15.14, now the same on every mesh. Rerun of notebook 06 §8 (`RERUN_SGS =
 true`) gives the per-mesh picture.
 
-### 15.16 What separates SGS from the 5 m runs: geometry, the grid, the equations (0.9.1, 2026-11)
+### 15.16 What separates SGS from the 5 m runs: geometry, the grid, the equations (0.9.2, 2026-11)
 
 *Question.* After 0.9.0 SGS stores 0.70–0.79 of the 5 m SWE benchmark at the
 Carlisle peak on every mesh family, with levels 0.4–0.55 m low. How much of

@@ -463,7 +463,7 @@ let
                                 "storage by compensating errors (its beds store ~1.15× the 5 m local-inertial " *
                                 "run). Needs a hydraulic formulation with momentum on the SGS geometry"),
                   # The same bar against the 5 m standard-flow (local-inertial) run (added
-                  # 0.9.1): the like-for-like reference for SGS as it is — local-inertial
+                  # 0.9.2): the like-for-like reference for SGS as it is — local-inertial
                   # hydraulics on its tables — free of the head the shallow-water equations
                   # lose at the Eden's constricted reach (case channel_constriction).
                   Check("SGS on A5 is no further from the 5 m standard-flow run than local-inertial (cell-mean) on " *

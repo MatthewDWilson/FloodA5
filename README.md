@@ -1,5 +1,5 @@
 ![Status: In Development](https://img.shields.io/badge/Status-In_Development-green)
-![Version 0.9.1](https://img.shields.io/badge/Version-0.9.1-lightgrey)
+![Version 0.9.2](https://img.shields.io/badge/Version-0.9.2-lightgrey)
 ![Julia 1.12+](https://img.shields.io/badge/Julia-1.12%2B-blue)
 ![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)
 
@@ -231,7 +231,7 @@ synthetic cases it reaches the analytic levels within 1–2 cm. On Carlisle at
 the peak it reproduces a 5 m local-inertial solution more closely than 22 m
 local-inertial does, but like any local-inertial model it conveys more than
 the full SWE in deep, fast flow: against the 5 m SWE benchmark it stores 0.74
-of the volume (`docs/HYDRAULICS.md` §15.13–15.15). SGS is a representation
+of the volume (`docs/HYDRAULICS.md` §15.13–15.16). SGS is a representation
 of the cell's elevations; hydraulic formulations with momentum on it are
 planned.
 

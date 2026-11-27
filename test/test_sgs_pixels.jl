@@ -1,4 +1,4 @@
-# test/test_sgs_pixels.jl — SGS tables from the DEM's pixels (0.9.1)
+# test/test_sgs_pixels.jl — SGS tables from the DEM's pixels (0.9.2)
 #
 # `build_sgs_tables!(mesh, dem; sampling = :pixels)` (`--sgs-sampling pixels`)
 # on a Cartesian mesh whose cells are whole k × k blocks of the DEM's pixels
