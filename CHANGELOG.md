@@ -33,6 +33,42 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+What separates SGS from the 5 m runs at Carlisle (branch
+`wps5-sgs-hydraulics`; HYDRAULICS §15.16). No default result changes: the new
+table sampling is opt-in, and existing cases are unchanged.
+
+### Added
+- **SGS tables from the DEM's pixels** (`--sgs-sampling bilinear|pixels`,
+  mesh generation; `build_sgs_tables!(…; sampling = :pixels)`). On a
+  Cartesian mesh whose cells are whole k × k blocks of the DEM's pixels, a
+  cell's table holds exactly the pixels' volume at every level (bins at every
+  pixel elevation) and a face's bed is, per pixel pair, max(z_in, z_out); the
+  mesh keeps its block-mean elevation (`--dem` is the fine DEM for the tables
+  only). Any other mesh is refused. Recorded as `sgs_sampling` in the mesh.
+  Test: `test/test_sgs_pixels.jl`.
+- `cases/scripts/block_dem.jl` (exact k × k block means from a raster's own
+  origin, whole blocks only), `rotate_dem.jl` (a DEM resampled onto a grid
+  turned against its own: oblique Mercator on the DEM's datum),
+  `drop_nodata_cells.jl` (a raster mesh without its nodata cells).
+- `FA.sgs_volume` and the tables' `vol_curve` in `FA.load_sgs_tables`.
+- Case **`sgs_pool`** (TEST_CASES §2e): a pool at rest on rough 5 m ground
+  against the pixels' exact volume. SGS with pixel tables +0.1 mm, the
+  default tables +2.3 mm, cell-mean beds +11.6 mm.
+- Case **`oblique_channel`** (§2f): a channel at 0°, 26.565° and 45° to the
+  grid against the analytic normal depth. Oblique, 5 m standard flow is
+  +0.12–0.14 m, 25 m SGS +0.06–0.08 m, 5 m SWE +0.22–0.85 m (an expected
+  failure: the rasterised banks' staircase).
+- Case **`channel_constriction`** (§2g): an abrupt contraction and expansion,
+  aligned with the grid, against 1-D answers. Standard flow and SGS follow
+  the local-inertial answer (no head lost at the opening); SWE loses between
+  the Borda–Carnot head and the abrupt-transition coefficients.
+- `carlisle_peak_fine`: the SGS bar against the 5 m standard-flow run too, the
+  like-for-like reference for SGS as it is (an expected failure by 0.01 in
+  storage at 55.5 h; SGS closer in level and extent at every time).
+- `test/test_version.jl` (CI): `VERSION`, `FLOODA5_VERSION`, the README
+  badge (alt text and image) and the CHANGELOG entry agree; VERSIONING.md's
+  bump step names the badge.
+
 ## [0.9.0] — 2026-11-27
 
 The SGS checkerboard (MINOR, result-changing for SGS; branch

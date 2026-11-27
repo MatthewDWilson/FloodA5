@@ -1,0 +1,62 @@
+# Expected metrics for case "channel_constriction" — written by `julia --project=. cases/run.jl baseline channel_constriction`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[li25]
+err_abrupt = 1.0741642254106434
+err_borda = 1.3474380466244043
+err_energy = 1.4392181229494685
+err_li = 1.4497323341437098
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -7.168458781362007e-5
+level_sd_minus_normal = 0.28529653966418067
+level_up_mean = 43.78418710655989
+mass_balance_rel = 1.4911131622156204e-14
+n_cells = 36.0
+stored_m3 = 732012.3015002285
+
+[li5]
+err_abrupt = -0.4400330029000045
+err_borda = -0.1290182971934425
+err_energy = -0.020012146683196685
+err_li = 0.015833483363059044
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -3.7898640157799534e-5
+level_sd_minus_normal = -0.07682514531055773
+level_up_mean = 42.12155491319805
+mass_balance_rel = 5.5636670956530495e-15
+n_cells = 1170.0
+stored_m3 = 719166.0620470678
+swe5_minus_this_up = 0.5643636199905657
+
+[meta]
+flooda5_version = "0.9.0"
+git_commit = "6989ec7cb80bb9a16e25a74bfccdfae685ebf072"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-27T20:15:53Z"
+
+[sgs25]
+err_abrupt = -0.3860213624803591
+err_borda = -0.09632105516976669
+err_energy = 0.0030721304269292204
+err_li = 0.021695084194491916
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -6.968434378782926e-5
+level_sd_minus_normal = 0.13321168690988117
+level_up_mean = 42.25493404155824
+mass_balance_rel = 3.783413888074435e-15
+n_cells = 36.0
+stored_m3 = 751640.9331020195
+swe5_minus_this_up = 0.4309844916303689
+
+[swe5]
+err_abrupt = -0.033081299916626276
+err_borda = 0.23819060785158938
+err_energy = 0.3290598166921508
+err_li = 0.33877416523823806
+inflow_mismatch_deg = 1.3989104476587813e-10
+input_error_rel = -5.290471284184048e-6
+level_sd_minus_normal = 0.30366589345829453
+level_up_mean = 42.68591853318861
+mass_balance_rel = 2.3366639829527526e-15
+n_cells = 1170.0
+stored_m3 = 795598.9651584822
