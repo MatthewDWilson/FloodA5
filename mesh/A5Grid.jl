@@ -2463,6 +2463,215 @@ end
 end
 
 """
+    _pixel_blocks(mesh, raster) → NamedTuple
+
+For `build_sgs_tables!(…; sampling = :pixels)`: the block of the raster's
+pixels that each cell covers. Every cell must be a quadrilateral whose
+corners, transformed to the raster's CRS, fall on pixel corners (within
+1e-3 pixel) — a raster-aligned Cartesian grid whose cells are whole blocks of
+the DEM's pixels; anything else is an error. Returns `block[ci] = (c0, c1,
+r0, r1)` (0-based pixel columns c0 … c1−1, rows r0 … r1−1), `corner[ci]` the
+pixel corners (c, r) of the cell's polygon vertices in side order, the
+pixel centres' lon/lat (`cen_lon`, `cen_lat`, cell ci's block row-major from
+`cen_off[ci] + 1`), and `max_pixels`.
+"""
+function _pixel_blocks(mesh::A5Mesh, raster)
+    n = length(mesh.cells)
+    sides = [_polygon_sides(c.boundary) for c in mesh.cells]
+    nv = [length(s) for s in sides]
+    all(==(4), nv) || error("SGS pixel sampling: every cell must be a quadrilateral " *
+                            "(a raster-aligned Cartesian grid); found cells with $(sort(unique(nv))) sides")
+    lons = Float64[]; lats = Float64[]
+    for s in sides, (va, _) in s
+        push!(lons, Float64(va[1])); push!(lats, Float64(va[2]))
+    end
+    xs, ys = _reproject_to_dem(lons, lats, raster.proj)
+    block = Vector{NTuple{4,Int}}(undef, n)
+    corner = Vector{Vector{NTuple{2,Int}}}(undef, n)
+    worst = 0.0
+    for ci in 1:n
+        cs = NTuple{2,Int}[]
+        for k in 1:4
+            cf, rf = _affine_to_pixel(xs[4(ci-1)+k], ys[4(ci-1)+k], raster.gt)
+            c = round(Int, cf); r = round(Int, rf)
+            worst = max(worst, abs(cf - c), abs(rf - r))
+            push!(cs, (c, r))
+        end
+        c0, c1 = extrema(first.(cs)); r0, r1 = extrema(last.(cs))
+        (c1 > c0 && r1 > r0 && all(p -> p[1] in (c0, c1) && p[2] in (r0, r1), cs) &&
+         length(unique(cs)) == 4) ||
+            error("SGS pixel sampling: cell $(mesh.cells[ci].id) is not a block of the DEM's pixels " *
+                  "(its corners fall on pixel corners $cs)")
+        block[ci] = (c0, c1, r0, r1); corner[ci] = cs
+    end
+    worst > 1e-3 && error("SGS pixel sampling: the cells' corners are up to $(round(worst; sigdigits = 3)) " *
+                          "pixel from the DEM's pixel corners — the mesh is not aligned with this DEM " *
+                          "(make it with --meshgen-cartesian from a block average of it, cases/scripts/block_dem.jl)")
+    # pixel centres, raster CRS → lon/lat
+    cen_off = zeros(Int, n); tot = 0
+    for ci in 1:n
+        c0, c1, r0, r1 = block[ci]; cen_off[ci] = tot; tot += (c1 - c0) * (r1 - r0)
+    end
+    cx = Vector{Float64}(undef, tot); cy = similar(cx)
+    gt = raster.gt
+    for ci in 1:n
+        c0, c1, r0, r1 = block[ci]; q = cen_off[ci]
+        for r in r0:(r1 - 1), c in c0:(c1 - 1)
+            q += 1
+            cx[q] = gt[1] + (c + 0.5) * gt[2] + (r + 0.5) * gt[3]
+            cy[q] = gt[4] + (c + 0.5) * gt[5] + (r + 0.5) * gt[6]
+        end
+    end
+    if !isempty(raster.proj)
+        zz = zeros(tot)
+        ArchGDAL.createcoordtrans(_crs_gis(raster.proj), _crs_gis(4326)) do xform
+            ArchGDAL.transform!(cx, cy, zz, xform)
+        end
+    end
+    max_pixels = maximum((b[2] - b[1]) * (b[4] - b[3]) for b in block)
+    @info "  Pixel sampling: $n cells, blocks of up to $max_pixels pixels " *
+          "(corners within $(round(worst; sigdigits = 2)) pixel of the DEM's)"
+    return (; block, corner, cen_lon = cx, cen_lat = cy, cen_off, max_pixels)
+end
+
+"""
+    _sgs_pixel_cells!(mesh, raster, pix, connectivity, …)
+
+Step 1 of `build_sgs_tables!` with `sampling = :pixels` (see there): per
+cell, the hypsometric curve, connectivity, wetted-area centroids and side
+profiles from the pixels of its block (`_pixel_blocks`).
+"""
+function _sgs_pixel_cells!(mesh, raster, pix, connectivity, elev_bins_mat, vol_curve_mat, area_curve_mat,
+                           wet_cx_mat, wet_cy_mat, cell_areas, z_mins, z_maxs, n_grid,
+                           side_z, side_act, side_W, side_zin, side_actin)
+    n = length(mesh.cells); n_bins = size(elev_bins_mat, 1)
+    d2m = _EARTH_R * π / 180.0
+    nd = raster.nodata_val
+    function pixel(c, r)
+        (0 <= c < raster.nx && 0 <= r < raster.ny) || return NaN
+        v = raster.band[c + 1, r + 1]
+        return (isfinite(v) && !(isfinite(nd) && v == nd)) ? v : NaN
+    end
+    Threads.@threads for ci in 1:n
+        cell = mesh.cells[ci]
+        bnd  = cell.boundary
+        lonc = Float64(cell.center_lon); latc = Float64(cell.center_lat)
+        mx = d2m * cosd(latc); my = d2m
+        A_cell = _polygon_area_m2(bnd); cell_areas[ci] = A_cell
+        sides = _polygon_sides(bnd)
+        c0, c1, r0, r1 = pix.block[ci]
+        kc = c1 - c0; kr = r1 - r0; ntot = kc * kr
+        dA = A_cell / ntot; hg = sqrt(dA)
+
+        # the block's pixels (the working grid)
+        idx = zeros(Int32, kc, kr)
+        zg = Float64[]; gi = Int32[]; gj = Int32[]; gx = Float64[]; gy = Float64[]
+        q = pix.cen_off[ci]
+        for r in r0:(r1 - 1), c in c0:(c1 - 1)
+            q += 1
+            v = pixel(c, r); isfinite(v) || continue
+            push!(zg, v); push!(gi, Int32(c - c0 + 1)); push!(gj, Int32(r - r0 + 1))
+            push!(gx, (pix.cen_lon[q] - lonc) * mx); push!(gy, (pix.cen_lat[q] - latc) * my)
+            idx[c - c0 + 1, r - r0 + 1] = Int32(length(zg))
+        end
+        np = length(zg); n_grid[ci] = np
+
+        # sides: per pixel along the side (from vertex a to b, reversed into the
+        # canonical direction), the pixel inside and the one across the side
+        ns = length(sides)
+        zin = Vector{Vector{Float64}}(undef, ns); zmx = similar(zin)
+        pin = Vector{Vector{Int}}(undef, ns); sW = zeros(ns)
+        for (k, (va, vb)) in enumerate(sides)
+            (ca, ra) = pix.corner[ci][k]; (cb, rb) = pix.corner[ci][mod1(k + 1, 4)]
+            pairs = NTuple{4,Int}[]                     # (c_in, r_in, c_out, r_out)
+            if ra == rb                                  # along a row boundary
+                rin = ra == r0 ? ra : ra - 1; rout = ra == r0 ? ra - 1 : ra
+                for c in (ca < cb ? (ca:(cb - 1)) : ((ca - 1):-1:cb))
+                    push!(pairs, (c, rin, c, rout))
+                end
+            else                                         # along a column boundary
+                cin = ca == c0 ? ca : ca - 1; cout = ca == c0 ? ca - 1 : ca
+                for r in (ra < rb ? (ra:(rb - 1)) : ((ra - 1):-1:rb))
+                    push!(pairs, (cin, r, cout, r))
+                end
+            end
+            a1, a2, b1, b2 = Float64(va[1]), Float64(va[2]), Float64(vb[1]), Float64(vb[2])
+            (a1, a2) > (b1, b2) && reverse!(pairs)       # the canonical direction (as bilinear sampling)
+            sW[k] = _haversine_m(a1, a2, b1, b2)
+            zi = [pixel(p[1], p[2]) for p in pairs]
+            zo = [pixel(p[3], p[4]) for p in pairs]
+            zin[k] = zi
+            zmx[k] = [isfinite(zo[t]) && isfinite(zi[t]) ? max(zi[t], zo[t]) : zi[t] for t in eachindex(zi)]
+            pin[k] = [Int(idx[p[1] - c0 + 1, p[2] - r0 + 1]) for p in pairs]
+        end
+        side_W[ci] = sW; side_z[ci] = zmx; side_zin[ci] = zin
+        if np == 0
+            elev_bins_mat[:, ci] .= NaN; vol_curve_mat[:, ci] .= 0.0; area_curve_mat[:, ci] .= 0.0
+            side_act[ci] = [copy(v) for v in zmx]; side_actin[ci] = [copy(v) for v in zin]
+            continue
+        end
+
+        z_min = minimum(zg); z_max = maximum(zg)
+        for v in (zin, zmx), s in v, zz in s
+            isfinite(zz) || continue
+            zz < z_min && (z_min = zz); zz > z_max && (z_max = zz)
+        end
+        z_mins[ci] = z_min; z_maxs[ci] = z_max
+
+        # connectivity on the pixel grid
+        seed, conn = if connectivity
+            smask = zeros(UInt32, np); touched = UInt32(0)
+            for p in 1:np, (k, (va, vb)) in enumerate(sides)
+                d = _seg_dist(gx[p], gy[p], (Float64(va[1]) - lonc) * mx, (Float64(va[2]) - latc) * my,
+                              (Float64(vb[1]) - lonc) * mx, (Float64(vb[2]) - latc) * my)
+                if d <= 0.75 * hg
+                    smask[p] |= UInt32(1) << (k - 1); touched |= UInt32(1) << (k - 1)
+                end
+            end
+            _cell_connectivity(zg, idx, gi, gj, smask, min(2, count_ones(touched)))
+        else
+            argmin(zg), zg
+        end
+        # activation: a side point conveys from the level at which the pixel
+        # inside it is wet and connected to the main basin
+        actf(zs, k) = [isfinite(zs[t]) ? (pin[k][t] > 0 ? max(zs[t], conn[pin[k][t]]) : zs[t]) : NaN
+                       for t in eachindex(zs)]
+        side_act[ci] = [actf(zmx[k], k) for k in 1:ns]
+        side_actin[ci] = [actf(zin[k], k) for k in 1:ns]
+
+        # bins: every pixel elevation (the volume is linear between them),
+        # filled out to n_bins with a uniform range and then the largest gaps' midpoints
+        zu = sort(unique(zg))
+        b = sort(unique(vcat(collect(range(z_min, z_max; length = max(2, n_bins - length(zu)))), zu)))
+        if length(b) == 1                               # a flat block: one level, repeated
+            b = fill(b[1], n_bins)
+        end
+        while length(b) < n_bins
+            g = argmax(diff(b)); insert!(b, g + 1, 0.5 * (b[g] + b[g + 1]))
+        end
+        # exact level-pool volume, wetted area and connected centroid at each bin
+        zs = sort(zg); oc = sortperm(conn)
+        cum_area = 0.0; cum_vol = 0.0; ptr = 1; n_in = 0; prev = b[1]
+        cptr = 1; sx = 0.0; sy = 0.0; nc = 0
+        for k in 1:n_bins
+            w = b[k]
+            cum_vol += n_in * dA * (w - prev)
+            while ptr <= np && zs[ptr] <= w
+                cum_area += dA; cum_vol += dA * (w - zs[ptr]); n_in += 1; ptr += 1
+            end
+            while cptr <= np && conn[oc[cptr]] <= w
+                p = oc[cptr]; sx += gx[p]; sy += gy[p]; nc += 1; cptr += 1
+            end
+            elev_bins_mat[k, ci] = w; area_curve_mat[k, ci] = cum_area; vol_curve_mat[k, ci] = cum_vol
+            wet_cx_mat[k, ci] = nc > 0 ? sx / nc : gx[seed]
+            wet_cy_mat[k, ci] = nc > 0 ? sy / nc : gy[seed]
+            prev = w
+        end
+    end
+    return nothing
+end
+
+"""
     build_sgs_tables!(mesh, dem_source;
                       n_bins=100, n_samples=1600, edge_spacing_m=nothing,
                       connectivity=true)
@@ -2477,6 +2686,21 @@ sampled (bilinear) at the grid points inside the polygon. The grid is used
 for everything below, so the tables of a cell and of its faces describe the
 same surface. (Until 0.7.0: 512 Halton candidates per cell whatever its size
 or the DEM's resolution, about two thirds of them inside a pentagon.)
+
+**Pixel sampling** (`sampling = :pixels`, 0.9.1; `--sgs-sampling pixels`).
+For a Cartesian mesh whose cells are whole blocks of the DEM's pixels (a
+raster-aligned grid from a block average of the DEM,
+`cases/scripts/block_dem.jl`), the tables are built from the pixels
+themselves rather than a bilinear surface: the cell is the k × k pixels of
+its block (the working grid), its hypsometric curve is exactly
+Σ_p (A/k²)·max(η − z_p, 0) — the bins include every pixel elevation, between
+which the volume is linear, so the table holds the volume the DEM's pixels
+store at every level — and a face's profile is, per pixel pair across it,
+max(z_in, z_out): the bed a cell-mean model on the pixels puts on that face
+(a boundary side takes the pixel inside). The SGS model then stores, at any
+level, the water a model on the DEM's own grid stores at that level, so the
+two can be compared exactly. `n_bins` is raised to the block's pixel count
++ 2 if smaller. Any other mesh is an error.
 
 **Per cell**
 1. Hypsometric curve: stored volume and wetted area at `n_bins` levels from
@@ -2526,9 +2750,12 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
                             n_samples::Int=1600,
                             halton_seed::Int=0,        # unused since 0.7.0 (kept for callers)
                             edge_spacing_m::Union{Float64,Nothing}=nothing,
-                            connectivity::Bool=true)
+                            connectivity::Bool=true,
+                            sampling::Symbol=:bilinear)
     n = length(mesh.cells)
     n == 0 && error("Cannot build SGS tables on an empty mesh.")
+    sampling in (:bilinear, :pixels) ||
+        throw(ArgumentError("build_sgs_tables!: sampling must be :bilinear or :pixels (got :$sampling)"))
     # pya5's grid_disk (the fallback below) understands A5 cell IDs only; every
     # other generator writes a neighbours column (the mesh contract,
     # docs/MESHES.md §1).
@@ -2591,6 +2818,14 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     n_slots = max(1, maximum(length(_nbrs(c)) for c in mesh.cells))
     nf = SGS_FACE_LEVELS
 
+    # pixel sampling: each cell's block of the DEM's pixels (an error unless
+    # every cell is one); the bins must hold every pixel elevation of a block
+    pix = sampling === :pixels ? _pixel_blocks(mesh, raster) : nothing
+    if pix !== nothing && n_bins < pix.max_pixels + 2
+        @info "  Pixel sampling: $(n_bins) bins raised to $(pix.max_pixels + 2) (pixels per block + 2)"
+        n_bins = pix.max_pixels + 2
+    end
+
     elev_bins_mat  = Matrix{Float64}(undef, n_bins, n)
     vol_curve_mat  = Matrix{Float64}(undef, n_bins, n)
     area_curve_mat = Matrix{Float64}(undef, n_bins, n)
@@ -2613,11 +2848,19 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     side_z   = Vector{Vector{Vector{Float64}}}(undef, n)
     side_act = Vector{Vector{Vector{Float64}}}(undef, n)
     side_W   = Vector{Vector{Float64}}(undef, n)
+    # pixel sampling: a boundary side takes the pixels inside (side_z holds
+    # max(inside, outside), the bed of the face between two cells)
+    side_zin   = Vector{Vector{Vector{Float64}}}(undef, n)
+    side_actin = Vector{Vector{Vector{Float64}}}(undef, n)
 
     # ── Step 1: per cell — working grid, hypsometry, connectivity, sides ──
     @info "  Cells: working grid, hypsometric curves, connectivity..."
     d2m = _EARTH_R * π / 180.0
-    Threads.@threads for ci in 1:n
+    pix === nothing ||
+        _sgs_pixel_cells!(mesh, raster, pix, connectivity, elev_bins_mat, vol_curve_mat, area_curve_mat,
+                          wet_cx_mat, wet_cy_mat, cell_areas, z_mins, z_maxs, n_grid,
+                          side_z, side_act, side_W, side_zin, side_actin)
+    pix === nothing && Threads.@threads for ci in 1:n      # bilinear sampling
         cell = mesh.cells[ci]
         bnd  = cell.boundary
         lonc = Float64(cell.center_lon); latc = Float64(cell.center_lat)
@@ -2818,7 +3061,11 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
             used[k] && continue
             b += 1
             b > length(free) && break
-            _store!(free[b], ci, side_z[ci][k], side_act[ci][k], side_W[ci][k])
+            if pix === nothing
+                _store!(free[b], ci, side_z[ci][k], side_act[ci][k], side_W[ci][k])
+            else
+                _store!(free[b], ci, side_zin[ci][k], side_actin[ci][k], side_W[ci][k])
+            end
         end
     end
 
@@ -2843,6 +3090,7 @@ function build_sgs_tables!(mesh::A5Mesh, dem_source::DEMSource;
     mesh.static_vars["sgs_layout"]       = fill(4.0, n)   # 4 (0.8.0): + critical integral, pixel-centre DEM; 3: face tables; 2: per-cell edge curves
     mesh.static_vars["sgs_connectivity"] = fill(connectivity ? 1.0 : 0.0, n)
     mesh.static_vars["sgs_n_grid"]       = n_grid
+    mesh.static_vars["sgs_sampling"]     = fill(pix === nothing ? 0.0 : 1.0, n)   # 1: pixels (0.9.1)
 
     n_ok = count(isfinite, z_mins)
     @info "SGS tables built in $(round(time()-t0, digits=1))s: $n_ok / $n cells with valid curves; " *
