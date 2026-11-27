@@ -115,6 +115,9 @@ _device_cfl(dev::DeviceRun{:sgs}, courant::Float64) = _sgs_cfl(dev.be, dev.a, co
 _device_depth!(dev::DeviceRun{:swe}) = foreach_index!(dev.be, dev.a.n, _swe_depth_k!, dev.a)
 _device_depth!(dev::DeviceRun{:std}) = foreach_index!(dev.be, dev.a.n, _depth_std_k!, dev.a)
 _device_depth!(dev::DeviceRun{:sgs}) = nothing        # step_sgs! keeps the depth in sync itself
+# --source-order post: the depth after the sources, which follow the step's gather
+_device_source_depth!(dev::DeviceRun{:std}) = _device_depth!(dev)
+_device_source_depth!(dev::DeviceRun{:sgs}) = foreach_index!(dev.be, dev.a.n, _depth_sgs_k!, dev.a)
 _device_step!(dev::DeviceRun{:swe}, dt::Float64, courant::Float64) =
     _swe_advance!(dev.be, dev.a, dt, courant, dev.removed)
 _device_step!(dev::DeviceRun{:std}, dt::Float64, courant::Float64) = _std_step!(dev.be, dev.a, dt, dev.glptr)

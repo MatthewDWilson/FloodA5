@@ -11,6 +11,7 @@
 #       v0.2 (consistent Q-centring, hybrid limiter)
 #   K5  SGS (synthetic prismatic tables), likewise, with the legacy and the
 #       positivity limiter
+#   K2, K5 with the sources before the fluxes and with them (--source-order)
 #   K3  unsupported device options are refused (cell momentum, legacy CFL)
 #   K4  (FLOODA5_TEST_GPU=1 only) the GPU agrees with the CPU after a short
 #       wet run: SWE to 1e-12, standard flow and SGS to 1e-9 (relative volume)
@@ -48,9 +49,9 @@ function _state(mesh, method; kw...)
     return m, s, src
 end
 
-function _run!(m, s, src, method, backend; T = 300.0)
+function _run!(m, s, src, method, backend; T = 300.0, source_order = :pre)
     _quiet(() -> run_simulation!(s, m, T, 10.0, nothing, :none; method = method, rainfall_rate = 20e-3 / 3600,
-                                 all_sources = AbstractSource[src], backend = backend))
+                                 all_sources = AbstractSource[src], backend = backend, source_order))
     return s
 end
 
@@ -64,14 +65,16 @@ const KACPU = KADevice(KernelAbstractions.CPU())
     @test s1.water_depth == s2.water_depth && s1.vol_removed == s2.vol_removed
 end
 
-@testset "K2 — standard: device path on the CPU = CPU threads ($lab, $name)" for (lab, mesh) in _MESHES,
+@testset "K2 — standard: device path on the CPU = CPU threads ($lab, $name, sources $order)" for (lab, mesh) in _MESHES,
+        order in (:pre, :post),
         (name, sch, extra) in (("recommended", :recommended, (;)), ("v0.2", :v02, (;)),
                                ("momentum damping", :recommended, (momentum_damping = 0.05,)))
     opts = merge(scheme_options(sch, :standard), extra)
     BOUNDARY_POSITIVITY[] = scheme_boundary_limiter(sch, :standard) === :positivity
     try
         m, s1, src = _state(mesh, StandardFlow(); opts...); s2 = deepcopy(s1)
-        _run!(m, s1, src, StandardFlow(), CPUThreads()); _run!(m, s2, src, StandardFlow(), KACPU)
+        _run!(m, s1, src, StandardFlow(), CPUThreads(); source_order = order)
+        _run!(m, s2, src, StandardFlow(), KACPU; source_order = order)
         @test s1.vol_removed > 0.0
         @test s1.volume == s2.volume && s1.edges.flux == s2.edges.flux
         @test s1.qvec_u == s2.qvec_u && s1.qvec_v == s2.qvec_v
@@ -95,10 +98,12 @@ function _sgs_state(mesh; kw...)
     return m, s, src
 end
 
-@testset "K5 — SGS: device path on the CPU = CPU threads ($lab, $(kw.limiter))" for (lab, mesh) in _MESHES,
+@testset "K5 — SGS: device path on the CPU = CPU threads ($lab, $(kw.limiter), sources $order)" for (lab, mesh) in _MESHES,
+        order in (:pre, :post),
         kw in (scheme_options(:recommended, :sgs), merge(scheme_options(:recommended, :sgs), (; limiter = :positivity)))
     m, s1, src = _sgs_state(mesh; kw...); s2 = deepcopy(s1)
-    _run!(m, s1, src, SGSFlow(), CPUThreads()); _run!(m, s2, src, SGSFlow(), KACPU)
+    _run!(m, s1, src, SGSFlow(), CPUThreads(); source_order = order)
+    _run!(m, s2, src, SGSFlow(), KACPU; source_order = order)
     @test s1.vol_removed > 0.0
     @test s1.volume == s2.volume && s1.edges.flux_Q == s2.edges.flux_Q
     @test s1.qvec_u == s2.qvec_u && s1.water_depth == s2.water_depth

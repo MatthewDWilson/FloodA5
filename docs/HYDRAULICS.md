@@ -1781,3 +1781,78 @@ pluggable hydraulic formulations on the SGS geometry,
 `projectinstructions/PROJECT_STATE.md`). Open: where at 5 m SWE holds the
 extra 1.3 Mm³ (bends, constrictions, the bridges' reaches), which says which
 momentum terms matter.
+
+### 15.15 The SGS checkerboard: sources and the adaptive time step (0.9.0, 2026-11)
+
+*Symptom.* Since 0.7.0 the SGS water surface on Carlisle broke into
+cell-scale noise on most mesh families before or at the Eden's peak
+(notebook 06 §8): at 55.5 h 36–42% of the fully wet cells were local level
+extrema on Cartesian, rotated Cartesian and rHEALPix (0.1% for
+local-inertial), maximum depths reached 11 m against 6.8 m, and the noise
+started at times from 1.5 h (rHEALPix) to 50 h (hexagons); A5, ISEA3H and the
+jittered Voronoi mesh stayed smooth. Every onset was within 20–40 m of an
+inflow cell. Ruled out on the Cartesian mesh: the Courant number (0.35 gives
+the same onset at a lower amplitude), the critical-flow limit, the flow-path
+geometry, lumped conveyance, gradient correction, the η filter (standard
+flow is smooth with and without it); component friction delays the onset on
+Cartesian only. Q-centring at θ = 0.9 suppresses it but stores 50% more
+water (rHEALPix, 4 h).
+
+*Mechanism.* Sources were added to their cells before the face fluxes were
+computed (`--source-order pre`). The Eden inflow (≈ 900 m³/s at the peak)
+adds Q·Δt ≈ 1150 m³ a step to a 493 m² channel cell, 2.4 m of level, which
+its four faces take back within the step: the level the faces see is the
+stored level plus Q·Δt/a, so it moves with Δt by Q/a ≈ 1.85 m per second
+of Δt. The adaptive Δt in turn follows the levels and face areas of these
+cells (the SGS face rate, `_sgs_face_rate`). A step-by-step trace of the
+inflow cell and its neighbours on Cartesian at 46.5 h shows an exact steady
+state for hundreds of steps, then one change of Δt (1.28 → 0.83 s) that
+starts an oscillation of the inflow cell against its neighbours with a
+period of ≈ 7 steps (9 s) — the cell's gravity mode, ω = √(g·ΣA_f/L_f / a)
+= 0.65 s⁻¹ — during which Δt oscillates with it (1.28, 1.24, 1.18, 1.11,
+1.06 s …) and the amplitude grows from ±0.1 to ±0.9 m in 60 s. It spreads
+downstream from there. Tests on rHEALPix (4 h, extrema at 4 h): a constant
+Δt of 0.5 s or 0.7 s (below and above the adaptive steps) is smooth (0.003,
+against 0.112), the adaptive step at Courant 0.25 is not (0.026 and
+growing); spreading the inflow over the cell and its neighbours only delays
+it (0.092). The variation of Δt drives it, not its size.
+
+*Fix.* `--source-order post` (`_apply_sources_post!`; the default for SGS)
+adds rainfall and point sources after the step's flux update, as part of the
+same volume change, and brings the depth of the cells they touch up to date
+(the device backends likewise). The faces then see the level after the whole
+previous step, which at equilibrium does not depend on Δt; the inflow cell no
+longer swings by Q·Δt/a inside each step. Test S10 (`test_sgs_general.jl`):
+at steady state a 40 m³/s point source's cell holds 0.5637 / 0.5636 /
+0.5636 m at Δt = 0.5 / 1 / 2 s, against 0.5551 / 0.5465 / 0.5294 m with
+`pre` (Q·ΔΔt/a exactly). Standard flow keeps `pre` (its results are
+unchanged; it was smooth on every family) and SWE has only `pre`. A limit on
+the growth of Δt from step to step (tried as `--dt-growth`) removed most of
+the noise too (0.016 on rHEALPix at 4 h), but each fall of Δt still kicks
+the mode; it was not needed once the sources moved and was dropped.
+
+*Carlisle, all eleven families at ~22 m* (`mesh_families_carlisle` jobs,
+55.5 h; against 5 m SWE aggregated onto the cells, `FA.compare_to_fine`):
+
+| mesh | extrema 0.8.x → now | r_rms (mm) | max depth (m) | storage vs 5 m SWE | level median (m) | CSI |
+|---|---|---|---|---|---|---|
+| Cartesian | 0.408 → 0.007 | 414 → 52 | 11.15 → 6.78 | 1.06 → 0.74 | +0.23 → −0.45 | 0.90 → 0.88 |
+| rotated Cartesian | 0.424 → 0.016 | 527 → 38 | 10.81 → 6.73 | 0.96 → 0.75 | −0.07 → −0.49 | 0.88 → 0.82 |
+| rHEALPix | 0.361 → 0.004 | 305 → 19 | 10.83 → 6.68 | 0.76 → 0.76 | −0.47 → −0.49 | 0.85 → 0.85 |
+| hexagons | 0.083 → 0.005 | 127 → 47 | 7.24 → 6.81 | 0.77 → 0.79 | −0.46 → −0.43 | 0.87 → 0.88 |
+| H3 | 0.183 → 0.004 | 285 → 20 | 7.70 → 6.67 | 0.71 → 0.72 | −0.49 → −0.50 | 0.82 → 0.82 |
+| IGEO7 | 0.167 → 0.005 | 658 → 33 | 9.79 → 6.63 | 0.82 → 0.72 | −0.26 → −0.55 | 0.83 → 0.80 |
+| HEALPix | 0.227 → 0.012 | 57 → 39 | 6.76 → 6.76 | 0.76 → 0.77 | −0.42 → −0.41 | 0.83 → 0.83 |
+| Voronoi | 0.143 → 0.005 | 79 → 50 | 7.27 → 6.71 | 0.75 → 0.75 | −0.50 → −0.49 | 0.84 → 0.84 |
+| jittered Voronoi | 0.008 → 0.008 | 65 → 48 | 6.73 → 6.73 | 0.76 → 0.76 | −0.49 → −0.49 | 0.84 → 0.84 |
+| ISEA3H | 0.006 → 0.006 | 42 → 41 | 6.67 → 6.67 | 0.70 → 0.70 | −0.54 → −0.54 | 0.80 → 0.80 |
+| A5 res 18 (`carlisle_peak`) | 0.009 → 0.005 | 42 → 25 | 6.68 → 6.68 | 0.735 → 0.735 | −0.47 → −0.47 | 0.81 → 0.81 |
+
+(Local-inertial on the 22.2 m Cartesian mesh: extrema 0.001, r_rms 60 mm,
+storage 0.94, median −0.08 m, CSI 0.85.) Every family is now smooth through
+the peak, and the families that were smooth before are unchanged to the
+third decimal. The noise had raised the levels where it was strong
+(Cartesian, rotated Cartesian, IGEO7): with it gone, SGS stores 0.70–0.79 of
+5 m SWE on every family with levels 0.4–0.55 m low — the hydraulic gap of
+§15.14, now the same on every mesh. Rerun of notebook 06 §8 (`RERUN_SGS =
+true`) gives the per-mesh picture.

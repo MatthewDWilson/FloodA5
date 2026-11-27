@@ -83,6 +83,16 @@ end
     return nothing
 end
 
+# The depth from the volume alone (after the sources under --source-order post)
+@inline function _depth_sgs_k!(i, a)
+    @inbounds begin
+        t = _tab(a.tables, i)
+        a.water_depth[i] = isnan(t.z_min) ? 0.0 :
+                           max(0.0, wse_from_volume(t, a.volume[i]) - t.z_min)
+    end
+    return nothing
+end
+
 # Phase D for ghost edge k (as _apply_ghost_fluxes_sgs!), level by level
 @inline function _ghost_sgs_k!(k, a, dt)
     @inbounds begin
