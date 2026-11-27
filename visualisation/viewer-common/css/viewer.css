@@ -24,6 +24,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
   border-bottom: 1px solid var(--border); z-index: 10; }
 .logo { font: 600 13px var(--mono); letter-spacing: .12em; color: var(--accent); text-transform: uppercase; }
 .logo span { color: var(--dim); }
+.logo .ver { margin-left: 6px; font-weight: 400; letter-spacing: .04em; text-transform: none; }
+/* the pointer's position, at the bottom-right edge (0.9.1) */
+.cursor-pos { position: absolute; right: 0; bottom: 0; z-index: 11; padding: 2px 8px;
+  font: 10px/1.6 var(--mono); color: var(--text); background: rgba(8,12,15,.78);
+  border-top: 1px solid var(--border); border-left: 1px solid var(--border); pointer-events: none; }
+.cursor-pos:empty { display: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
 .dot.live { background: #22e08a; box-shadow: 0 0 6px #22e08a; animation: pulse 1.2s ease-in-out infinite; }
 .dot.complete, .dot.replay { background: var(--accent); }
