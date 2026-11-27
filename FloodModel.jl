@@ -49,7 +49,7 @@ Bump PATCH for pure bug fixes with no behaviour/CLI change, MINOR for new
 features, flags, or intentional behaviour changes, and reserve 1.0.0 for
 the first release considered validated against real-world data.
 """
-const FLOODA5_VERSION = "0.9.1"
+const FLOODA5_VERSION = "0.9.2"
 
 # Guard against double-include when FloodModel.jl is included from a test
 # harness that has already loaded A5Grid or stubbed the vis modules.
@@ -4281,6 +4281,7 @@ function run_flood_model(;
     sgs_bins         :: Int     = 100,
     sgs_samples      :: Int     = 1600,
     sgs_connectivity :: Bool    = true,     # 0.7.0: face activation levels (mesh generation)
+    sgs_sampling     :: Symbol  = :bilinear, # 0.9.2: :pixels = tables from the DEM's pixels (mesh generation)
     sgs_path         :: Bool    = true,     # 0.7.0: flow-path geometry of partly wet cells
     sgs_critical     :: Bool    = true,     # 0.8.0: critical-flow limit on SGS faces
     manning_n        :: Float64 = 0.03,
@@ -4465,7 +4466,12 @@ function run_flood_model(;
 
     # 3. DEM sampling (if requested)
     mesh_modified = false     # the run changed the mesh it acquired (DEM, SGS tables)
-    if dem_source !== nothing
+    # SGS pixel sampling (0.9.2): a mesh of whole blocks of the DEM's pixels keeps
+    # its own elevation (the block means, from the raster it was made from);
+    # --dem is the fine DEM its tables are built from
+    keep_elev = sgs_sampling === :pixels && flow_method === :sgs && haskey(mesh.static_vars, "elevation")
+    keep_elev && @info "SGS pixel sampling: the mesh keeps its elevation; --dem is used for the SGS tables only"
+    if dem_source !== nothing && !keep_elev
         if mesh_source[1] === :load && haskey(mesh.static_vars, "elevation")
             n_valid = count(isfinite, mesh.static_vars["elevation"])
             n_total = length(mesh.cells)
@@ -4555,7 +4561,7 @@ function run_flood_model(;
             t0 = time()
             build_sgs_tables!(mesh, dem_source;
                               n_bins=sgs_bins, n_samples=sgs_samples,
-                              connectivity=sgs_connectivity)
+                              connectivity=sgs_connectivity, sampling=sgs_sampling)
             tl.sgs_tables = time() - t0
             @info "SGS tables built in $(_fmt_elapsed(tl.sgs_tables))"
             mesh_modified = true
@@ -5090,6 +5096,17 @@ Flow model options:
                      inside a cell closes the faces behind it up to its
                      crest (or to the sill of a gap through it). off: every
                      face point conveys from its own elevation.
+  --sgs-sampling bilinear|pixels
+                     (mesh generation) bilinear (default): the tables sample
+                     a bilinear surface through the DEM's pixel centres on
+                     a working grid per cell. pixels: for a Cartesian mesh
+                     whose cells are whole blocks of the DEM's pixels
+                     (--meshgen-cartesian on a block average of the DEM,
+                     cases/scripts/block_dem.jl), the tables are the pixels
+                     themselves: a cell stores exactly what the pixels
+                     store at each level, and a face's bed is, per pixel
+                     pair across it, the higher of the two — what a model
+                     on the DEM's own grid has. An error on any other mesh.
   --sgs-path on|off  (SGS) on (default): the slope across a face is taken
                      over the distance between the wetted areas of the two
                      cells, and the face's flow area is projected on that
@@ -5840,6 +5857,11 @@ function main(args=String[])
         (println("ERROR: $flag requires 'on' or 'off' (got '$v')\n"); print_help(1))
     sgs_conn_val, args = _pop_flag(args, "--sgs-connectivity")
     sgs_connectivity = sgs_onoff("--sgs-connectivity", sgs_conn_val)
+    sgs_samp_val, args = _pop_flag(args, "--sgs-sampling")
+    sgs_samp_val === nothing || sgs_samp_val in ("bilinear", "pixels") ||
+        (println("ERROR: --sgs-sampling requires 'bilinear' or 'pixels' (got '$sgs_samp_val')
+"); print_help(1))
+    sgs_sampling = sgs_samp_val === nothing ? :bilinear : Symbol(sgs_samp_val)
     sgs_path_val, args = _pop_flag(args, "--sgs-path")
     sgs_path = sgs_onoff("--sgs-path", sgs_path_val)
     sgs_crit_val, args = _pop_flag(args, "--sgs-critical")
@@ -6267,6 +6289,7 @@ function main(args=String[])
         sgs_bins        = sgs_bins,
         sgs_samples     = sgs_samples,
         sgs_connectivity = sgs_connectivity,
+        sgs_sampling    = sgs_sampling,
         sgs_path        = sgs_path,
         sgs_critical    = sgs_critical,
         manning_n       = manning_n,

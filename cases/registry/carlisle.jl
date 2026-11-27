@@ -461,6 +461,19 @@ let
                                 "on its tables — stores 0.87 of the 5 m local-inertial run, closer to it in " *
                                 "level and extent than the cell-mean run; the cell-mean run matches SWE's " *
                                 "storage by compensating errors (its beds store ~1.15× the 5 m local-inertial " *
-                                "run). Needs a hydraulic formulation with momentum on the SGS geometry")],
+                                "run). Needs a hydraulic formulation with momentum on the SGS geometry"),
+                  # The same bar against the 5 m standard-flow (local-inertial) run (added
+                  # 0.9.2): the like-for-like reference for SGS as it is — local-inertial
+                  # hydraulics on its tables — free of the head the shallow-water equations
+                  # lose at the Eden's constricted reach (case channel_constriction).
+                  Check("SGS on A5 is no further from the 5 m standard-flow run than local-inertial (cell-mean) on " *
+                        "the same mesh, at 49.5, 52.5 and 55.5 h: storage, rms water-level difference and extent (CSI at 0.1 m)",
+                        m -> _carl_bar(m, "vs5:a5_sgs", "vs5:a5_li"; ref = "li5");
+                        detail = m -> _carl_bar_detail(m, "vs5:a5_sgs", "vs5:a5_li"; ref = "li5"),
+                        xfail = "storage only, at 55.5 h, by 0.01 (|0.872 − 1| against |1.118 − 1|; SGS is closer in " *
+                                "level and extent at every time): the 5 m run's Petteril overtops into the city and " *
+                                "the defended compartments, a threshold that moves with the grid's alignment — on a " *
+                                "5 m grid turned 26.565° standard flow stores 6.6% less (HYDRAULICS §15.16; Nguyen et " *
+                                "al. 2025, doi:10.1029/2024WR038919)")],
     ))
 end

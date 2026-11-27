@@ -613,7 +613,7 @@ const _DROP_FLAGS = Set(["--meshgen", "--meshres", "--meshgen-cartesian", "--dx"
                          "--meshgen-dggs", "--dggs",
                          "--cartesian-lat-ref", "--meshout", "--meshload", "--dem",
                          "--dem-method", "--dem-samples", "--dem-seed", "--dem-strict",
-                         "--sgs-bins", "--sgs-samples", "--sgs-connectivity", "--mesh-only", "--output",
+                         "--sgs-bins", "--sgs-samples", "--sgs-connectivity", "--sgs-sampling", "--mesh-only", "--output",
                          "--vis-port", "--embed-mesh"])
 const _VIS_MODES = Set(["cesium", "giro3d", "makie"])
 

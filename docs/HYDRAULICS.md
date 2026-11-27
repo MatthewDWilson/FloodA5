@@ -1856,3 +1856,93 @@ third decimal. The noise had raised the levels where it was strong
 5 m SWE on every family with levels 0.4–0.55 m low — the hydraulic gap of
 §15.14, now the same on every mesh. Rerun of notebook 06 §8 (`RERUN_SGS =
 true`) gives the per-mesh picture.
+
+### 15.16 What separates SGS from the 5 m runs: geometry, the grid, the equations (0.9.2, 2026-11)
+
+*Question.* After 0.9.0 SGS stores 0.70–0.79 of the 5 m SWE benchmark at the
+Carlisle peak on every mesh family, with levels 0.4–0.55 m low. How much of
+that is the volume representation (a cell's hypsometric table against the
+pixels it stands for), how much the 5 m grid, and how much the equations?
+
+*Exact tables* (`--sgs-sampling pixels`, `build_sgs_tables!(…; sampling =
+:pixels)`). On a Cartesian mesh whose cells are whole k × k blocks of the
+DEM's pixels (`cases/scripts/block_dem.jl`: block means from the raster's own
+origin), the tables are built from the pixels: a cell's volume at level η is
+exactly Σ_p (A/k²)·max(η − z_p, 0) (bins at every pixel elevation), and a
+face's bed per pixel pair is max(z_in, z_out) — what a model on the pixels
+has. An SGS model on the blocks then stores, at any level, what the pixels
+store (`test/test_sgs_pixels.jl`).
+
+*Volume.* A pool at rest on rough ground (case `sgs_pool`, TEST_CASES §2e):
+SGS with pixel tables reaches the exact level to 0.1 mm, the default
+(bilinear) tables 2.3 mm high (0.4% of the volume: a bilinear surface is
+smoother than the pixels), cell-mean beds 11.6 mm. At Carlisle, on a 25 m
+grid of exact 5 × 5 blocks of the 5 m LiDAR, a flat level in each block at the
+5 m runs' mean wet level holds within 0.1% of their volume. The volume
+representation is not the gap.
+
+*Carlisle, aligned 25 m grid* (55.5 h; per block, the level at which its pixel
+table holds the 5 m volume):
+
+| 25 m model | vs 5 m standard: storage | level median (rms) | vs 5 m SWE: storage | level median (rms) |
+|---|---|---|---|---|
+| SGS, pixel tables | 0.892 | −0.07 (0.41) m | 0.752 | −0.46 (0.67) m |
+| SGS, bilinear tables | 0.899 | −0.11 (0.28) m | 0.758 | −0.49 (0.60) m |
+| SGS, pixel tables, connectivity off | 0.930 | −0.07 (0.30) m | 0.784 | −0.47 (0.49) m |
+| standard flow, block means | 1.091 | +0.18 (0.43) m | 0.920 | −0.22 (0.40) m |
+
+5 m SWE holds 1.31 Mm³ more than 5 m standard flow: a backwater over the
+Eden's upstream floodplain (+0.4–0.5 m, almost uniform) stepping down at the
+constricted, fast reach through the city (> 3 m/s). SGS's 0.76 Mm³ less than
+5 m standard flow is two-thirds in slow areas south of the Eden: in the 5 m
+runs the Petteril overtops its embanked reach and floods the city and the
+defended compartments behind it, which SGS keeps in bank. Turning
+connectivity off fills some of those compartments, but by letting water
+under walls whose crests the 5 m runs never reach from that side — the leak
+connectivity exists to stop (`planar_wall`), not a fix.
+
+*The grid.* A straight channel at an angle to the grid (case
+`oblique_channel`, TEST_CASES §2f): aligned, every model holds the analytic
+normal level; at 26.565° and 45° standard flow on 5 m pixels is +0.12–0.14 m
+(+0.06 m on 2.5 m pixels), SGS at 25 m +0.06–0.08 m (−0.01 m from 2.5 m
+pixels), and 5 m SWE +0.22–0.85 m for a 15 m channel and +0.10–0.34 m for a
+45 m one, barely less on 2.5 m pixels: the staircase of the rasterised banks
+costs SWE head at every step. Carlisle on a 5 m grid turned 26.565°
+(`cases/scripts/rotate_dem.jl`, an oblique Mercator on the DEM's datum,
+bilinear resampling; nodata cells dropped, `drop_nodata_cells.jl`):
+
+| 55.5 h, Mm³ | 5 m standard | 5 m SWE | SWE ÷ standard | 25 m SGS (pixel tables) |
+|---|---|---|---|---|
+| original grid | 7.066 | 8.380 | 1.186 | 6.302 |
+| grid turned 26.565° | 6.600 | 8.253 | 1.250 | 6.425 |
+
+The 5 m standard run moves 6.6% with the grid's alignment — the Petteril's
+overtopping is a threshold, the kind of grid-alignment effect Nguyen et al.
+(2025, doi:10.1029/2024WR038919) measured with LISFLOOD-FP (extent ±7%,
+rotation worse than translation, more where water just overtops) — and SGS
+2%. SWE's backwater over the upstream floodplain is on both grids.
+
+*The equations.* An abrupt contraction and expansion in a channel aligned
+with the grid (case `channel_constriction`, TEST_CASES §2g), against 1-D
+answers started from each run's own level below the opening: standard flow
+and SGS follow the local-inertial answer (no convective term: no head lost at
+the opening) within 2 cm; 5 m SWE stands 0.24 m above the Borda–Carnot answer
+and 0.03 m below the step-backwater coefficients for abrupt transitions
+(0.6 / 0.8). The head SWE loses at a constriction is physical.
+
+*Conclusions.* (1) SGS's geometry is right: exact volumes, and it matches 5 m
+standard flow where the physics is the same (`channel_constriction`,
+`oblique_channel`). (2) Against 5 m standard flow — the like-for-like
+reference for SGS as it is, local-inertial on its tables — SGS on A5 is
+closer than cell-mean local-inertial in level (rms 0.16 against 0.34 m) and
+extent at every time, and further in storage only at 55.5 h, by 0.01; the
+rest of its gap there is a threshold (the Petteril) that moves with the 5 m
+grid's alignment (`carlisle_peak_fine`, second bar, an expected failure).
+(3) Against 5 m SWE the remaining gap is the equations: the head lost at the
+Eden's constricted reach, which local-inertial hydraulics cannot lose. Part
+of the 5 m SWE run's excess may also be its staircase banks wherever the
+channels run obliquely; the backwater survives turning the grid, but every
+orientation has oblique reaches. (4) So the hydraulic formulation for SGS
+should carry convective momentum, or at least form losses where a face's flow
+area changes sharply — judged on `channel_constriction` (and its oblique
+variants) before Carlisle.

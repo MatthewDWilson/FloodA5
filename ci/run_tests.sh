@@ -9,12 +9,14 @@ export FLOODA5_NO_VIS=1
 export JULIA_NUM_THREADS="${JULIA_NUM_THREADS:-2}"
 
 TESTS=(
+  test/test_version.jl
   test/test_wp0_regressions.jl
   test/test_pya5_compat.jl
   test/test_mesh_families.jl
   test/test_dggs_meshes.jl
   test/test_dem_registration.jl
   test/test_sgs_general.jl
+  test/test_sgs_pixels.jl
   test/test_default_scheme.jl
   test/test_qcentre.jl
   test/test_wp4_equivalence.jl

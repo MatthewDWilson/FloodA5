@@ -33,6 +33,9 @@ output records the same command line and completed; `--fresh` runs it again
 | `planar_slope` | standard | 2b | N/S volume symmetry on a 0.1% plane, A5 res 16/18 and Cartesian 25 m | ~10 min |
 | `planar_embankment` | standard | 2a | SGS passes water through a sub-cell notch near its sill; standard only at the crest | ~6 min |
 | `planar_wall` | standard | 2d | a wall with no gap: no water may pass below the crest; SGS passes a wall narrower than a cell at once (8 runs; the two SGS thin-wall checks are expected failures until SGS is fixed) | ~20 min |
+| `sgs_pool` | standard | 2e | a pool at rest on rough 5 m ground: each 25 m model's level against the pixels' exact volume (SGS with pixel tables exact to 0.1 mm) | ~15 min |
+| `oblique_channel` | standard | 2f | a 15 m channel at 0°, 26.6° and 45° to the 5 m grid against the analytic normal depth (12 runs; 5 m SWE's orientation check an expected failure) | ~40 min |
+| `channel_constriction` | standard | 2g | an abrupt contraction and expansion aligned with the grid against 1-D answers: standard flow and SGS lose no head at the opening, SWE does | ~20 min |
 | `sgs_strip` | standard | 2c | SGS against analytic normal flow, storage and arrival on a 4 km strip with a sub-cell channel (16 runs; several SGS checks fail by design: expected failures until SGS is fixed) | ~40 min |
 | `channel` | standard | 7 | straight channel, 22/11 m cells, 0°/45°, A5/Cartesian, SWE/LI (16 runs) | ~15 min |
 | `channel_series` | full | 7 | the full 224-run channel series | hours |
@@ -466,6 +469,121 @@ wall's east side (8.0 → 4.99 m over one pixel). Sampled at the face itself
 it is 7.82 m. The half-pixel registration applied to every DEM sample (SGS
 tables, face profiles and cell-mean elevations); fixed in 0.8.0, with every
 case rerun.
+
+### 2e. A pool at rest on rough ground: is the volume right? (`sgs_pool`)
+
+*Question.* At the Carlisle peak SGS stores 0.70–0.79 of the 5 m SWE run.
+Could part of that be the volume representation — a 25 m cell's table
+against the 5 m pixels it stands for? Water at rest answers it, because its
+level depends on the geometry alone (HYDRAULICS §15.16).
+
+*Terrain* (`cases/scripts/sgs_pool_dem.jl`): 500 × 400 m of 5 m pixels in
+British National Grid (north-west corner 338 495 E, 557 760 N, not on a
+multiple of 25 m, like the Carlisle DEM): a bowl, a 0.2% tilt, ridges and
+hollows of 25–80 m (±0.35 m), pixel noise (±0.15 m) and a one-pixel channel
+1 m deep, with every depression filled to its spill level towards one sink
+(4-connected, as the models connect cells), so that water at rest stands at
+one level over exactly the pixels below it. The exact level for a volume V
+is the η with Σ a_p·max(η − z_p, 0) = V. The 25 m grid is the exact 5 × 5
+block means (`cases/scripts/block_dem.jl`).
+
+*Runs.* 52 866 m³ enters at the sink in 2 h; 4 h at rest; closed boundaries.
+Standard flow on the 5 m pixels; on the 25 m grid SGS with tables from the
+pixels (`--sgs-sampling pixels`), SGS with the default bilinear tables, and
+standard flow on the block means. About a minute each.
+
+*Results* (level at rest − exact level for the run's stored volume):
+
+| run | level − exact | its own geometry − exact |
+|---|---|---|
+| standard flow, 5 m pixels | +0.0 mm | 0 |
+| SGS 25 m, tables from the pixels | +0.1 mm | −0.0 mm |
+| SGS 25 m, bilinear tables (default) | +2.3 mm | +2.3 mm |
+| standard flow 25 m, block means | +11.6 mm | +11.6 mm |
+
+"Its own geometry" is the level that run's tables (or cell-mean beds) give
+for its volume at rest, so the second column is the representation's error
+and the difference between the columns whether the run is at rest. The
+default tables describe a bilinear surface through the pixel centres, which
+is smoother than the pixels, so they store slightly less at a given level
+(0.4% of the pool's volume here). Volume representation is not what
+separates SGS from the 5 m runs at Carlisle.
+
+### 2f. A channel at an angle to the grid (`oblique_channel`)
+
+*Question.* On a Cartesian grid an oblique channel is a staircase of
+pixels. Does a model convey it as the channel, or as the staircase?
+
+*Terrain* (`cases/scripts/oblique_channel_dem.jl`): a rectangular channel
+15 m wide (three 5 m pixels) and 2 m deep, bed slope 0.002, between
+floodplains at the bank top, at 0°, 26.565° (1:2) and 45° to the grid;
+walls beyond the floodplains and a steep drop past s = 1300 m (critical
+control). 25 m³/s in bank, n = 0.035, 3 h. The analytic answer is the 2-D
+normal depth (friction on the bed only) for the rasterised channel — its
+pixels' area per metre, W_r = 15.0, 15.71 and 17.62 m — since every model
+sees those pixels.
+
+*Runs* per angle: standard flow and SWE on the 5 m pixels, SGS on the exact
+25 m blocks (pixel tables), standard flow on the block means.
+
+*Results* (mean level over the channel in s = 400–1000 m − analytic):
+
+| run | 0° | 26.565° | 45° |
+|---|---|---|---|
+| standard flow, 5 m | −0.012 | +0.135 | +0.115 |
+| SWE, 5 m | −0.007 | **+0.850** (floodplains flooded) | +0.220 |
+| SGS 25 m (pixel tables) | −0.030 | +0.082 | +0.060 |
+| standard flow 25 m (block means) | +0.77 | +1.10 | +1.25 |
+
+Outside the case: on 2.5 m pixels standard flow is +0.063 / +0.058 m and SWE
++0.718 / +0.115 m (26.565° / 45°; SGS 25 m from those pixels −0.014 /
+−0.006 m); SWE in Float32 on the GPU matches Float64 on the CPU to the
+millimetre; for a channel 45 m wide (nine pixels) SWE is +0.342 m at 26.565°
+and +0.095 m at 45°, standard flow +0.03 m. Aligned with the grid every model
+holds the analytic level. Oblique, the staircase of the rasterised banks
+costs SWE head — form drag at every step, which keeps its shape at any pixel
+size, so it falls only slowly with resolution — far more than it costs
+standard flow; SGS at 25 m is the least sensitive to the angle. The SWE
+check is an expected failure: a property of the 5 m reference.
+
+### 2g. An abrupt contraction and expansion (`channel_constriction`)
+
+*Question.* At the Carlisle peak the 5 m SWE run stands 0.4–0.5 m above
+5 m standard flow over the Eden's upstream floodplain, the step at the
+constricted reach through the city (HYDRAULICS §15.16). The local-inertial
+equations have no convective term, so they lose no head where the flow
+contracts and expands; the shallow-water equations conserve momentum, so
+they do. Here the channel is aligned with the grid, so there is no
+staircase.
+
+*Terrain* (`cases/scripts/channel_constriction_dem.jl`): a channel 65 m
+wide between walls, bed slope 0.0005, narrowing abruptly to 35 m for 25 m
+at s = 2000 m; a broad-crested sill at s = 3500 m, its crest set so that
+critical flow over it needs the normal flow's energy, holds the channel
+above it at normal depth (2.99 m for 300 m³/s, n = 0.03; Froude 0.29, about
+0.65 in the opening). 4 h.
+
+*Answers* (`cases/scripts/channel_constriction_1d.jl`), 1-D from each run's
+own level at s = 2600 m (so the control drops out): local-inertial
+(dη/ds = −S_f, the level continuous through the opening), lossless energy,
+energy with the Borda–Carnot loss (v_o − v_w)²/2g at the expansion, and the
+step-backwater coefficients for abrupt transitions (0.6 of the change in
+velocity head at the contraction, 0.8 at the expansion). For this design the
+four give +0.03, +0.06, +0.18 and about +0.45 m of afflux above normal.
+
+*Results* (mean level over s = 1500–1950 m − each answer):
+
+| run | local-inertial | lossless | Borda | abrupt |
+|---|---|---|---|---|
+| standard flow, 5 m | **+0.016** | −0.020 | −0.129 | −0.440 |
+| SGS 25 m (pixel tables) | **+0.022** | +0.003 | −0.096 | −0.386 |
+| SWE, 5 m | +0.339 | +0.329 | +0.238 | **−0.033** |
+
+Standard flow and SGS follow the local-inertial answer; SWE loses more than
+the Borda–Carnot head (flow separation at the opening's corners, a vena
+contracta) and close to what the engineering coefficients give for a
+sharp-cornered opening. So the head SWE loses at a constriction is physical,
+and a model without the convective term does not have it.
 
 ---
 

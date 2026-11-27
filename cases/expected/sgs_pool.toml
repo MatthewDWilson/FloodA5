@@ -1,0 +1,90 @@
+# Expected metrics for case "sgs_pool" — written by `julia --project=. cases/run.jl baseline sgs_pool`.
+# Tolerances are in cases/registry (Case.rtol / Case.atol).
+[c25_li]
+eta_end = 11.672951567251776
+eta_err_end = 0.011642662615717114
+eta_err_fill = 0.011896607138783821
+eta_exact_end = 11.661308904636059
+eta_exact_fill = 11.661308904636055
+eta_fill = 11.673205511774839
+eta_self_end = 11.67293938127818
+eta_self_fill = 11.67293938127818
+eta_spread_end = 0.00013883157174632288
+eta_spread_fill = 0.009456543239920734
+input_error_rel = -4.99601404334806e-14
+mass_balance_rel = 5.2162240287300525e-14
+repr_err_end = 0.011630476642121579
+repr_err_fill = 0.011630476642125132
+stored_end_m3 = 52865.59627399721
+stored_fill_m3 = 52865.596273997195
+t_end = 21600.0
+
+[c25_sgs_bl]
+eta_end = 11.663651782394945
+eta_err_end = 0.002342838340657849
+eta_err_fill = 0.0026883056946296335
+eta_exact_end = 11.661308944054287
+eta_exact_fill = 11.661308944054287
+eta_fill = 11.663997249748917
+eta_self_end = 11.663646730646505
+eta_self_fill = 11.663646730646505
+eta_spread_end = 0.002531025318852187
+eta_spread_fill = 0.011267019696067138
+input_error_rel = 6.707116853931269e-8
+mass_balance_rel = 5.174934309381826e-14
+repr_err_end = 0.0023377865922178387
+repr_err_fill = 0.0023377865922178387
+stored_end_m3 = 52865.59981975714
+stored_fill_m3 = 52865.59981975714
+t_end = 21600.0
+
+[c25_sgs_px]
+eta_end = 11.661408323918915
+eta_err_end = 9.94192828596141e-5
+eta_err_fill = 0.0005774397738118608
+eta_exact_end = 11.661308904636055
+eta_exact_fill = 11.661308904636055
+eta_fill = 11.661886344409867
+eta_self_end = 11.661308638707617
+eta_self_fill = 11.661308638707617
+eta_spread_end = 0.001126532880496356
+eta_spread_fill = 0.010986607902347956
+input_error_rel = -4.99601404334806e-14
+mass_balance_rel = 5.106119036039181e-14
+repr_err_end = -2.6592843838102453e-7
+repr_err_fill = -2.6592843838102453e-7
+stored_end_m3 = 52865.59627399715
+stored_fill_m3 = 52865.59627399719
+t_end = 21600.0
+
+[design]
+V0_m3 = 52865.5962739971
+eta0 = 11.659042998452987
+inflow_pixel_ok = 1.0
+n_pixels_raised = 2299.0
+
+[meta]
+flooda5_version = "0.9.0"
+git_commit = "958892ff81d1c454a9096828f643dfeacdd8f8e5"
+git_dirty = true
+platform = "NT x86_64"
+recorded_utc = "2026-11-27T02:41:47Z"
+
+[px5_li]
+eta_end = 11.66128980047804
+eta_err_end = 2.824974972170935e-6
+eta_err_fill = -0.00012781968779052022
+eta_exact_end = 11.661286975503067
+eta_exact_fill = 11.661286975503067
+eta_fill = 11.661159155815277
+eta_self_end = 11.661286975503067
+eta_self_fill = 11.661286975503067
+eta_spread_end = 3.74557702471634e-5
+eta_spread_fill = 0.006917219152695608
+input_error_rel = -3.731302843171591e-5
+mass_balance_rel = 1.3763637649361224e-15
+repr_err_end = 0.0
+repr_err_fill = 0.0
+stored_end_m3 = 52863.62369850032
+stored_fill_m3 = 52863.62369850021
+t_end = 21600.082274169552

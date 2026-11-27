@@ -150,7 +150,8 @@ end
 
 The part of a cell's SGS storage table that gives its wetted area: the level
 knots `elev_bins` and the cumulative wetted area `area_curve` at them (m²),
-the cell's area and its lowest and highest ground (`A5Grid.SGSTable`).
+the cell's area and its lowest and highest ground (`A5Grid.SGSTable`), and
+the stored volume at the knots, `vol_curve` (m³; empty if not loaded).
 """
 struct SGSAreaTable
     elev_bins::Vector{Float64}
@@ -158,6 +159,29 @@ struct SGSAreaTable
     cell_area::Float64
     z_min::Float64
     z_max::Float64
+    vol_curve::Vector{Float64}
+end
+SGSAreaTable(eb, ac, A, zmin, zmax) = SGSAreaTable(eb, ac, A, zmin, zmax, Float64[])
+
+"""
+    sgs_volume(t::SGSAreaTable, η) -> m³
+
+Water the cell stores at level η, as the model computes it (the inverse of
+`A5Grid.wse_from_volume`): 0 at or below the lowest ground, linear between
+knots, and the whole cell's area above the highest knot.
+"""
+function sgs_volume(t::SGSAreaTable, η::Real)
+    isempty(t.vol_curve) && error("sgs_volume: the table has no volume curve (load_sgs_tables loads it)")
+    η = Float64(η); eb = t.elev_bins; n = length(eb)
+    η <= t.z_min && return 0.0
+    η >= eb[n] && return t.vol_curve[n] + (η - eb[n]) * t.cell_area
+    lo, hi = 1, n
+    while hi - lo > 1
+        mid = (lo + hi) >>> 1
+        eb[mid] <= η ? lo = mid : hi = mid
+    end
+    frac = (η - eb[lo]) / (eb[hi] - eb[lo] + 1e-15)
+    return t.vol_curve[lo] + frac * (t.vol_curve[hi] - t.vol_curve[lo])
 end
 
 """
@@ -192,12 +216,14 @@ tables (no DEM) get NaN extremes.
 """
 function load_sgs_tables(path::AbstractString; ids = nothing)
     cols = ("sgs_elev_bins", "sgs_area_curve", "sgs_cell_area", "sgs_z_min", "sgs_z_max")
-    c = load_mesh_columns(path, cols; ids)
+    c = load_mesh_columns(path, (cols..., "sgs_vol_curve"); ids)
     missing_cols = [n for n in cols if !haskey(c, n)]
     isempty(missing_cols) ||
         error("$path: no SGS tables (missing $(join(missing_cols, ", "))); build the mesh with --flow-model sgs")
+    vc = get(c, "sgs_vol_curve", nothing)
     return [SGSAreaTable(c["sgs_elev_bins"][i], c["sgs_area_curve"][i], c["sgs_cell_area"][i],
-                         c["sgs_z_min"][i], c["sgs_z_max"][i]) for i in eachindex(c["sgs_z_min"])]
+                         c["sgs_z_min"][i], c["sgs_z_max"][i], vc === nothing ? Float64[] : vc[i])
+            for i in eachindex(c["sgs_z_min"])]
 end
 
 """
