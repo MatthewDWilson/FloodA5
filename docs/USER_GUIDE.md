@@ -569,6 +569,30 @@ then rebuilds the surface once, about 1 s); a frame then costs about
 that size, nothing noticeable for the 30 000-cell A5 mesh. Both choices
 are remembered in the browser.
 
+*Shading* (0.9.2, under *Smooth surface* and under the bed's *Smooth*; on by
+default) shades the smooth surface by its slope. The slope is worked out
+at each vertex (the area-weighted mean of the triangles that meet there),
+then blended across each triangle, so the triangle fans no longer show as
+facets (0.8.14 shaded each triangle by its own slope). For *depth ×
+exaggeration* the shading slope is the bed's plus the exaggerated slope of
+level minus bed, which is exact unless the depth datum differs from the bed
+(SGS). On the 5 m mesh the corners and slopes cost about 35 ms of CPU per
+frame.
+
+*Smooth playback* (0.9.2, the *smooth* box beside the playback speed; on by
+default) plays continuously between output frames. The two frames either
+side of the playback time are blended on the GPU. Depths blend linearly,
+so a cell turns wet when its blended depth reaches *Wet if depth ≥*. That
+is its crossing time, and fronts advance cell by cell instead of a thin
+film fading in ahead of them. Class colours take the nearer frame. The
+viewer measures its drawing rate and how long frames take to arrive. It
+blends once per animation frame (at most 60 a second, every other frame
+when drawing falls below 30 fps), and falls back to frame-by-frame
+playback when frames arrive too slowly (slow links, files on the web) or
+too few steps fit between frames. The step buttons, the slider and pausing
+always show whole frames. On the 5 m Carlisle mesh it blends at 60 fps on
+both engines (55–57 fps with the smooth surface on).
+
 When zoomed out, 3D tiles and terrain are drawn from coarse levels of
 detail that stand metres above the ground they simplify; the water is
 therefore drawn slightly nearer the camera than it is — up to 1.5 % of its

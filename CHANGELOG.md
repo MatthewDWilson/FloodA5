@@ -33,6 +33,41 @@ fully resolves the bias on its own.
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-11-29
+
+Globe viewer: smooth playback and shading without facets (branch
+`wpv-time`; PATCH: viewer only, results unchanged;
+`projectinstructions/FloodA5_GlobeViewer_Plan_Stage2_2026-11.md` B1, A2).
+
+- **Smooth playback** (B1, both engines): playback runs continuously between
+  frames. The two frames either side are blended in the vertex shader (frame
+  k in texture slot k mod 2, so moving on replaces one texture). Depths blend
+  linearly, and a cell turns wet when the blended depth reaches the wet
+  threshold, so fronts advance cell by cell with no film ahead of them. The
+  smooth surface's corner values and slopes blend where both frames are wet
+  and come from the wet frame otherwise. Class colours take the nearer frame.
+  A pacer (`viewer-common/js/interp.js`, pure, `test/interp.test.js`)
+  measures drawing and frame arrival. It blends once per animation frame (at
+  most 60/s, every other frame below 30 fps), prefetches two frames ahead,
+  and falls back to frame stepping when frames arrive slowly. *smooth* box
+  in the playbar (on by default), `window.__flooda5.interp`, API
+  `showBlend(p)`, `setSmoothPlayback`, `stop`. The step buttons, the slider
+  and pausing show whole frames. Both speed kinds, including 1:1, work as
+  before. Measured headless (Edge, smoke.mjs, 4 frames/s): 60 fps on the
+  30k A5 mesh and on the 582k 5 m mesh, both engines; 55–57 fps with the
+  smooth surface on the 582k mesh.
+- **Shading without facets** (A2): slopes per vertex, the area-weighted mean
+  of the fan triangles that meet there (`geometry.js` `gradientSlots`,
+  `surfaceGradients`; a slope texture per frame slot), blended across each
+  triangle. A *Shading* checkbox under *Smooth surface* and under the bed's
+  *Smooth*, on by default because the facets are gone. API
+  `setShading(target, 0|1|2)`: 2 = the 0.8.14 per-triangle shading, for
+  comparison. Depth × exaggeration shades from bed + exag × (level − bed),
+  exact unless the depth datum differs from the bed (SGS).
+- Faster smooth surface: corners are numbered in the order cells first use
+  them, for memory locality. On the 582k mesh, corner values went from
+  ~22 to ~14 ms and corners plus slopes cost ~35 ms per frame.
+
 ## [0.9.2] — 2026-11-28
 
 What separates SGS from the 5 m runs at Carlisle (branch

@@ -60,6 +60,8 @@ h2 .for { letter-spacing: .04em; text-transform: none; color: var(--accent); }
 .info { cursor: help; color: var(--accent); font-size: 11px; }
 .info:focus-visible { outline: 1px solid var(--accent); }
 .row label { flex: 0 0 92px; font-size: 12px; color: var(--dim); }
+.row.sub label { padding-left: 12px; box-sizing: border-box; }
+.play-opt { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--dim); cursor: pointer; }
 .row input[type=range] { flex: 1; min-width: 0; width: auto; accent-color: var(--accent); }
 .row input[type=number] { width: 72px; }
 .val { font: 11px var(--mono); min-width: 36px; text-align: right; }
