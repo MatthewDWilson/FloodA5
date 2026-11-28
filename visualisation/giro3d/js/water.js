@@ -3,15 +3,18 @@
 //
 // One mesh per surface, positions relative to an ECEF centre (Object3D
 // position, float64 on the CPU: three forms the model-view matrix in double
-// precision, so street-level views do not jitter). A new frame rewrites one
-// float DataTexture. The shader includes three's logarithmic-depth chunks so
+// precision, so street-level views do not jitter). A new frame rewrites the
+// float DataTextures of its slot (two slots: smooth playback, 0.9.2). The shader includes three's logarithmic-depth chunks so
 // that depth testing against Giro3D's tiles is right whichever depth buffer
 // the renderer uses. Needs WebGL 2 (texelFetch).
 
 import * as THREE from 'three';
 import { buildSurface, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
 import { colormapTable } from '../../viewer-common/js/colormaps.js';
-import { defaultStyle, glslHelpers, glslFragmentHelpers } from '../../viewer-common/js/surface.js';
+import { defaultStyle, glslHelpers, glslFragmentHelpers, glslSurfaceVertex } from '../../viewer-common/js/surface.js';
+
+/** Uniform names: uDepth, uDepth1, uMinDepth, … */
+const U = k => `u${k[0].toUpperCase()}${k.slice(1)}`;
 
 const VERTEX = `
 #include <common>
@@ -20,29 +23,17 @@ ${glslHelpers()}
 attribute float cell;
 attribute float edge;
 attribute float corner;          // smooth surface: the vertex's corner (−1 at the centre; unset until smoothing is first on)
-uniform sampler2D uDepth;
-uniform sampler2D uCvar;
-uniform sampler2D uStatic;
-uniform sampler2D uCorner;
-uniform float uTexW, uStaticW, uCornerW, uH0, uOffset, uMode, uCmode, uExag, uDepthBias, uBiasNear, uBiasFar, uSmooth, uBlend;
+uniform sampler2D uDepth, uDepth1, uCvar, uCvar1, uStatic, uCorner, uCorner1, uGrad, uGrad1;
+uniform float uTexW, uStaticW, uCornerW, uGradW, uNCorners, uW, uMinDepth, uH0, uOffset, uMode, uCmode, uExag,
+              uDepthBias, uBiasNear, uBiasFar, uSmooth, uBlend, uShade;
 uniform vec3 uCentre;
 varying float vDepth;
 varying float vCval;
 varying float vEdge;
 varying vec3 vPos;
 varying vec3 vUp;
-void main() {
-  int i = int(cell + 0.5);
-  vec4 st = fa5Static(uStatic, uStaticW, i);
-  float d = max(fa5Packed(uDepth, uTexW, i), 0.0);
-  float level = fa5Level(uMode, uExag, d, st);
-  float cv = (uCmode > 1.5 && uCmode < 2.5) ? fa5Packed(uCvar, uTexW, i) : 0.0;
-  float cval = fa5ColorValue(uCmode, d, st, cv);
-  if (uSmooth > 0.5 && corner > -0.5) {
-    vec4 cc = fa5Corner(uCorner, uCornerW, int(corner + 0.5));
-    level = fa5LevelC(uMode, uExag, cc);
-    if (uBlend > 0.5) cval = fa5ColorValueC(uCmode, cc);
-  }
+varying vec2 vGrad;
+void main() {${glslSurfaceVertex(U, 'cell', 'corner')}
   vec3 n = fa5Normal(position + uCentre);
   // (the mesh's matrix is a translation to uCentre: model = world − uCentre)
   vec3 p0 = position + n * (level + uOffset - uH0);
@@ -50,7 +41,7 @@ void main() {
   vDepth = d;
   vEdge = edge;
   vCval = cval;
-  vPos = p0; vUp = n;
+  vPos = p0; vUp = n; vGrad = grad;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   #include <logdepthbuf_vertex>
 }
@@ -61,12 +52,13 @@ const FRAGMENT = `
 #include <logdepthbuf_pars_fragment>
 ${glslHelpers()}${glslFragmentHelpers()}
 uniform sampler2D uCmap;
-uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode, uBorders, uSmooth, uShadeExag;
+uniform float uCmin, uCmax, uAlpha, uMinDepth, uMode, uBorders, uSmooth, uShadeExag, uShade;
 varying float vDepth;
 varying float vCval;
 varying float vEdge;
 varying vec3 vPos;
 varying vec3 vUp;
+varying vec2 vGrad;
 // three.js declares no fragment output for an explicit GLSL3 ShaderMaterial
 layout(location = 0) out highp vec4 fa5FragColor;
 void main() {
@@ -74,7 +66,7 @@ void main() {
   if (uMode < 1.5 && vDepth < uMinDepth) discard;
   #include <logdepthbuf_fragment>
   vec3 c = texture(uCmap, fa5MapCoord(vCval, uCmin, uCmax)).rgb;
-  if (uSmooth > 0.5) c = clamp(c * fa5Shade(vPos, normalize(vUp), uShadeExag), 0.0, 1.0);
+  if (uSmooth > 0.5) c = clamp(c * fa5Shading(uShade, vGrad, vPos, normalize(vUp), uShadeExag), 0.0, 1.0);
   c = mix(c, vec3(1.0), line);
   fa5FragColor = vec4(c, max(uAlpha, line));
 }
@@ -82,7 +74,11 @@ void main() {
 
 const STYLE_UNIFORMS = { mode: 'uMode', cmode: 'uCmode', cmin: 'uCmin', cmax: 'uCmax', alpha: 'uAlpha',
                          minDepth: 'uMinDepth', exag: 'uExag', offset: 'uOffset', borders: 'uBorders',
-                         depthBias: 'uDepthBias', biasNear: 'uBiasNear', biasFar: 'uBiasFar', smooth: 'uSmooth', blend: 'uBlend', shadeExag: 'uShadeExag' };
+                         depthBias: 'uDepthBias', biasNear: 'uBiasNear', biasFar: 'uBiasFar', smooth: 'uSmooth', blend: 'uBlend', shadeExag: 'uShadeExag',
+                         shade: 'uShade' };
+
+/** The textures of slots 0 and 1 (smooth playback). */
+const SLOT_TEX = { corner: ['uCorner', 'uCorner1'], grad: ['uGrad', 'uGrad1'] };
 
 export class SurfaceMesh {
   /**
@@ -110,8 +106,10 @@ export class SurfaceMesh {
     g.setAttribute('edge', new THREE.BufferAttribute(surface.edge, 1));
     g.setIndex(new THREE.BufferAttribute(surface.indices, 1));
     g.computeBoundingSphere();
-    this.depthTex = floatTexture(packCellValues(new Float32Array(0), this.n));
-    this.cvarTex = floatTexture(packCellValues(new Float32Array(0), this.n));
+    const zero = () => floatTexture(packCellValues(new Float32Array(0), this.n));
+    const one = () => floatTexture({ data: new Float32Array(4), width: 1, height: 1 });
+    this.depthTex = [zero(), zero()];            // slots 0 and 1
+    this.cvarTex = [zero(), zero()];
     const st = packStatic(mesh.elevation, mesh.base, this.n);
     const s = this.style;
     this.material = new THREE.ShaderMaterial({
@@ -119,11 +117,12 @@ export class SurfaceMesh {
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
       uniforms: {
-        uDepth: { value: this.depthTex },
-        uCvar: { value: this.cvarTex },
+        uDepth: { value: this.depthTex[0] }, uDepth1: { value: this.depthTex[1] },
+        uCvar: { value: this.cvarTex[0] }, uCvar1: { value: this.cvarTex[1] },
         uStatic: { value: floatTexture(st) },
         uCmap: { value: colormapTexture(s.colormap) },
-        uTexW: { value: this.depthTex.image.width },
+        uTexW: { value: this.depthTex[0].image.width },
+        uW: { value: 0 },
         uStaticW: { value: st.width },
         uCentre: { value: new THREE.Vector3(...surface.centre) },
         uH0: { value: this.h0 },
@@ -132,8 +131,10 @@ export class SurfaceMesh {
         uMinDepth: { value: s.minDepth }, uExag: { value: s.exag },
         uBorders: { value: s.borders }, uDepthBias: { value: s.depthBias },
         uBiasNear: { value: s.biasNear }, uBiasFar: { value: s.biasFar },
-        uCorner: { value: floatTexture({ data: new Float32Array(4), width: 1, height: 1 }) }, uCornerW: { value: 1 },
+        uCorner: { value: one() }, uCorner1: { value: one() }, uCornerW: { value: 1 },
+        uGrad: { value: one() }, uGrad1: { value: one() }, uGradW: { value: 1 }, uNCorners: { value: 0 },
         uSmooth: { value: s.smooth }, uBlend: { value: s.blend }, uShadeExag: { value: s.shadeExag },
+        uShade: { value: s.shade },
       },
       transparent: role !== 'bed' || s.alpha < 1,     // the bed: opaque unless its opacity is < 1
       depthWrite: role === 'bed' && s.alpha >= 1,
@@ -158,9 +159,18 @@ export class SurfaceMesh {
     };
   }
 
-  setDepth(depth) {
-    packCellValues(depth, this.n, this.depthTex.image.data);
-    this.depthTex.needsUpdate = true;
+  /** Frame depths (Float32Array, mesh order) into texture slot 0 or 1. */
+  setDepth(depth, slot = 0) {
+    const t = this.depthTex[slot];
+    packCellValues(depth, this.n, t.image.data);
+    t.needsUpdate = true;
+    this.instance.notifyChange();
+  }
+
+  /** Smooth playback: the weight of slot 1 (0: slot 0's frame, 1: slot 1's). */
+  setBlend(w) {
+    if (this.material.uniforms.uW.value === w) return;
+    this.material.uniforms.uW.value = w;
     this.instance.notifyChange();
   }
 
@@ -168,25 +178,34 @@ export class SurfaceMesh {
   async setCorners(ci) {
     const g = this.object3d.geometry;
     if (ci && !g.getAttribute('corner')) g.setAttribute('corner', new THREE.BufferAttribute(ci.vertexCorner, 1));
+    if (ci) this.material.uniforms.uNCorners.value = ci.nCorners;
   }
 
-  /** Smooth surface: the corner values (geometry.js cornerValues / bedCornerValues, packed). */
-  setCornerValues(p) {
-    const u = this.material.uniforms.uCorner;
+  /** A packed texture {data, width, height} into slot 0 or 1 of a SLOT_TEX kind. */
+  _setSlotTexture(kind, slot, p, widthUniform) {
+    const u = this.material.uniforms[SLOT_TEX[kind][slot]];
     if (u.value.image.width === p.width && u.value.image.height === p.height) {
       u.value.image.data.set(p.data);
       u.value.needsUpdate = true;
     } else {
       u.value.dispose();
       u.value = floatTexture({ data: Float32Array.from(p.data), width: p.width, height: p.height });
-      this.material.uniforms.uCornerW.value = p.width;
+      this.material.uniforms[widthUniform].value = p.width;
     }
     this.instance.notifyChange();
   }
 
-  setColorValues(values) {
-    packCellValues(values, this.n, this.cvarTex.image.data);
-    this.cvarTex.needsUpdate = true;
+  /** Smooth surface: the corner values (geometry.js cornerValues / bedCornerValues, packed). */
+  setCornerValues(p, slot = 0) { this._setSlotTexture('corner', slot, p, 'uCornerW'); }
+
+  /** Smooth surface, shading: the slopes at the vertices (geometry.js surfaceGradients). */
+  setGradients(p, slot = 0) { this._setSlotTexture('grad', slot, p, 'uGradW'); }
+
+  /** Values for COLOR_MODE.texture (Float32Array, mesh order) into slot 0 or 1. */
+  setColorValues(values, slot = 0) {
+    const t = this.cvarTex[slot];
+    packCellValues(values, this.n, t.image.data);
+    t.needsUpdate = true;
     this.instance.notifyChange();
   }
 

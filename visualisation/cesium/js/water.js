@@ -1,9 +1,9 @@
 // water.js — the water and bed surfaces as CesiumJS models with a custom shader
 // (the model and its uniforms: viewer-common/js/surface.js).
 //
-// One glTF model per surface, built in the browser; a new frame is one texture
-// upload (CesiumJS keeps the old texture until the new one is created, so
-// nothing flashes). Water is translucent and depth-tested; the bed is opaque
+// One glTF model per surface, built in the browser; a new frame is a texture
+// upload into its slot (two slots: smooth playback, 0.9.2; CesiumJS keeps the
+// old texture until the new one is created, so nothing flashes). Water is translucent and depth-tested; the bed is opaque
 // unless its opacity is below 1 (CesiumJS fixes a custom shader's
 // translucency when it is created: the shader is rebuilt when that changes).
 // Needs WebGL 2. The smooth surface (0.8.14) needs each vertex's corner as
@@ -11,31 +11,23 @@
 
 import { buildSurface, buildGlb, packCellValues, packStatic, finiteMedian } from '../../viewer-common/js/geometry.js';
 import { colormapTable } from '../../viewer-common/js/colormaps.js';
-import { defaultStyle, glslHelpers, glslFragmentHelpers } from '../../viewer-common/js/surface.js';
+import { defaultStyle, glslHelpers, glslFragmentHelpers, glslSurfaceVertex } from '../../viewer-common/js/surface.js';
+
+/** Uniform names: u_depth, u_depth1, u_minDepth, … */
+const U = k => `u_${k}`;
 
 // (the corner attribute exists only in a model built for the smooth surface)
 const vertexShader = corners => `${glslHelpers()}
-void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {
-  int i = int(vsInput.attributes.cell + 0.5);
-  vec4 st = fa5Static(u_static, u_staticW, i);
-  float d = max(fa5Packed(u_depth, u_texW, i), 0.0);
-  float level = fa5Level(u_mode, u_exag, d, st);
-  float cv = (u_cmode > 1.5 && u_cmode < 2.5) ? fa5Packed(u_cvar, u_texW, i) : 0.0;
-  float cval = fa5ColorValue(u_cmode, d, st, cv);
-${corners ? `  float corner = vsInput.attributes.fa5corner;
-  if (u_smooth > 0.5 && corner > -0.5) {
-    vec4 cc = fa5Corner(u_corner, u_cornerW, int(corner + 0.5));
-    level = fa5LevelC(u_mode, u_exag, cc);
-    if (u_blend > 0.5) cval = fa5ColorValueC(u_cmode, cc);
-  }
-` : ''}  vec3 n = fa5Normal(vsInput.attributes.positionMC + u_centre);
+void vertexMain(VertexInput vsInput, inout czm_modelVertexOutput vsOutput) {${
+  glslSurfaceVertex(U, 'vsInput.attributes.cell', corners ? 'vsInput.attributes.fa5corner' : null)}
+  vec3 n = fa5Normal(vsInput.attributes.positionMC + u_centre);
   vec3 p = vsInput.attributes.positionMC + n * (level + u_offset - u_h0);
   vsOutput.positionMC = fa5DepthBias(p, (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz, u_depthBias,
                                      vec2(u_biasNear, u_biasFar));
   v_depth = d;
   v_fa5Edge = vsInput.attributes.fa5edge;
   v_cval = cval;
-  v_fa5Pos = p; v_fa5Up = n;
+  v_fa5Pos = p; v_fa5Up = n; v_fa5Grad = grad;
 }
 `;
 
@@ -45,7 +37,7 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   float line = fa5Border(v_fa5Edge, u_borders);
   if (u_mode < 1.5 && v_depth < u_minDepth) discard;
   vec3 c = texture(u_cmap, fa5MapCoord(v_cval, u_cmin, u_cmax)).rgb;
-  if (u_smooth > 0.5) c = clamp(c * fa5Shade(v_fa5Pos, normalize(v_fa5Up), u_shadeExag), 0.0, 1.0);
+  if (u_smooth > 0.5) c = clamp(c * fa5Shading(u_shade, v_fa5Grad, v_fa5Pos, normalize(v_fa5Up), u_shadeExag), 0.0, 1.0);
   material.diffuse = mix(c, vec3(1.0), line);
   material.alpha = max(u_alpha, line);
 }
@@ -56,7 +48,12 @@ const STYLE_UNIFORMS = [
   ['u_offset', 'offset'], ['u_mode', 'mode'], ['u_cmode', 'cmode'], ['u_cmin', 'cmin'], ['u_cmax', 'cmax'],
   ['u_alpha', 'alpha'], ['u_minDepth', 'minDepth'], ['u_exag', 'exag'], ['u_borders', 'borders'],
   ['u_depthBias', 'depthBias'], ['u_biasNear', 'biasNear'], ['u_biasFar', 'biasFar'], ['u_smooth', 'smooth'], ['u_blend', 'blend'], ['u_shadeExag', 'shadeExag'],
+  ['u_shade', 'shade'],
 ];
+
+/** The textures of slots 0 and 1 (smooth playback) and their width uniforms. */
+const SLOT_TEX = { depth: ['u_depth', 'u_depth1'], cvar: ['u_cvar', 'u_cvar1'],
+                   corner: ['u_corner', 'u_corner1', 'u_cornerW'], grad: ['u_grad', 'u_grad1', 'u_gradW'] };
 
 export class SurfaceLayer {
   /** @param {object} opts {role: 'water'|'bed', h0} */
@@ -73,8 +70,8 @@ export class SurfaceLayer {
     this.h0 = Number.isFinite(h0) ? h0 : (finiteMedian(mesh.base) || 0);
     this.n = mesh.nCells;
     this.style = defaultStyle(role);
-    this._depthBuf = null;
-    this._cvarBuf = null;
+    this._depthBuf = [null, null];     // per slot
+    this._cvarBuf = [null, null];
     this.corners = null;          // smooth surface: geometry.js cornerIndex, once asked for
     this._show = true;
   }
@@ -86,18 +83,27 @@ export class SurfaceLayer {
     const st = packStatic(this.mesh.elevation, this.mesh.base, this.n);
     const zero = packCellValues(new Float32Array(0), this.n);
     const U = C.UniformType, s = this.style;
+    const one = () => floatTexture({ data: new Float32Array(4), width: 1, height: 1 });
     // current uniform values (type, value): kept to rebuild the shader
     this._uni = {
       u_depth: [U.SAMPLER_2D, floatTexture(zero)],
+      u_depth1: [U.SAMPLER_2D, floatTexture(zero)],
       u_cvar: [U.SAMPLER_2D, floatTexture(zero)],
+      u_cvar1: [U.SAMPLER_2D, floatTexture(zero)],
+      u_w: [U.FLOAT, 0],
       u_static: [U.SAMPLER_2D, floatTexture(st)],
       u_cmap: [U.SAMPLER_2D, colormapTexture(s.colormap)],
       u_texW: [U.FLOAT, zero.width],
       u_staticW: [U.FLOAT, st.width],
       u_centre: [U.VEC3, new C.Cartesian3(...surface.centre)],
       u_h0: [U.FLOAT, this.h0],
-      u_corner: [U.SAMPLER_2D, floatTexture({ data: new Float32Array(4), width: 1, height: 1 })],
+      u_corner: [U.SAMPLER_2D, one()],
+      u_corner1: [U.SAMPLER_2D, one()],
       u_cornerW: [U.FLOAT, 1],
+      u_grad: [U.SAMPLER_2D, one()],
+      u_grad1: [U.SAMPLER_2D, one()],
+      u_gradW: [U.FLOAT, 1],
+      u_nCorners: [U.FLOAT, 0],
     };
     for (const [name, key] of STYLE_UNIFORMS) this._uni[name] = [U.FLOAT, s[key]];
     this.translucent = this._wantsTranslucent();
@@ -146,16 +152,27 @@ export class SurfaceLayer {
   async setCorners(ci) {
     if (!ci || this.corners) return;
     this.corners = ci;
+    this._set('u_nCorners', ci.nCorners);
     const old = this.model;
     this.model = await this._buildModel(buildSurface(this.mesh, this.h0));
     if (old) this.viewer.scene.primitives.remove(old);
   }
 
-  /** Smooth surface: the corner values (geometry.js cornerValues / bedCornerValues, packed). */
-  setCornerValues(p) {
-    this._set('u_corner', floatTexture(p));
-    if (this._uni.u_cornerW[1] !== p.width) this._set('u_cornerW', p.width);
+  /** A packed texture {data, width, height} into slot 0 or 1 of a SLOT_TEX kind. */
+  _setSlotTexture(kind, slot, p) {
+    const [t0, t1, wName] = SLOT_TEX[kind];
+    this._set(slot ? t1 : t0, floatTexture(p));
+    if (wName && this._uni[wName][1] !== p.width) this._set(wName, p.width);
   }
+
+  /** Smooth surface: the corner values (geometry.js cornerValues / bedCornerValues, packed). */
+  setCornerValues(p, slot = 0) { this._setSlotTexture('corner', slot, p); }
+
+  /** Smooth surface, shading: the slopes at the vertices (geometry.js surfaceGradients). */
+  setGradients(p, slot = 0) { this._setSlotTexture('grad', slot, p); }
+
+  /** Smooth playback: the weight of slot 1 (0: slot 0's frame, 1: slot 1's). */
+  setBlend(w) { if (this._uni.u_w[1] !== w) this._set('u_w', w); }
 
   _wantsTranslucent() { return this.role !== 'bed' || this.style.alpha < 1; }
 
@@ -165,7 +182,7 @@ export class SurfaceLayer {
     return new C.CustomShader({
       uniforms,
       varyings: { v_depth: C.VaryingType.FLOAT, v_cval: C.VaryingType.FLOAT, v_fa5Edge: C.VaryingType.FLOAT,
-                  v_fa5Pos: C.VaryingType.VEC3, v_fa5Up: C.VaryingType.VEC3 },
+                  v_fa5Pos: C.VaryingType.VEC3, v_fa5Up: C.VaryingType.VEC3, v_fa5Grad: C.VaryingType.VEC2 },
       lightingModel: C.LightingModel.UNLIT,
       translucencyMode: this.translucent ? C.CustomShaderTranslucencyMode.TRANSLUCENT
                                          : C.CustomShaderTranslucencyMode.OPAQUE,
@@ -179,18 +196,18 @@ export class SurfaceLayer {
     this.shader.setUniform(name, value);
   }
 
-  /** Frame depths (Float32Array, mesh order). */
-  setDepth(depth) {
-    const p = packCellValues(depth, this.n, this._depthBuf);
-    this._depthBuf = p.data;
-    this._set('u_depth', floatTexture(p));
+  /** Frame depths (Float32Array, mesh order) into texture slot 0 or 1. */
+  setDepth(depth, slot = 0) {
+    const p = packCellValues(depth, this.n, this._depthBuf[slot]);
+    this._depthBuf[slot] = p.data;
+    this._setSlotTexture('depth', slot, p);
   }
 
-  /** Values for COLOR_MODE.texture (Float32Array, mesh order). */
-  setColorValues(values) {
-    const p = packCellValues(values, this.n, this._cvarBuf);
-    this._cvarBuf = p.data;
-    this._set('u_cvar', floatTexture(p));
+  /** Values for COLOR_MODE.texture (Float32Array, mesh order) into slot 0 or 1. */
+  setColorValues(values, slot = 0) {
+    const p = packCellValues(values, this.n, this._cvarBuf[slot]);
+    this._cvarBuf[slot] = p.data;
+    this._setSlotTexture('cvar', slot, p);
   }
 
   /** Update any of: mode, cmode, cmin, cmax, alpha, minDepth, exag, offset, borders, colormap. */

@@ -29,10 +29,12 @@
 
 import { parseMesh, decodeFloat32, FrameList, FrameCache, formatTime, PROTOCOL } from './protocol.js';
 import { CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile,
-         cornerIndex, cornerValues, bedCornerValues } from './geometry.js';
+         cornerIndex, cornerValues, bedCornerValues, gradientSlots, surfaceGradients } from './geometry.js';
 import { cssGradient, colormapKey, colormapLabel } from './colormaps.js';
 import { initPalettes, isPalette, fillPaletteMenu, openPaletteEditor, paletteApi } from './palette-editor.js';
-import { COLOR_MODE, DEPTH_BIAS_RANGE } from './surface.js';
+import { COLOR_MODE, DEPTH_BIAS_RANGE, SHADE } from './surface.js';
+import { Pacer, parseSpeed, advancePosition, framePair, slotOf, slotWeight, frameWallMs, quantize,
+         timeAtPosition } from './interp.js';
 import { UI_HTML } from './ui.js';
 import { renderRun, renderAbout, shellLine, esc } from './info.js';
 import { TimePlot, SERIES_COLORS, MAX_SERIES, freeSlot, isClick, seriesValues, seriesCsv, nearestIndex } from './plot.js';
@@ -103,14 +105,19 @@ export function startViewer(engine) {
     water: null, bed: null, basemap: null, bedUser: null,
     frames: new FrameList(), cache: new FrameCache(32), pending: new Map(),
     current: -1, target: -1, live: true, complete: false, mode: null, wsDown: false,
-    playing: false, playAcc: 0, simTime: 0, scrubbing: false, autoplay: false,
+    playing: false, scrubbing: false, autoplay: false,
     varName: 'depth', range: { mode: 'run', min: 0, max: 1 }, runRanges: null, rangesAt: -Infinity,
     offset: 0, offsetJob: 0, bedRange: { mode: 'auto', min: 0, max: 1 }, tab: 'layers', about: null, run: null,
     depth: null, cvals: null, render: { busy: false, next: null, promise: null }, cellIds: new Map(),
     plot: { series: [], varName: null, dock: 'bottom', chart: null, timer: null, ctxCell: -1 }, chartLib: null,
     hazard: loadHazard(), stats: new Map(), statsAt: -Infinity, classBuf: null,
     source: null, ws: null, standalone: false, gen: 0,   // local file (LocalSource); no server; run generation
-    smooth: { water: false, bed: false }, corners: null, cornerBuf: null, cvShown: null,   // smooth surface (0.8.14)
+    smooth: { water: false, bed: false }, corners: null,                                  // smooth surface (0.8.14)
+    shade: { water: SHADE.smooth, bed: SHADE.smooth }, gslots: null,                       // its shading (0.9.2)
+    // smooth playback (0.9.2, interp.js): frame k in texture slot k mod 2; a slot's key `${id}|${gen}`
+    // (gen: bumped by every explicit render, so a style or variable change refills both slots)
+    slots: [null, null], slotData: [null, null], slotGen: 0, cornerBuf: [null, null], gradBuf: [null, null],
+    interp: { on: true, p: 0, i0: -1, w: 0, t: null, loading: null, drew: false }, pacer: new Pacer(),
   };
 
   /** The hazard parameters saved in this browser (defaults otherwise). */
@@ -194,15 +201,17 @@ export function startViewer(engine) {
   const isDerivedSource = name => Object.values(VARS).some(v => v.kind === 'derived' && v.source === name);
 
   /** Frame variable data (cached; concurrent requests share one fetch). */
+  /** getVar's cache key (and URL path after /api/frames/). */
+  const varKey = (id, name) => `${id}/${name}${isDerivedSource(name) ? `?${hazardQuery(app.hazard)}` : ''}`;
+
   async function getVar(id, name) {
-    const q = isDerivedSource(name) ? `?${hazardQuery(app.hazard)}` : '';
-    const key = `${id}/${name}${q}`;
+    const key = varKey(id, name);
     const hit = app.cache.get(key);
     if (hit) return hit;
     if (app.pending.has(key)) return app.pending.get(key);
     const gen = app.gen;
     const p = (async () => {
-      const r = await fetchRetry(`/api/frames/${id}/${name}${q}`);
+      const r = await fetchRetry(`/api/frames/${key}`);
       if (!r.ok) {
         if (r.status === 404) return null;
         throw new Error(`frame ${id} ${name}: HTTP ${r.status}`);
@@ -301,10 +310,14 @@ export function startViewer(engine) {
     app.locator = new CellLocator(mesh);
     app.offset = resolveOffset().value;
     const h0 = (finiteMedian(mesh.base) || 0) + app.offset;
-    app.corners = null; app.cornerBuf = null;
+    app.corners = null; app.gslots = null; app.cornerBuf = [null, null]; app.gradBuf = [null, null];
+    app.slots = [null, null]; app.slotData = [null, null];
     app.water = await engine.createSurface(mesh, { role: 'water', h0 });
     app.bed = await engine.createSurface(mesh, { role: 'bed', h0 });
-    for (const t of ['water', 'bed']) if (app.smooth[t]) await setSmooth(t, true, false);
+    for (const t of ['water', 'bed']) {
+      s0(t).setStyle({ shade: app.shade[t] });
+      if (app.smooth[t]) await setSmooth(t, true, false);
+    }
     app.bed.setStyle({ offset: app.offset });
     applyBedStyle();
     app.water.setStyle(biasStyle());
@@ -540,26 +553,79 @@ export function startViewer(engine) {
     const v = VARS[app.varName];
     const t0 = performance.now();
     if (v.kind === 'static') return renderStatic(i, t0);
+    const gen = ++app.slotGen;                               // (a pair being loaded for playback is dropped)
+    const { depth, cv } = await frameData(f, v);
+    if (!depth) { log(`Frame ${f.id} has no water depth`, 'warn'); return; }
+    if (VARS[app.varName] !== v) return;                     // the variable changed meanwhile
+    writeSlot(i, f, depth, cv, gen);
+    app.slots[1 - slotOf(i)] = null;
+    app.water.setBlend(slotOf(i));                           // this frame exactly
+    app.interp.i0 = -1; app.interp.w = 0; app.interp.t = null;
+    status.renders++; status.lastRenderMs = performance.now() - t0;
+    if (app.playing) app.pacer.ready(status.lastRenderMs);
+    frameShown(i);
+    if (app.playing) prefetch(i + 1);
+  }
+
+  /** Frame f's depths and colour values (classed depth: coloured by its classes). */
+  async function frameData(f, v = VARS[app.varName]) {
     const [depth, cv0] = await Promise.all([
       getVar(f.id, 'water_depth'),
       v.cmode === COLOR_MODE.texture ? getVar(f.id, v.source) : Promise.resolve(null),
     ]);
-    if (!depth) { log(`Frame ${f.id} has no water depth`, 'warn'); return; }
-    if (VARS[app.varName] !== v) return;                     // the variable changed meanwhile
-    const cv = cv0 ?? (classedNow() ? depth : null);        // classed depth: coloured by class
-    app.water.setDepth(depth);
-    app.cvShown = cv ? colorValues(cv) : null;
-    if (app.cvShown) app.water.setColorValues(app.cvShown);
-    app.depth = depth; app.cvals = cv;
-    updateCorners();
+    return { depth, cv: cv0 ?? (classedNow() && depth ? depth : null) };
+  }
+
+  /** frameData from the cache only (null if not all there). */
+  function cachedFrameData(f, v = VARS[app.varName]) {
+    const depth = app.cache.get(varKey(f.id, 'water_depth'));
+    if (!depth) return null;
+    const cv0 = v.cmode === COLOR_MODE.texture ? app.cache.get(varKey(f.id, v.source)) : null;
+    if (v.cmode === COLOR_MODE.texture && !cv0) return null;
+    return { depth, cv: cv0 ?? (classedNow() ? depth : null) };
+  }
+
+  const slotKey = (f, gen) => `${f.id}|${gen}`;
+
+  /**
+   * Frame i's data into its texture slot (i mod 2): depths and colour values,
+   * and for the smooth surface its corner values and slopes (0.9.2: the
+   * slopes only while it is shaded).
+   */
+  function writeSlot(i, f, depth, cv, gen) {
+    const s = slotOf(i), shown = cv ? colorValues(cv) : null;
+    app.water.setDepth(depth, s);
+    if (shown) app.water.setColorValues(shown, s);
+    if (app.smooth.water && app.corners) {
+      const t0 = performance.now(), md = minDepth();
+      const p = cornerValues(app.corners, depth, app.mesh.base, app.mesh.elevation, shown, md, app.cornerBuf[s]);
+      app.cornerBuf[s] = p.data;
+      app.water.setCornerValues(p, s);
+      if (app.shade.water === SHADE.smooth) {
+        const g = surfaceGradients(app.mesh, app.corners, gradSlots(), p.data, depth, app.mesh.base,
+                                   app.mesh.elevation, md, app.gradBuf[s]);
+        app.gradBuf[s] = g.data;
+        app.water.setGradients(g, s);
+      }
+      status.smoothFrameMs = Math.round((performance.now() - t0) * 10) / 10;   // (CPU: corner means, slopes, upload)
+    }
+    app.slots[s] = slotKey(f, gen);
+    app.slotData[s] = { i, depth, cv };
+  }
+
+  /** The bookkeeping when frame i becomes the one shown (or, playing smoothly, the earlier of the two). */
+  function frameShown(i) {
+    const d = app.slotData[slotOf(i)], f = app.frames.at(i);
+    app.depth = d.depth; app.cvals = d.cv;
     app.current = i;
-    status.shownFrame = f.id; status.renders++; status.lastRenderMs = performance.now() - t0;
+    status.shownFrame = f.id;
     updateRange();
     updateStats();
     updateTimeline();
     app.plot.chart?.setCursor(f.t);
-    if (app.playing) prefetch(i + 1);
   }
+
+  const minDepth = () => Math.max(+$('min-depth').value || 0, 0);
 
   /**
    * A statistic over the run: the surface at each cell's maximum depth (cells
@@ -573,11 +639,11 @@ export function startViewer(engine) {
     if (!hmax || !cv) { log(`${v.label} is not available for this run`, 'warn'); return; }
     const depth = new Float32Array(hmax.length);
     for (let k = 0; k < depth.length; k++) depth[k] = Number.isFinite(cv[k]) ? hmax[k] : 0;
-    app.water.setDepth(depth);
-    app.cvShown = colorValues(cv);
-    app.water.setColorValues(app.cvShown);
+    writeSlot(0, { id: 'static' }, depth, cv, ++app.slotGen);
+    app.slots = [null, null];
+    app.water.setBlend(0);
+    app.interp.i0 = -1; app.interp.t = null;
     app.depth = depth; app.cvals = cv;
-    updateCorners();
     if (i >= 0) app.current = i;
     status.shownFrame = null; status.static = v.source; status.renders++;
     status.lastRenderMs = performance.now() - t0;
@@ -602,38 +668,67 @@ export function startViewer(engine) {
     return app.corners;
   }
 
+  /** The smooth surface's slope slots (geometry.js gradientSlots), with the corners. */
+  function gradSlots() {
+    if (!app.gslots && corners()) app.gslots = gradientSlots(app.mesh, app.corners);
+    return app.gslots;
+  }
+
+  const s0 = target => (target === 'bed' ? app.bed : app.water);
+
+  /** The bed's smooth surface: its corner values and (shaded) slopes; they do not change. */
+  function bedCorners() {
+    const ci = corners();
+    if (!ci || !app.bed) return;
+    const p = bedCornerValues(ci, app.mesh.elevation, app.mesh.base);
+    app.bed.setCornerValues(p);
+    if (app.shade.bed === SHADE.smooth) {
+      app.bed.setGradients(surfaceGradients(app.mesh, ci, gradSlots(), p.data, null, app.mesh.base, app.mesh.elevation, 0));
+    }
+  }
+
+  /**
+   * Shading of the smooth surface of 'water' or 'bed' (0.9.2): SHADE.smooth
+   * (slopes at the vertices), SHADE.facets (each triangle's own: the 0.8.14
+   * shading, for comparison) or SHADE.off; remembered in the browser.
+   */
+  function setShade(target, mode, save = true) {
+    mode = [SHADE.off, SHADE.smooth, SHADE.facets].includes(+mode) ? +mode : (mode ? SHADE.smooth : SHADE.off);
+    const was = app.shade[target];
+    app.shade[target] = mode;
+    if (save) store.set(`flooda5.shade.${target}`, String(mode));
+    $(`shade-${target}`).checked = mode !== SHADE.off;
+    status.shade = { ...app.shade };
+    const s = s0(target);
+    if (!s) return;
+    s.setStyle({ shade: mode });
+    if (mode === SHADE.smooth && was !== SHADE.smooth && app.smooth[target]) {
+      if (target === 'bed') bedCorners(); else rerender();          // (the slopes are computed while shaded only)
+    }
+  }
+
   /** Smooth surface on or off for 'water' or 'bed' (remembered in the browser). */
   async function setSmooth(target, on, save = true) {
     on = !!on;
     app.smooth[target] = on;
     if (save) store.set(`flooda5.smooth.${target}`, on ? '1' : '0');
     $(`smooth-${target}`).checked = on;
+    $(`shade-${target}`).disabled = !on;
     status.smooth = { ...app.smooth };
-    const s = target === 'bed' ? app.bed : app.water;
+    const s = s0(target);
     if (!s) return;
     if (on) {
       const ci = corners();
       if (!ci) return;
       await s.setCorners(ci);
-      if (target === 'bed') s.setCornerValues(bedCornerValues(ci, app.mesh.elevation, app.mesh.base));
-      else updateCorners();
+      if (target === 'bed') bedCorners(); else rerender();
     }
     s.setStyle({ smooth: on ? 1 : 0 });
   }
 
-  /** The water's corner values for the frame shown (each frame; and when the wet threshold changes). */
-  function updateCorners() {
-    if (!app.smooth.water || !app.corners || !app.water || !app.depth) return;
-    const t0 = performance.now();
-    const p = cornerValues(app.corners, app.depth, app.mesh.base, app.mesh.elevation, app.cvShown,
-                           Math.max(+$('min-depth').value || 0, 0), app.cornerBuf);
-    app.cornerBuf = p.data;
-    app.water.setCornerValues(p);
-    status.smoothFrameMs = Math.round((performance.now() - t0) * 10) / 10;     // (CPU: the corner means and the upload)
-  }
-
   function prefetch(i) {
     const f = app.frames.at(i);
+    if (f && cachedFrameData(f)) return;
     if (!f || isStatic(app.varName)) return;
     getVar(f.id, 'water_depth').catch(() => {});
     const v = VARS[app.varName];
@@ -976,7 +1071,7 @@ export function startViewer(engine) {
     const stat = isStatic(app.varName);
     $('time-label').textContent = stat
       ? `over the run: ${n} frames${n ? `, ${formatTime(app.frames.at(0).t)} – ${formatTime(app.frames.last().t)}` : ''}`
-      : f ? `t = ${formatTime(f.t)}   frame ${app.current + 1} / ${n}` : `${n} frames`;
+      : f ? `t = ${formatTime(app.interp.t ?? f.t)}   frame ${app.current + 1}${app.interp.t !== null && app.interp.w > 0 ? '+' : ''} / ${n}` : `${n} frames`;
     const done = app.complete || app.mode === 'replay';
     // a statistic has no time: no slider, no playback
     for (const id of ['timeline', 'btn-start', 'btn-back', 'btn-play', 'btn-fwd', 'btn-end', 'speed']) $(id).disabled = stat;
@@ -1208,14 +1303,20 @@ export function startViewer(engine) {
     if (app.frames.length < 2 || isStatic(app.varName)) return;
     setLive(false);
     if (app.target >= app.frames.length - 1) showFrame(0);
-    app.playing = true; app.playAcc = 0;
-    app.simTime = app.frames.at(Math.max(app.target, 0)).t;
+    app.playing = true;
+    app.interp.p = Math.max(app.target, 0);
+    app.pacer.reset();
     $('btn-play').textContent = '⏸';
   }
 
+  /** Stop playing; a blend between frames gives way to the nearer frame (the scrubber and step buttons show frames). */
   function stopPlay() {
+    const it = app.interp, blended = app.playing && it.i0 >= 0 && it.w > 0;
     app.playing = false;
     $('btn-play').textContent = '▶';
+    if (blended) showFrame(Math.min(Math.round(it.i0 + it.w), app.frames.length - 1));
+    it.t = null;
+    status.interp = interpStatus();
   }
 
   function step(delta) {
@@ -1227,25 +1328,117 @@ export function startViewer(engine) {
 
   let lastTick = performance.now();
   function tick(now) {
-    const dt = Math.min((now - lastTick) / 1000, 0.5);
+    const dtMs = now - lastTick, dt = Math.min(dtMs / 1000, 0.5);
     lastTick = now;
-    if (app.playing && app.frames.length > 1 && !app.render.busy) {
-      const [kind, val] = $('speed').value.split(':');
-      if (kind === 'fps') {
-        app.playAcc += dt * +val;
-        if (app.playAcc >= 1) {
-          app.playAcc = 0;
-          if (app.target >= app.frames.length - 1) stopPlay(); else step(1);
-        }
-      } else {
-        app.simTime += dt * +val;
-        const i = app.frames.indexAtTime(app.simTime);
-        if (i !== app.target) showFrame(i);
-        if (app.simTime >= app.frames.last().t) stopPlay();
-      }
+    if (app.playing && app.frames.length > 1) {
+      app.pacer.tick(dtMs, app.interp.drew);
+      app.interp.drew = false;
+      playTick(dt);
     }
     if (app.plot.series.length) updateMarkers();
     requestAnimationFrame(tick);
+  }
+
+  /**
+   * One animation frame of playback (0.9.2): advance the play position by
+   * the speed and show it — blended between the frames either side while the
+   * pacer finds that smooth playback keeps up (interp.js), else frame by
+   * frame as before.
+   */
+  function playTick(dt) {
+    const it = app.interp, n = app.frames.length, sp = parseSpeed($('speed').value);
+    const smooth = it.on && !isStatic(app.varName);
+    const plan = smooth ? app.pacer.plan(frameWallMs(app.frames, framePair(it.p, n).i0, sp)) : { mode: 'step', steps: 1 };
+    if (app.render.busy || it.loading) return;            // wait for the frame (or pair) being made ready
+    if (plan.mode === 'step') {
+      it.p = advancePosition(app.frames, it.p, dt, sp);
+      const k = framePair(it.p, n).i0;
+      if (k !== app.target || it.i0 >= 0) showFrame(k);
+      if (it.p >= n - 1) stopPlay();
+      status.interp = interpStatus();
+      return;
+    }
+    const p = advancePosition(app.frames, it.p, dt, sp), pr = framePair(p, n);
+    if (!loadPair(pr.i0, pr.i1)) return;                  // hold until the pair is in its slots
+    it.p = p;
+    const w = quantize(pr.w, plan.steps), moved = pr.i0 !== it.i0;
+    if (moved || w !== it.w) {
+      app.water.setBlend(slotWeight(pr.i0, w));
+      it.i0 = pr.i0; it.w = w; it.drew = true;
+      it.t = timeAtPosition(app.frames, pr.i0 + w);
+      app.target = pr.i0;
+      if (moved) { frameShown(pr.i0); prefetch(pr.i0 + 2); prefetch(pr.i0 + 3); } else updateTimeline();
+    }
+    if (p >= n - 1) stopPlay();
+    status.interp = interpStatus();
+  }
+
+  /** Frames i0 and i1 into their slots: true when they are there (now, from the cache); else they are fetched. */
+  function loadPair(i0, i1) {
+    const gen = app.slotGen, need = [];
+    for (const k of i1 > i0 ? [i0, i1] : [i0]) {
+      const f = app.frames.at(k);
+      if (app.slots[slotOf(k)] !== slotKey(f, gen)) need.push([k, f]);
+    }
+    if (!need.length) return true;
+    const t0 = performance.now(), v = VARS[app.varName];
+    const cached = need.map(([, f]) => cachedFrameData(f, v));
+    if (cached.every(Boolean)) {
+      need.forEach(([k, f], j) => writeSlot(k, f, cached[j].depth, cached[j].cv, gen));
+      app.pacer.ready(performance.now() - t0);
+      return true;
+    }
+    app.interp.loading = (async () => {
+      try {
+        const data = await Promise.all(need.map(([, f]) => frameData(f, v)));
+        if (gen !== app.slotGen || VARS[app.varName] !== v || !app.playing) return;
+        if (data.some(d => !d.depth)) { stopPlay(); log('A frame has no water depth: playback stopped', 'warn'); return; }
+        need.forEach(([k, f], j) => writeSlot(k, f, data[j].depth, data[j].cv, gen));
+        app.pacer.ready(performance.now() - t0);
+      } catch (e) {
+        log(`Frame load failed: ${e.message || e}`, 'err');
+        stopPlay();
+      } finally {
+        app.interp.loading = null;
+      }
+    })();
+    return false;
+  }
+
+  /** window.__flooda5.interp: smooth playback's state and measurements. */
+  function interpStatus() {
+    const it = app.interp, pc = app.pacer, r = x => (Number.isFinite(x) ? Math.round(x * 10) / 10 : null);
+    return { on: it.on, active: app.playing && it.i0 >= 0, mode: it.on ? pc.mode : 'off', why: it.on ? pc.why : '', steps: it.on ? pc.steps : 1,
+             i0: it.i0, w: r(it.w * 1000) / 1000, t: it.t, fps: r(pc.fps), tickMs: r(pc.tickMs), readyMs: r(pc.readyMs) };
+  }
+
+  /**
+   * Show position p (frames: 2.25 is a quarter of the way from frame 2 to 3)
+   * blended as smooth playback shows it, paused (scripting and checks).
+   */
+  async function showBlend(p) {
+    stopPlay(); setLive(false);
+    const it = app.interp, pr = framePair(p, app.frames.length);
+    if (pr.i0 < 0) return null;
+    await showFrame(pr.i0);
+    if (pr.i1 > pr.i0) {
+      const v = VARS[app.varName], gen = app.slotGen, f = app.frames.at(pr.i1);
+      const d = await frameData(f, v);
+      if (gen !== app.slotGen || !d.depth) return null;
+      writeSlot(pr.i1, f, d.depth, d.cv, gen);
+    }
+    app.water.setBlend(slotWeight(pr.i0, pr.w));
+    it.i0 = pr.i0; it.w = pr.w; it.t = pr.w > 0 ? timeAtPosition(app.frames, p) : null;
+    updateTimeline();
+    return (status.interp = interpStatus());
+  }
+
+  /** Smooth playback on or off (remembered in the browser). */
+  function setSmoothPlay(on, save = true) {
+    app.interp.on = !!on;
+    if (save) store.set('flooda5.smoothPlay', on ? '1' : '0');
+    $('smooth-play').checked = !!on;
+    status.interp = interpStatus();
   }
 
   // -------------------------------------------------------------------------
@@ -1577,6 +1770,9 @@ export function startViewer(engine) {
     $('open-file').onclick = () => showOpenPrompt($('open-prompt').hidden);
     $('smooth-water').onchange = () => setSmooth('water', $('smooth-water').checked);
     $('smooth-bed').onchange = () => setSmooth('bed', $('smooth-bed').checked);
+    $('shade-water').onchange = () => setShade('water', $('shade-water').checked);
+    $('shade-bed').onchange = () => setShade('bed', $('shade-bed').checked);
+    $('smooth-play').onchange = () => setSmoothPlay($('smooth-play').checked);
     $('open-prompt-btn').onclick = chooseFile;
     $('open-prompt-close').onclick = () => showOpenPrompt(false);
     $('open-url-btn').onclick = openUrlText;
@@ -1626,7 +1822,7 @@ export function startViewer(engine) {
     };
     $('min-depth').onchange = () => {
       app.water?.setStyle({ minDepth: Math.max(+$('min-depth').value || 0, 0) });
-      updateCorners();
+      if (app.smooth.water) rerender();                // (the corner values and slopes depend on it)
       updateStats(); updateRange();
       refreshRanges(true);
       if (app.plot.series.length && plotVar() === 'level') drawPlot();
@@ -1742,6 +1938,11 @@ export function startViewer(engine) {
     setHazard: p => setHazard(p || {}),
     hover: (x, y) => { const r = engine.canvas.getBoundingClientRect(); pick(x, y, r.left + x, r.top + y); return $('cursor-pos').textContent; },
     setSmooth: (target, on) => setSmooth(target === 'bed' ? 'bed' : 'water', on),
+    // shading of the smooth surface: true/false, or 0 off, 1 smooth (slopes at the vertices), 2 facets (0.8.14)
+    setShading: (target, mode) => setShade(target === 'bed' ? 'bed' : 'water', mode),
+    setSmoothPlayback: on => setSmoothPlay(on),
+    showBlend: p => showBlend(p),            // a position between frames, blended, paused
+    stop: () => stopPlay(),
     openFile: file => openRun(file),                      // a File (tests: from an <input type=file>)
     openUrl: url => openRun(resolveRunUrl(url, location.href)),
     remoteStats: () => (app.source ? app.source.stats() : null),
@@ -1773,7 +1974,13 @@ export function startViewer(engine) {
     for (const t of ['water', 'bed']) {
       app.smooth[t] = store.get(`flooda5.smooth.${t}`) === '1';
       $(`smooth-${t}`).checked = app.smooth[t];
+      const sh = store.get(`flooda5.shade.${t}`);
+      app.shade[t] = sh === null ? SHADE.smooth : +sh;
+      $(`shade-${t}`).checked = app.shade[t] !== SHADE.off;
+      $(`shade-${t}`).disabled = !app.smooth[t];
     }
+    status.shade = { ...app.shade };
+    setSmoothPlay(store.get('flooda5.smoothPlay') !== '0', false);
     app.plot.dock = store.get('flooda5.plot.dock') === 'right' ? 'right' : 'bottom';
     const bo = +store.get('flooda5.bed.opacity');
     if (bo >= 0.1 && bo <= 1) $('bed-opacity').value = String(bo);

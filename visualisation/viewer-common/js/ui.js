@@ -127,6 +127,10 @@ export const UI_HTML = `
         <label for="smooth-water" title="Join the cells at their corners: each corner at the mean level of its wet cells, each cell's centre at its own level; colours blend (not with classes) and the surface is shaded by its slope. For viewing: the flat cells show the model's own values.">Smooth surface</label>
         <input id="smooth-water" type="checkbox">
       </div>
+      <div class="row sub">
+        <label for="shade-water" title="Shade the smooth surface by its slope (heights exaggerated for the shading only), lit from the north-west">Shading</label>
+        <input id="shade-water" type="checkbox">
+      </div>
     </section>
 
     <section>
@@ -156,6 +160,10 @@ export const UI_HTML = `
       <div class="row">
         <label for="smooth-bed" title="Join the cells at their corners (each corner at the mean elevation of its cells), shaded by the slope">Smooth</label>
         <input id="smooth-bed" type="checkbox">
+      </div>
+      <div class="row sub">
+        <label for="shade-bed" title="Shade the smooth bed by its slope, lit from the north-west">Shading</label>
+        <input id="shade-bed" type="checkbox">
       </div>
       </div>
     </section>
@@ -201,6 +209,7 @@ export const UI_HTML = `
       <option value="x:3600">1 h/s</option>
     </select>
     <button id="btn-live" class="btn active" title="Follow the newest frame">● LIVE</button>
+    <label class="play-opt" title="Smooth playback: blend the frames either side of the playback time (fronts advance cell by cell). Falls back to frame by frame when frames are slow to arrive."><input id="smooth-play" type="checkbox" checked> smooth</label>
     <div id="time-label" class="time">–</div>
   </div>
 </footer>

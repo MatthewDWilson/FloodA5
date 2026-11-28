@@ -6,7 +6,7 @@ import { parseMesh } from '../js/protocol.js';
 import {
   geodeticToEcef, ecefToGeodetic, buildSurface, buildGlb, packCellValues, packStatic, packedSize,
   CellLocator, cellCentres, meshBounds, finiteMedian, finiteQuantile, WGS84_A, WGS84_B,
-  cornerIndex, cornerValues, bedCornerValues,
+  cornerIndex, cornerValues, bedCornerValues, gradientSlots, surfaceGradients,
 } from '../js/geometry.js';
 
 const fixtureMesh = () => {
@@ -228,4 +228,108 @@ test('buildGlb: the corner attribute when asked for', () => {
   const j = json(buildGlb(surf, ci.vertexCorner));
   assert.equal(j.meshes[0].primitives[0].attributes._FA5CORNER, 4);
   assert.equal(j.accessors[4].count, surf.cell.length);
+});
+
+// ---------------------------------------------------------------------------
+// Smooth-surface shading (0.9.2): slopes at the vertices
+// ---------------------------------------------------------------------------
+
+/**
+ * Heights from planes (level L, bed B, of x east and y north in metres) at
+ * every corner and cell centre: corner data as cornerValues lays it out, and
+ * per-cell base, elevation and depth giving the same centre heights.
+ */
+function planar(m, ci, slots, L, B) {
+  const corner = new Float32Array(4 * ci.nCorners);
+  for (let c = 0; c < ci.nCorners; c++) {
+    corner[4 * c] = L(slots.x[c], slots.y[c]); corner[4 * c + 1] = B(slots.x[c], slots.y[c]);
+  }
+  const n = m.nCells, base = new Float32Array(n), elevation = new Float32Array(n), depth = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = slots.x[ci.nCorners + i], y = slots.y[ci.nCorners + i];
+    elevation[i] = base[i] = B(x, y); depth[i] = L(x, y) - base[i];
+  }
+  return { corner, base, elevation, depth };
+}
+const L0 = (x, y) => 20 + 0.01 * x - 0.02 * y, B0 = (x, y) => 3 + 0.03 * x + 0.005 * y;
+const slopeAt = (g, k) => Array.from(g.data.subarray(4 * k, 4 * k + 4));
+const near = (a, b, eps) => a.every((v, k) => Math.abs(v - b[k]) <= eps);
+
+test('gradientSlots: corners then cell centres, metres east and north of the origin', () => {
+  const m = quadMesh(), ci = cornerIndex(m), s = gradientSlots(m, ci);
+  assert.equal(s.n, ci.nCorners + m.nCells);
+  const mid = ci.vertexCorner[3];                           // at the origin (dlon = dlat = 0)
+  assert.ok(Math.abs(s.x[mid]) < 1e-6 && Math.abs(s.y[mid]) < 1e-6);
+  // cell 0's centre: 0.0005° west and south of the origin
+  const ky = WGS84_A * Math.PI / 180, kx = ky * Math.cos(-43.5 * Math.PI / 180);
+  assert.ok(Math.abs(s.x[ci.nCorners] + 0.0005 * kx) < 1e-3);
+  assert.ok(Math.abs(s.y[ci.nCorners] + 0.0005 * ky) < 1e-3);
+});
+
+test('surfaceGradients: a plane gives its slope at every vertex (squares and A5 pentagons)', () => {
+  for (const m of [quadMesh(), fixtureMesh()]) {
+    const ci = cornerIndex(m), slots = gradientSlots(m, ci);
+    const { corner, base, elevation, depth } = planar(m, ci, slots, L0, B0);
+    const g = surfaceGradients(m, ci, slots, corner, depth, base, elevation, 0.05);
+    assert.deepEqual([g.width, g.height], [packedSize(slots.n, 1).width, packedSize(slots.n, 1).height]);
+    for (let k = 0; k < slots.n; k++) assert.ok(near(slopeAt(g, k), [0.01, -0.02, 0.03, 0.005], 1e-5), `slot ${k}: ${slopeAt(g, k)}`);
+    // the bed surface (depth null): its own slope in both pairs
+    const b = surfaceGradients(m, ci, slots, corner, null, base, elevation, 0);
+    for (let k = 0; k < slots.n; k++) assert.ok(near(slopeAt(b, k), [0.03, 0.005, 0.03, 0.005], 1e-5));
+  }
+});
+
+test('surfaceGradients: rings either way round give the same slopes', () => {
+  const m = quadMesh(), ci = cornerIndex(m), slots = gradientSlots(m, ci);
+  const bump = (x, y) => 10 + Math.exp(-(x * x + y * y) / 3000);
+  const { corner, base, elevation, depth } = planar(m, ci, slots, bump, B0);
+  const g = surfaceGradients(m, ci, slots, corner, depth, base, elevation, 0.05);
+  // reverse every ring (clockwise): same corners, same slopes
+  const r = quadMesh();
+  for (let i = 0; i < r.nCells; i++) {
+    const a = r.offsets[i], b = r.offsets[i + 1];
+    r.dlon.subarray(a, b).reverse(); r.dlat.subarray(a, b).reverse();
+  }
+  const cr = cornerIndex(r), sr = gradientSlots(r, cr);
+  assert.equal(cr.nCorners, ci.nCorners);
+  const pr = planar(r, cr, sr, bump, B0);
+  const gr = surfaceGradients(r, cr, sr, pr.corner, pr.depth, pr.base, pr.elevation, 0.05);
+  // match the slots by position (corners are numbered in the order the cells use them)
+  const at = (sl, k) => `${Math.round(sl.x[k] * 1000)},${Math.round(sl.y[k] * 1000)}`;
+  const byPos = new Map(Array.from({ length: slots.n }, (_, k) => [at(slots, k), k]));
+  for (let k = 0; k < sr.n; k++) {
+    const j = byPos.get(at(sr, k));
+    assert.ok(j !== undefined && near(slopeAt(gr, k), slopeAt(g, j), 1e-7), `slot ${k}`);
+  }
+});
+
+test('surfaceGradients: a peak at a corner is flat there — the vertex mean, not one triangle\'s slope', () => {
+  const m = quadMesh(), ci = cornerIndex(m), slots = gradientSlots(m, ci);
+  const peak = (x, y) => 12 - 0.01 * Math.hypot(x, y);           // a cone on the middle corner
+  const { corner, base, elevation, depth } = planar(m, ci, slots, peak, B0);
+  const g = surfaceGradients(m, ci, slots, corner, depth, base, elevation, 0.05);
+  const mid = ci.vertexCorner[3];
+  const [gx, gy] = slopeAt(g, mid);
+  assert.ok(Math.hypot(gx, gy) < 1e-6, `${gx}, ${gy}`);          // (each triangle there slopes ~0.01)
+  // cell 0's centre (south-west of the peak) slopes up towards it: north-east
+  const [cx, cy] = slopeAt(g, ci.nCorners);
+  assert.ok(cx > 0.003 && cy > 0.003, `${cx}, ${cy}`);
+});
+
+test('surfaceGradients: dry cells do not count; no triangle, no slope', () => {
+  const m = quadMesh(), ci = cornerIndex(m), slots = gradientSlots(m, ci);
+  const { corner, base, elevation, depth } = planar(m, ci, slots, L0, B0);
+  depth[1] = 0.01;                                              // cell 1 dry (threshold 0.05)
+  const tilted = Float32Array.from(corner);
+  const c1 = ci.vertexCorner[1 + 5 + 1];                        // cell 1's outer corner (its alone)
+  tilted[4 * c1] += 5;                                           // would tilt cell 1's triangles
+  const g = surfaceGradients(m, ci, slots, tilted, depth, base, elevation, 0.05);
+  assert.deepEqual(slopeAt(g, ci.nCorners + 1), [0, 0, 0, 0]);  // cell 1's centre
+  assert.deepEqual(slopeAt(g, c1), [0, 0, 0, 0]);
+  for (const k of [ci.nCorners, ci.nCorners + 2, ci.nCorners + 3, ci.vertexCorner[3]]) {
+    assert.ok(near(slopeAt(g, k), [0.01, -0.02, 0.03, 0.005], 1e-5), `slot ${k}`);
+  }
+  // reuses its output buffer
+  const again = surfaceGradients(m, ci, slots, corner, depth, base, elevation, 0.05, g.data);
+  assert.equal(again.data, g.data);
 });

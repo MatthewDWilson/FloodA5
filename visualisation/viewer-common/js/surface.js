@@ -8,6 +8,13 @@
 //   depth  — the frame's water depth, four cells per RGBA texel
 //   cvar   — the colouring variable (speed, …), same packing
 //   static — per cell (bed elevation, depth datum, 0, 0), one cell per texel
+// Smooth playback (0.9.2): depth and cvar come twice, for two frames (texture
+// slots 0 and 1: frame k in slot k mod 2, interp.js), blended with the weight
+// `w` of slot 1 (0 or 1: one frame exactly). Depths blend linearly, so a
+// cell turns wet when the blended depth reaches the wet threshold — its
+// crossing time under that linear depth — and the front advances cell by cell
+// instead of a thin film fading in ahead of it. Class numbers never blend
+// (`blend` 0: the nearer frame's).
 // The vertex shader moves each vertex along the ellipsoid normal to the level
 //   mode 0 (water surface):  datum + depth
 //   mode 1 (exaggerated):    bed + depth × exag
@@ -21,7 +28,13 @@
 // bed, depth, colour value — geometry.js cornerValues), the centre keeps its
 // cell's own value; colours blend too (`blend`, off for classed palettes),
 // and the surface is shaded by its slope (exaggerated `shadeExag` times for
-// the shading only), lit from the north-west.
+// the shading only), lit from the north-west. Shading (0.9.2, style `shade`):
+// 1 from the slopes at the vertices (geometry.js surfaceGradients, a fifth
+// texture with a slot per corner and per cell centre), interpolated across
+// each triangle — no facets; 2 from each triangle's own slope (screen-space
+// derivatives, the 0.8.14 shading: faceted; kept for comparison); 0 none.
+// With two frames, corner values and slopes blend where the corner (or the
+// centre) is wet in both frames and are the wet one's otherwise.
 
 /** What the surface is coloured by (uniform `cmode`). */
 export const COLOR_MODE = { depth: 0, level: 1, texture: 2, bed: 3 };
@@ -43,6 +56,9 @@ export const DEPTH_BIAS_RANGE = { tiles: [800, 4000], terrain: [30, 600] };
 /** Slopes are exaggerated this many times for the smooth surface's shading: water slopes are small, the bed's are not. */
 export const SHADE_EXAG = { water: 20, bed: 3 };
 
+/** Shading of the smooth surface (style `shade`). */
+export const SHADE = { off: 0, smooth: 1, facets: 2 };
+
 /** Default style of a surface. */
 export function defaultStyle(role) {
   const bed = role === 'bed';
@@ -52,7 +68,7 @@ export function defaultStyle(role) {
     cmin: 0, cmax: 1, alpha: bed ? 1 : 0.8, minDepth: 0.05, exag: 10, offset: 0, borders: 0,
     depthBias: bed ? 0 : DEPTH_BIAS, biasNear: DEPTH_BIAS_RANGE.tiles[0], biasFar: DEPTH_BIAS_RANGE.tiles[1],
     colormap: bed ? 'terrain' : 'depth',
-    smooth: 0, blend: 1, shadeExag: bed ? SHADE_EXAG.bed : SHADE_EXAG.water,
+    smooth: 0, blend: 1, shadeExag: bed ? SHADE_EXAG.bed : SHADE_EXAG.water, shade: SHADE.smooth,
   };
 }
 
@@ -108,6 +124,22 @@ float fa5ColorValueC(float cmode, vec4 cv) {
   if (cmode < 2.5) return cv.w;
   return cv.y;
 }
+// two frames' values at a vertex (slot 1 weighted w): blended where both are
+// wet (or both dry: not drawn), the wet one's otherwise; w = 0 or 1: that frame
+vec4 fa5Pick(vec4 a, vec4 b, bool wa, bool wb, float w) {
+  if (w <= 0.0) return a;
+  if (w >= 1.0) return b;
+  if (wa == wb) return mix(a, b, w);
+  return wa ? a : b;
+}
+// smooth shading: the slope (east, north) of the surface drawn in mode 'mode'
+// from a slope texel (level slope, bed slope); depth × exag is bed + exag ×
+// (level − bed): exact where the depth datum is the bed (not with SGS)
+vec2 fa5GradMode(float mode, float exag, vec4 g) {
+  if (mode > 1.5) return g.zw;
+  if (mode > 0.5) return mix(g.zw, g.xy, exag);
+  return g.xy;
+}
 // geodetic (ellipsoid) normal at an ECEF position
 vec3 fa5Normal(vec3 p) {
   return normalize(vec3(p.x / FA5_A2, p.y / FA5_A2, p.z / FA5_B2));
@@ -129,6 +161,54 @@ vec3 fa5DepthBias(vec3 p, vec3 cam, float bias, vec2 range) {
   float d = length(v);
   return p + v * (bias * smoothstep(range.x, range.y, d));
 }
+`;
+}
+
+/**
+ * GLSL ES 3.0 vertex-shader body shared by the engines: from the cell index
+ * `cell` (and the smooth surface's `corner`, −1 at a centre; null where the
+ * engine's model has no corner attribute) declares and sets
+ *   float dA, dB, d (blended depth), level (model heights, before the offset),
+ *   cval (colour value); vec2 grad (the shading slope, east and north)
+ * `u(name)` gives the engine's uniform name for: depth, depth1, cvar, cvar1,
+ * static, texW, staticW, corner, corner1, cornerW, grad, grad1, gradW,
+ * nCorners, w, minDepth, mode, exag, cmode, blend, smooth, shade.
+ */
+export function glslSurfaceVertex(u, cellExpr, cornerExpr) {
+  const smooth = cornerExpr ? `
+  float fa5c = ${cornerExpr};
+  if (${u('smooth')} > 0.5) {
+    bool atCorner = fa5c > -0.5;
+    bool wA = dA >= ${u('minDepth')}, wB = dB >= ${u('minDepth')};
+    if (atCorner) {
+      int c = int(fa5c + 0.5);
+      vec4 ccA = fa5Corner(${u('corner')}, ${u('cornerW')}, c), ccB = fa5Corner(${u('corner1')}, ${u('cornerW')}, c);
+      wA = ccA != vec4(0.0); wB = ccB != vec4(0.0);       // (a corner with no wet cell is all zeros)
+      vec4 cc = fa5Pick(ccA, ccB, wA, wB, w);
+      level = fa5LevelC(${u('mode')}, ${u('exag')}, cc);
+      if (${u('blend')} > 0.5) cval = fa5ColorValueC(${u('cmode')}, cc);
+    }
+    if (${u('shade')} > 0.5 && ${u('shade')} < 1.5) {
+      int g = atCorner ? int(fa5c + 0.5) : int(${u('nCorners')} + 0.5) + i;
+      vec4 gA = fa5Corner(${u('grad')}, ${u('gradW')}, g), gB = fa5Corner(${u('grad1')}, ${u('gradW')}, g);
+      grad = fa5GradMode(${u('mode')}, ${u('exag')}, fa5Pick(gA, gB, wA, wB, w));
+    }
+  }` : '';
+  return `
+  int i = int(${cellExpr} + 0.5);
+  vec4 st = fa5Static(${u('static')}, ${u('staticW')}, i);
+  float w = ${u('w')};
+  float dA = max(fa5Packed(${u('depth')}, ${u('texW')}, i), 0.0);
+  float dB = max(fa5Packed(${u('depth1')}, ${u('texW')}, i), 0.0);
+  float d = mix(dA, dB, w);
+  float level = fa5Level(${u('mode')}, ${u('exag')}, d, st);
+  float cv = 0.0;
+  if (${u('cmode')} > 1.5 && ${u('cmode')} < 2.5) {
+    float cA = fa5Packed(${u('cvar')}, ${u('texW')}, i), cB = fa5Packed(${u('cvar1')}, ${u('texW')}, i);
+    cv = ${u('blend')} > 0.5 ? mix(cA, cB, w) : (w < 0.5 ? cA : cB);
+  }
+  float cval = fa5ColorValue(${u('cmode')}, d, st, cv);
+  vec2 grad = vec2(0.0);${smooth}
 `;
 }
 
@@ -160,6 +240,19 @@ float fa5Shade(vec3 p, vec3 up, float k) {
   vec3 north = cross(up, east);
   vec3 l = normalize(up + 0.7071 * (north - east));
   return clamp(dot(n, l) / dot(up, l), 0.55, 1.35);
+}
+// Smooth surface, shading without facets: brightness from the slope g (east,
+// north; geometry.js surfaceGradients, interpolated from the vertices), the
+// same light and exaggeration as fa5Shade
+float fa5ShadeSlope(vec2 g, float k) {
+  vec3 n = normalize(vec3(-k * g, 1.0));
+  vec3 l = vec3(-0.5, 0.5, 0.70710678);       // normalize(−east + north + √2 up)
+  return clamp(dot(n, l) / l.z, 0.55, 1.35);
+}
+// the smooth surface's shading factor: shade 1 from the slope g, 2 per triangle
+float fa5Shading(float shade, vec2 g, vec3 p, vec3 up, float k) {
+  if (shade < 0.5) return 1.0;
+  return shade < 1.5 ? fa5ShadeSlope(g, k) : fa5Shade(p, up, k);
 }
 `;
 }
